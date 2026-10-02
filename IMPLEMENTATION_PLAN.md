@@ -20,7 +20,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: TOML templates (fields, heading, footer, logo, font, `{summary}` slot); TXT, DOCX, PDF writers; combined project export.
 **Success Criteria**: export a stored document to all three formats; required-field validation.
 **Tests**: parse/validate templates; DOCX XML contains fields + text; PDF text extractable; project export ordering.
-**Status**: Not Started
+**Status**: Complete — PDF via cairo + pango (two-pass for "Side N af M"), DOCX as hand-written OOXML; logos must be PNG.
 
 ## Stage 3: Audio, VAD and file ingest
 **Goal**: decode (symphonia + ffmpeg fallback), resample, VAD chunking, ingest job with progress into the store.
