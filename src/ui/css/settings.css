@@ -6,7 +6,7 @@
 
 /* Speech model cards */
 .fx-model-publisher { font-size: 12px; color: @fx_muted; }
-.fx-model-desc { font-size: 13px; color: @fx_text_soft; }
+.fx-model-desc { font-size: 13px; line-height: 1.15; color: @fx_text_soft; }
 .fx-model-card .fx-badge { min-height: 22px; }
 .fx-model-card .fx-badge.active { min-height: 24px; }
 .fx-model-card button.fx-secondary { min-height: 40px; color: @fx_text; }
@@ -37,7 +37,8 @@
 .fx-settings-section checkbutton check { min-width: 15px; min-height: 15px; padding: 0; margin: 0; }
 .fx-settings-section checkbutton:disabled { color: @fx_text; opacity: 1; filter: none; }
 .fx-settings-section checkbutton:disabled label { color: @fx_text; opacity: 1; filter: none; }
-.fx-settings-section checkbutton:disabled check { filter: none; opacity: 0.85; }
+/* Always-on choices are shown at full strength, as in the mockup. */
+.fx-settings-section checkbutton:disabled check { filter: none; opacity: 1; }
 .fx-table-row.first { border-top: none; }
 .fx-table-row.cmd { min-height: 20px; }
 .fx-settings-section textview.fx-boxed { min-height: 38px; padding: 10px 12px; font-size: 13px; }

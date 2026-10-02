@@ -905,7 +905,7 @@ fn cpu_name() -> Option<String> {
 
 /// Licence (warn style when non-commercial), size and WER.
 fn tags(m: &models::CatalogModel) -> Vec<(String, bool)> {
-    let licence = if m.non_commercial && m.license.contains("non-commercial") {
+    let licence = if m.non_commercial {
         "Non-commercial".to_string()
     } else {
         m.license.to_string()
@@ -949,9 +949,8 @@ fn card(name: &str, publisher: &str, description: &str, tags: &[(String, bool)],
         chips.append(&label(tag, &["fx-badge", if *warn { "warn" } else { "plain" }]));
     }
     c.append(&chips);
-    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    spacer.set_vexpand(true);
-    c.append(&spacer);
+    // The action follows the chips, as in the mockup; cards are not stretched
+    // to a common bottom edge.
     c
 }
 

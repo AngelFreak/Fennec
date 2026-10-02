@@ -52,7 +52,7 @@ window.fennec menubutton.fx-select > button {
 window.fennec dropdown > button:hover { background-color: @fx_chrome; }
 window.fennec dropdown > button arrow { color: @fx_muted; }
 
-window.fennec checkbutton { font-size: 13px; color: @fx_text_soft; min-height: 40px; border-spacing: 10px; }
+window.fennec checkbutton { font-size: 13px; color: @fx_text_soft; min-height: 40px; padding: 0; border-spacing: 10px; }
 /* 18px boxes, as in the mockup. */
 window.fennec checkbutton check {
   min-width: 15px;

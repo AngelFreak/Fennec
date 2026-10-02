@@ -154,7 +154,7 @@ impl AiSettingsUi {
     // ---- AI providers ----
 
     pub fn providers_section(self: &Rc<Self>) -> gtk::Box {
-        let (outer, b) = page(Some(820), 16);
+        let (outer, b) = page(Some(760), 16);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let title = label("AI providers", &["fx-h1"]);
         title.set_hexpand(true);
@@ -818,7 +818,7 @@ impl AiSettingsUi {
         let callout = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         callout.add_css_class("fx-callout");
         callout.add_css_class("neutral");
-        callout.append(&gtk::Image::from_icon_name("changes-prevent-symbolic"));
+        callout.append(&gtk::Image::from_icon_name("fennec-lock-symbolic"));
         let text = label(
             "Audio and transcription never leave this computer. Only text is sent, and only to an AI \
              provider you choose, when you press an AI action.",
@@ -835,13 +835,21 @@ impl AiSettingsUi {
             .sensitive(false)
             .tooltip_text("Always on: Fennec never sends to a cloud provider without asking first.")
             .build();
-        b.append(&ask);
+        let destination = gtk::CheckButton::builder()
+            .label("Show the destination on every AI action")
+            .active(true)
+            .sensitive(false)
+            .tooltip_text("Always on: every AI action names the provider and where it runs.")
+            .build();
+        let checks = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        checks.append(&ask);
+        checks.append(&destination);
+        b.append(&checks);
 
         let local = gtk::Box::new(gtk::Orientation::Vertical, 8);
         local.append(&label("Local-only projects", &["fx-h2"]));
         let note = label(
-            "Cloud providers are disabled for these projects, even if you said yes before. Local and \
-             network providers still work.",
+            "Cloud providers are disabled for these projects. Local and network providers still work.",
             &["fx-field-note"],
         );
         note.set_wrap(true);
