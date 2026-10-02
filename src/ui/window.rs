@@ -90,7 +90,7 @@ impl MainWindow {
         brand.append(&label("Fennec", &["fx-app-name"]));
         header.append(&brand);
 
-        let back = icon_button("go-previous-symbolic", "Back", &["fx-icon-button"]);
+        let back = icon_button("fennec-back-symbolic", "Back", &["fx-icon-button"]);
         back.set_size_request(40, 40);
         back.set_valign(gtk::Align::Center);
         back.set_visible(false);
@@ -128,6 +128,7 @@ impl MainWindow {
         let export = ExportPage::new(Rc::clone(&store), deps.clone());
         let project = ProjectPage::new(Rc::clone(&store), deps.clone());
         let templates = TemplatesPage::new(deps.paths.templates());
+        sidebar.add_context("templates", &templates.list_panel);
         let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine));
 
         // Header actions per screen; the model chip appears on two of them.
@@ -219,6 +220,7 @@ impl MainWindow {
         self.stack.connect_visible_child_name_notify(move |_| {
             if let Some(w) = weak.upgrade() {
                 w.update_header();
+                w.update_sidebar_context();
             }
         });
         let weak = Rc::downgrade(self);
@@ -293,6 +295,7 @@ impl MainWindow {
         self.project.connect_export(move |(title, ids)| {
             if let Some(w) = weak.upgrade() {
                 w.export.show(Target::Documents { title, ids });
+                w.export.set_table_of_contents(w.project.table_of_contents());
                 w.open_sub_page("export");
             }
         });
@@ -359,6 +362,20 @@ impl MainWindow {
             if let Some(w) = weak.upgrade() {
                 w.new_document();
             }
+        });
+        let weak = Rc::downgrade(self);
+        self.project.connect_new_dictation(move |project| {
+            let Some(w) = weak.upgrade() else { return };
+            match w.dictation.new_document(project) {
+                Ok(_) => w.sidebar.go(Nav::Dictate),
+                Err(e) => w.saved.set_text(&e),
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.project.connect_import(move |()| {
+            let Some(w) = weak.upgrade() else { return };
+            w.sidebar.go(Nav::Files);
+            w.files.choose_files();
         });
         let weak = Rc::downgrade(self);
         self.window.connect_close_request(move |_| {
@@ -479,7 +496,11 @@ impl MainWindow {
                 "Clean up text".to_string(),
                 Some(self.dictation.title.text().trim().to_string()),
             ),
-            "project" => (None, self.project.title_text(), Some(String::new())),
+            "project" => (
+                Some("Projects".to_string()),
+                self.project.title_text(),
+                Some(String::new()),
+            ),
             "templates" => (None, "Templates".to_string(), Some(String::new())),
             "settings" => (None, "Settings".to_string(), Some(String::new())),
             _ => (None, String::new(), Some(String::new())),
@@ -513,6 +534,17 @@ impl MainWindow {
         self.update_header();
     }
 
+    /// As in the mockup: Templates lists its templates in the sidebar,
+    /// Settings has its own section list, the rest show projects and tags.
+    fn update_sidebar_context(&self) {
+        let context = match self.visible_page_in_stack().as_str() {
+            "templates" => "templates",
+            "settings" => "none",
+            _ => "projects",
+        };
+        self.sidebar.show_context(context);
+    }
+
     fn visible_page_in_stack(&self) -> String {
         self.stack
             .visible_child_name()
@@ -529,6 +561,15 @@ impl MainWindow {
     }
 
     /// The header's title and subtitle (tests).
+    /// The breadcrumb: project (when shown) and title.
+    pub fn header_crumbs(&self) -> (Option<String>, String) {
+        let project = self
+            .crumb_project
+            .get_visible()
+            .then(|| self.crumb_project.text().to_string());
+        (project, self.crumb_title.text().to_string())
+    }
+
     pub fn header_texts(&self) -> (String, String) {
         (self.crumb_title.text().to_string(), self.saved.text().to_string())
     }
@@ -582,7 +623,7 @@ fn model_chip(text: &str) -> gtk::Button {
     b.set_valign(gtk::Align::Center);
     b.set_tooltip_text(Some("Speech model and compute (Settings)"));
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&gtk::Image::from_icon_name("computer-symbolic"));
+    row.append(&gtk::Image::from_icon_name("fennec-cpu-symbolic"));
     row.append(&label(text, &[]));
     b.set_child(Some(&row));
     b
@@ -611,7 +652,7 @@ fn new_export_button() -> gtk::Button {
     b.add_css_class("fx-primary");
     b.set_valign(gtk::Align::Center);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&gtk::Image::from_icon_name("document-save-symbolic"));
+    row.append(&gtk::Image::from_icon_name("fennec-download-symbolic"));
     row.append(&label("Export", &[]));
     b.set_child(Some(&row));
     b

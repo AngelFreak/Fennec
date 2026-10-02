@@ -90,6 +90,9 @@ pub struct ProjectPage {
     on_open: Handler<DocumentId>,
     on_export: Handler<(String, Vec<DocumentId>)>,
     on_changed: Handler<()>,
+    on_new_dictation: Handler<Option<i64>>,
+    on_import: Handler<()>,
+    new_dictation: gtk::Button,
 }
 
 impl ProjectPage {
@@ -111,7 +114,7 @@ impl ProjectPage {
         let local_badge = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         local_badge.add_css_class("fx-local-badge");
         local_badge.set_valign(gtk::Align::Center);
-        let lock = gtk::Image::from_icon_name("system-lock-screen-symbolic");
+        let lock = gtk::Image::from_icon_name("fennec-lock-symbolic");
         lock.set_pixel_size(12);
         local_badge.append(&lock);
         local_badge.append(&gtk::Label::new(Some("LOCAL ONLY")));
@@ -338,7 +341,7 @@ impl ProjectPage {
         export_button.add_css_class("large");
         let export_inner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         export_inner.set_halign(gtk::Align::Center);
-        export_inner.append(&gtk::Image::from_icon_name("document-save-symbolic"));
+        export_inner.append(&gtk::Image::from_icon_name("fennec-download-symbolic"));
         let export_label = gtk::Label::new(Some("Export documents…"));
         export_inner.append(&export_label);
         export_button.set_child(Some(&export_inner));
@@ -357,9 +360,15 @@ impl ProjectPage {
         root.append(&main_scroll);
         root.append(&side);
 
+        let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let import = super::icon_text_button("fennec-upload-symbolic", "Import file", &["fx-secondary"]);
+        let new_dictation = super::icon_text_button("fennec-mic-symbolic", "New dictation", &["fx-primary"]);
+        header_actions.append(&import);
+        header_actions.append(&new_dictation);
+
         let page = Rc::new(Self {
             root,
-            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
+            header_actions,
             store,
             deps,
             tabs,
@@ -408,6 +417,9 @@ impl ProjectPage {
             on_open: RefCell::default(),
             on_export: RefCell::default(),
             on_changed: RefCell::default(),
+            on_new_dictation: RefCell::default(),
+            on_import: RefCell::default(),
+            new_dictation: new_dictation.clone(),
         });
         let weak = Rc::downgrade(&page);
         summarize_chip.connect_clicked(move |_| {
@@ -425,6 +437,22 @@ impl ProjectPage {
             });
         }
         page.wire();
+        let weak = Rc::downgrade(&page);
+        new_dictation.connect_clicked(move |_| {
+            let Some(p) = weak.upgrade() else { return };
+            let f = p.on_new_dictation.borrow().clone();
+            if let Some(f) = f {
+                f(p.project_id());
+            }
+        });
+        let weak = Rc::downgrade(&page);
+        import.connect_clicked(move |_| {
+            let Some(p) = weak.upgrade() else { return };
+            let f = p.on_import.borrow().clone();
+            if let Some(f) = f {
+                f(());
+            }
+        });
         page.show_tab("documents");
         page.refresh_ai();
         page
@@ -791,6 +819,20 @@ impl ProjectPage {
         *self.on_changed.borrow_mut() = Some(Rc::new(f));
     }
 
+    /// "New dictation": the handler gets the project shown, if any.
+    pub fn connect_new_dictation(&self, f: impl Fn(Option<i64>) + 'static) {
+        *self.on_new_dictation.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// "Import file".
+    pub fn connect_import(&self, f: impl Fn(()) + 'static) {
+        *self.on_import.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn press_new_dictation(&self) {
+        self.new_dictation.emit_clicked();
+    }
+
     fn project_id(&self) -> Option<i64> {
         match &*self.scope.borrow() {
             Scope::Project(ProjectFilter::Project(id)) => Some(*id),
@@ -986,6 +1028,10 @@ impl ProjectPage {
         self.toc.is_active()
     }
 
+    pub fn set_table_of_contents(&self, on: bool) {
+        self.toc.set_active(on);
+    }
+
     fn render_chips(self: &Rc<Self>, docs: &[DocumentSummary]) {
         while let Some(c) = self.chips.first_child() {
             self.chips.remove(&c);
@@ -1038,8 +1084,8 @@ impl ProjectPage {
         tile.add_css_class("fx-doc-icon");
         tile.set_valign(gtk::Align::Center);
         let (icon, kind) = match d.source {
-            Source::Dictation => ("audio-input-microphone-symbolic", "Dictation"),
-            Source::File => ("text-x-generic-symbolic", "From file"),
+            Source::Dictation => ("fennec-mic-symbolic", "Dictation"),
+            Source::File => ("fennec-file-symbolic", "From file"),
         };
         let image = gtk::Image::from_icon_name(icon);
         image.set_pixel_size(15);

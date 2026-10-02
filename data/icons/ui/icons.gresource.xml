@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/fennec/Fennec/icons/scalable/actions">
+    <file>fennec-add-symbolic.svg</file>
+    <file>fennec-alert-symbolic.svg</file>
+    <file>fennec-back-symbolic.svg</file>
+    <file>fennec-check-symbolic.svg</file>
+    <file>fennec-cpu-symbolic.svg</file>
+    <file>fennec-download-symbolic.svg</file>
+    <file>fennec-file-symbolic.svg</file>
+    <file>fennec-lock-symbolic.svg</file>
+    <file>fennec-mic-symbolic.svg</file>
+    <file>fennec-pause-symbolic.svg</file>
+    <file>fennec-play-symbolic.svg</file>
+    <file>fennec-search-symbolic.svg</file>
+    <file>fennec-settings-symbolic.svg</file>
+    <file>fennec-stop-symbolic.svg</file>
+    <file>fennec-templates-symbolic.svg</file>
+    <file>fennec-upload-symbolic.svg</file>
+  </gresource>
+</gresources>

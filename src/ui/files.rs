@@ -115,7 +115,7 @@ impl PlayerBar {
     fn new() -> Self {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         root.add_css_class("fx-player");
-        let play_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
+        let play_icon = gtk::Image::from_icon_name("fennec-play-symbolic");
         play_icon.set_pixel_size(18);
         let play = gtk::Button::builder()
             .child(&play_icon)
@@ -291,7 +291,7 @@ impl FilesPage {
         queue.append(&label("QUEUE", &["fx-section-title"]));
         let drop_zone = gtk::Box::new(gtk::Orientation::Vertical, 10);
         drop_zone.add_css_class("fx-drop-zone");
-        let drop_icon = gtk::Image::from_icon_name("document-send-symbolic");
+        let drop_icon = gtk::Image::from_icon_name("fennec-upload-symbolic");
         drop_icon.set_pixel_size(24);
         drop_icon.add_css_class("fx-drop-icon");
         drop_zone.append(&drop_icon);
@@ -388,23 +388,10 @@ impl FilesPage {
         });
         page.wire_player();
         let weak = Rc::downgrade(&page);
-        choose.connect_clicked(move |b| {
-            let Some(p) = weak.upgrade() else { return };
-            let dialog = gtk::FileDialog::builder()
-                .title("Choose audio or video files")
-                .modal(true)
-                .build();
-            let window = b.root().and_downcast::<gtk::Window>();
-            let weak = Rc::downgrade(&p);
-            dialog.open_multiple(window.as_ref(), gio::Cancellable::NONE, move |res| {
-                let (Ok(files), Some(p)) = (res, weak.upgrade()) else {
-                    return;
-                };
-                let paths: Vec<PathBuf> = (0..files.n_items())
-                    .filter_map(|i| files.item(i).and_downcast::<gio::File>()?.path())
-                    .collect();
-                p.add_paths(&paths);
-            });
+        choose.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.choose_files();
+            }
         });
         let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
         let zone = drop_zone.clone();
@@ -468,6 +455,25 @@ impl FilesPage {
     }
 
     /// Queues files for transcription, one new document per file.
+    /// Opens the file chooser; the chosen files join the queue.
+    pub fn choose_files(self: &Rc<Self>) {
+        let dialog = gtk::FileDialog::builder()
+            .title("Choose audio or video files")
+            .modal(true)
+            .build();
+        let window = self.root.root().and_downcast::<gtk::Window>();
+        let weak = Rc::downgrade(self);
+        dialog.open_multiple(window.as_ref(), gio::Cancellable::NONE, move |res| {
+            let (Ok(files), Some(p)) = (res, weak.upgrade()) else {
+                return;
+            };
+            let paths: Vec<PathBuf> = (0..files.n_items())
+                .filter_map(|i| files.item(i).and_downcast::<gio::File>()?.path())
+                .collect();
+            p.add_paths(&paths);
+        });
+    }
+
     pub fn add_paths(self: &Rc<Self>, paths: &[PathBuf]) {
         let mut first_new = None;
         for path in paths {
@@ -517,7 +523,7 @@ impl FilesPage {
         name.set_hexpand(true);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let status = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        let done_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+        let done_icon = gtk::Image::from_icon_name("fennec-check-symbolic");
         done_icon.set_pixel_size(14);
         done_icon.add_css_class("fx-queue-check");
         done_icon.set_visible(false);
@@ -984,9 +990,9 @@ impl FilesPage {
 
     fn set_play_icon(&self, playing: bool) {
         let (icon, name) = if playing {
-            ("media-playback-pause-symbolic", "Pause")
+            ("fennec-pause-symbolic", "Pause")
         } else {
-            ("media-playback-start-symbolic", "Play")
+            ("fennec-play-symbolic", "Play")
         };
         if self.bar.play_icon.icon_name().as_deref() != Some(icon) {
             self.bar.play_icon.set_icon_name(Some(icon));

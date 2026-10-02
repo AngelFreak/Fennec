@@ -44,6 +44,18 @@ use crate::vad::{SileroVad, SpeechDetector, WholeAudio};
 
 /// A replaceable callback slot on a widget controller.
 pub(crate) type Handler<A> = RefCell<Option<Rc<dyn Fn(A)>>>;
+
+/// A button with an icon before its label, as the mockup's header buttons.
+pub(crate) fn icon_text_button(icon: &str, text: &str, classes: &[&str]) -> gtk::Button {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    b.append(&gtk::Image::from_icon_name(icon));
+    b.append(&gtk::Label::new(Some(text)));
+    let button = gtk::Button::builder().child(&b).build();
+    for c in classes {
+        button.add_css_class(c);
+    }
+    button
+}
 pub(crate) type TextHandler = RefCell<Option<Rc<dyn Fn(&str)>>>;
 
 pub type EngineFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn Transcriber>, String> + Send + Sync>;
@@ -154,10 +166,20 @@ const STYLE: &str = concat!(
 const STYLE_LIGHT: &str = include_str!("style-light.css");
 const STYLE_DARK: &str = include_str!("style-dark.css");
 
+/// Registers the bundled icons (`fennec-*-symbolic`) with the icon theme.
+fn load_icons(display: &gtk::gdk::Display) {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        gtk::gio::resources_register_include!("icons.gresource").expect("the bundled icons are valid");
+    });
+    gtk::IconTheme::for_display(display).add_resource_path("/io/github/fennec/Fennec/icons");
+}
+
 /// Loads the stylesheet and the light or dark colour tokens, swapping the
 /// tokens when the system switches.
 pub fn load_css() {
     let display = gtk::gdk::Display::default().expect("a display is available");
+    load_icons(&display);
     let base = gtk::CssProvider::new();
     base.load_from_string(STYLE);
     let tokens = gtk::CssProvider::new();

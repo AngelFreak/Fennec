@@ -1,11 +1,10 @@
 /* templates screen */
 
 /* The template list column, styled like the mockup's sidebar list. */
-.fx-template-list-scroll { background-color: @fx_chrome; border-right: 1px solid @fx_border; }
-.fx-template-list { padding: 16px 12px; }
-.fx-template-list-head { padding: 0 0 4px 12px; }
+.fx-template-list-scroll { background: none; }
+.fx-template-list-head { padding: 0 0 4px 0; }
 .fx-template-item > box { padding: 0; }
-.fx-template-name { font-size: 13px; font-weight: 500; color: @fx_text; }
+.fx-template-name { font-size: 14px; font-weight: 600; color: @fx_text; }
 
 /* Quiet text buttons (Remove logo, Delete template). */
 .fx-quiet {

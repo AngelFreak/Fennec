@@ -32,7 +32,7 @@ impl Dock {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 20);
         root.add_css_class("fx-dock");
 
-        let record = gtk::Button::from_icon_name("audio-input-microphone-symbolic");
+        let record = gtk::Button::from_icon_name("fennec-mic-symbolic");
         record.add_css_class("fx-record");
         record.set_valign(gtk::Align::Center);
 
@@ -77,10 +77,7 @@ impl Dock {
             let _ = cr.fill();
         });
 
-        let status = label(
-            "Press the button or Ctrl+Space to start dictating.",
-            &["fx-status"],
-        );
+        let status = label("Press the button to start dictating.", &["fx-status"]);
         status.set_hexpand(true);
         // One line; the full message is in the tooltip when it does not fit.
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -113,24 +110,14 @@ impl Dock {
 
     pub fn set_state(&self, s: DockState) {
         let (text, icon, tip, sensitive) = match s {
-            DockState::Idle => (
-                "Ready",
-                "audio-input-microphone-symbolic",
-                "Start dictation",
-                true,
-            ),
+            DockState::Idle => ("Ready", "fennec-mic-symbolic", "Start dictation", true),
             DockState::Loading => (
                 "Loading…",
                 "content-loading-symbolic",
                 "Loading the speech model",
                 false,
             ),
-            DockState::Recording => (
-                "Recording",
-                "media-playback-stop-symbolic",
-                "Stop dictation",
-                true,
-            ),
+            DockState::Recording => ("Recording", "fennec-stop-symbolic", "Stop dictation", true),
         };
         self.state.set_text(text);
         self.record.set_icon_name(icon);

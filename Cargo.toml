@@ -50,3 +50,6 @@ opt-level = 3
 [[test]]
 name = "ui"
 harness = false
+
+[build-dependencies]
+glib-build-tools = "0.22"

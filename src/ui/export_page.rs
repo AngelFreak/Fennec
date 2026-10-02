@@ -55,6 +55,14 @@ pub struct ExportPage {
 
 impl ExportPage {
     /// What is being exported, for the header.
+    pub fn table_of_contents(&self) -> bool {
+        self.toc.is_active()
+    }
+
+    pub fn set_table_of_contents(&self, on: bool) {
+        self.toc.set_active(on);
+    }
+
     pub fn header_subtitle(&self) -> String {
         match &*self.target.borrow() {
             Some(Target::Document(id)) => self.store.document(*id).map(|d| d.title).unwrap_or_default(),
@@ -134,7 +142,7 @@ impl ExportPage {
         bottom.set_valign(gtk::Align::End);
         let warning_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         warning_box.add_css_class("fx-callout");
-        let warning_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        let warning_icon = gtk::Image::from_icon_name("fennec-alert-symbolic");
         warning_icon.set_pixel_size(16);
         warning_icon.set_valign(gtk::Align::Start);
         let warning = label("", &[]);

@@ -161,7 +161,7 @@ impl AiSettingsUi {
         head.append(&title);
 
         let add_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        add_content.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+        add_content.append(&gtk::Image::from_icon_name("fennec-add-symbolic"));
         add_content.append(&gtk::Label::new(Some("Add provider")));
         let add = gtk::MenuButton::builder()
             .child(&add_content)

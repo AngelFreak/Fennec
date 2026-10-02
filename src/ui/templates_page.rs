@@ -39,6 +39,8 @@ pub struct TemplatesPage {
     pub root: gtk::Box,
     /// Buttons for the window header while this screen shows.
     pub header_actions: gtk::Box,
+    /// The template list; the window shows it in the sidebar.
+    pub list_panel: gtk::ScrolledWindow,
     dir: PathBuf,
     list: gtk::Box,
     current: RefCell<Option<Template>>,
@@ -63,14 +65,14 @@ pub struct TemplatesPage {
 
 impl TemplatesPage {
     pub fn new(dir: PathBuf) -> Rc<Self> {
-        // Template list: the mockup keeps it in the sidebar; here it is a column.
+        // Template list, shown in the sidebar while this screen is open.
         let left = gtk::Box::new(gtk::Orientation::Vertical, 4);
         left.add_css_class("fx-template-list");
         let list_head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         list_head.add_css_class("fx-template-list-head");
         let list_title = label("TEMPLATES", &["fx-section-title"]);
         list_title.set_hexpand(true);
-        let new_button = super::icon_button("list-add-symbolic", "New template", &["fx-icon-button"]);
+        let new_button = super::icon_button("fennec-add-symbolic", "New template", &["fx-icon-button"]);
         list_head.append(&list_title);
         list_head.append(&new_button);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -81,8 +83,7 @@ impl TemplatesPage {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
         left_scroll.add_css_class("fx-template-list-scroll");
-        left_scroll.set_size_request(200, -1);
-        left_scroll.set_hexpand(false);
+        left_scroll.set_vexpand(true);
 
         let editor = gtk::Box::new(gtk::Orientation::Vertical, 24);
         editor.add_css_class("fx-template-editor");
@@ -104,7 +105,7 @@ impl TemplatesPage {
         let fields_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let ft = label("Fields", &["fx-h3"]);
         ft.set_hexpand(true);
-        let add_field = icon_text_button("list-add-symbolic", "Add field");
+        let add_field = icon_text_button("fennec-add-symbolic", "Add field");
         add_field.add_css_class("fx-secondary");
         add_field.add_css_class("fx-add-field");
         fields_head.append(&ft);
@@ -240,7 +241,6 @@ impl TemplatesPage {
         preview_box.append(&page_frame);
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&left_scroll);
         root.append(&editor_scroll);
         root.append(&preview_box);
 
@@ -255,6 +255,7 @@ impl TemplatesPage {
         let page = Rc::new(Self {
             root,
             header_actions,
+            list_panel: left_scroll,
             dir,
             list,
             current: RefCell::default(),

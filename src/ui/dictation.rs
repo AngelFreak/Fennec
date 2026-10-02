@@ -120,7 +120,12 @@ impl DictationPage {
         column.set_margin_bottom(24);
         column.set_margin_start(56);
         column.set_margin_end(56);
-        let clamp = adw::Clamp::builder().maximum_size(680).child(&column).build();
+        // As in the mockup: 56px gutters, then the text up to ~650px wide.
+        let clamp = adw::Clamp::builder()
+            .maximum_size(760)
+            .tightening_threshold(760)
+            .child(&column)
+            .build();
         column.append(&chips);
         column.append(&title);
         column.append(&editor.view);
@@ -712,8 +717,7 @@ impl DictationPage {
                 self.dock.set_state(DockState::Idle);
                 // Problems (no microphone, clipping) stay visible after stopping.
                 if !self.dock.status_is_error() {
-                    self.dock
-                        .set_status("Press the button or Ctrl+Space to continue.", false);
+                    self.dock.set_status("Press the button to continue.", false);
                 }
                 self.save_now();
             }

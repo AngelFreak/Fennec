@@ -26,6 +26,9 @@ pub struct Sidebar {
     nav: HashMap<&'static str, gtk::Button>,
     projects: gtk::Box,
     tags: gtk::FlowBox,
+    /// What sits under the screens: projects and tags, a screen's own list,
+    /// or nothing.
+    context: gtk::Stack,
     store: Rc<Store>,
     on_nav: super::Handler<Nav>,
     active: RefCell<Nav>,
@@ -41,33 +44,45 @@ impl Sidebar {
 
         let mut nav = HashMap::new();
         for (key, text, icon) in [
-            ("dictate", "Dictate", "audio-input-microphone-symbolic"),
-            ("files", "Files", "document-open-symbolic"),
-            ("templates", "Templates", "view-grid-symbolic"),
+            ("dictate", "Dictate", "fennec-mic-symbolic"),
+            ("files", "Files", "fennec-upload-symbolic"),
+            ("templates", "Templates", "fennec-templates-symbolic"),
         ] {
             let b = nav_button(text, icon);
             root.append(&b);
             nav.insert(key, b);
         }
 
+        let context = gtk::Stack::new();
+        context.set_hhomogeneous(false);
+        context.set_vhomogeneous(false);
+        context.set_vexpand(true);
+        context.set_margin_top(18);
+        let projects_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        context.add_named(&projects_box, Some("projects"));
+        context.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("none"));
+        root.append(&context);
+
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let title = label("PROJECTS", &["fx-section-title"]);
         title.set_hexpand(true);
         head.append(&title);
         let add = gtk::MenuButton::builder()
-            .icon_name("list-add-symbolic")
+            .icon_name("fennec-add-symbolic")
             .tooltip_text("New project")
             .build();
         add.add_css_class("flat");
         add.set_valign(gtk::Align::End);
         add.update_property(&[gtk::accessible::Property::Label("New project")]);
         head.append(&add);
-        root.append(&head);
+        projects_box.append(&head);
 
         let projects = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        root.append(&projects);
+        projects_box.append(&projects);
 
-        root.append(&label("TAGS", &["fx-section-title"]));
+        let tags_title = label("TAGS", &["fx-section-title"]);
+        tags_title.set_margin_top(20);
+        projects_box.append(&tags_title);
         let tags = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .column_spacing(6)
@@ -76,11 +91,9 @@ impl Sidebar {
             .margin_start(12)
             .margin_end(12)
             .build();
-        root.append(&tags);
+        projects_box.append(&tags);
 
-        let settings = nav_button("Settings", "emblem-system-symbolic");
-        settings.set_vexpand(true);
-        settings.set_valign(gtk::Align::End);
+        let settings = nav_button("Settings", "fennec-settings-symbolic");
         root.append(&settings);
         nav.insert("settings", settings);
 
@@ -89,6 +102,7 @@ impl Sidebar {
             nav,
             projects,
             tags,
+            context,
             store,
             on_nav: RefCell::default(),
             active: RefCell::new(Nav::Dictate),
@@ -97,6 +111,23 @@ impl Sidebar {
         sidebar.refresh();
         sidebar.set_active(&Nav::Dictate);
         sidebar
+    }
+
+    /// Adds a screen's own list, shown in place of projects and tags.
+    pub fn add_context(&self, name: &str, widget: &impl IsA<gtk::Widget>) {
+        self.context.add_named(widget, Some(name));
+    }
+
+    /// Shows "projects", "none" or a list added with [`Self::add_context`].
+    pub fn show_context(&self, name: &str) {
+        self.context.set_visible_child_name(name);
+    }
+
+    pub fn context(&self) -> String {
+        self.context
+            .visible_child_name()
+            .map(|n| n.to_string())
+            .unwrap_or_default()
     }
 
     fn wire(self: &Rc<Self>, add: &gtk::MenuButton) {

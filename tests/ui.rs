@@ -126,6 +126,21 @@ fn main() {
     for e in ui::css_errors() {
         println!("     {e}");
     }
+    let theme = gtk::IconTheme::for_display(&gtk::gdk::Display::default().unwrap());
+    check(
+        "the mockup's icons ship with the app, whatever the icon theme",
+        [
+            "mic",
+            "upload",
+            "templates",
+            "settings",
+            "download",
+            "cpu",
+            "back",
+        ]
+        .iter()
+        .all(|n| theme.has_icon(&format!("fennec-{n}-symbolic"))),
+    );
 
     // --- first launch: a new document with the default template
     let root = tmp.path().join("a");
@@ -185,6 +200,14 @@ fn main() {
     w.window.present();
     screenshot(&w.window, "dictate");
     pump_until(Duration::from_millis(300), || w.sidebar.root.width() > 0);
+    check(
+        "every screen fits the mockup's 1280px window",
+        w.window.measure(gtk::Orientation::Horizontal, -1).0 <= 1280,
+    );
+    check(
+        "Dictate shows projects and tags in the sidebar",
+        w.sidebar.context() == "projects",
+    );
     check(
         "the sidebar keeps the mockup's 232px width",
         w.sidebar
@@ -437,11 +460,29 @@ fn main() {
             .iter()
             .any(|p| p.id == harbour && p.local_only),
     );
+    check(
+        "the Project header reads Projects / name",
+        w.header_crumbs() == (Some("Projects".to_string()), "Operation Harbour".to_string()),
+    );
     screenshot(&w.window, "project");
+    w.project.press_new_dictation();
+    check(
+        "New dictation starts a document in the project",
+        w.visible_page() == "dictate" && w.dictation.project_name() == "Operation Harbour",
+    );
+    w.sidebar
+        .go(fennec::ui::Nav::Project(fennec::store::ProjectFilter::Project(
+            harbour,
+        )));
+    w.project.set_table_of_contents(false);
     w.project.press_export();
     check(
         "project export opens Export for its documents",
         w.visible_page() == "export",
+    );
+    check(
+        "the project's Table of contents choice carries over to Export",
+        !w.export.table_of_contents(),
     );
     w.sidebar.go(fennec::ui::Nav::Tag("vendor".into()));
     check(
@@ -451,6 +492,10 @@ fn main() {
 
     // --- templates: create, edit and save; invalid templates explain why
     w.sidebar.go(fennec::ui::Nav::Templates);
+    check(
+        "Templates puts its list in the sidebar, as in the mockup",
+        w.sidebar.context() == "templates" && w.templates.list_panel.is_ancestor(&w.sidebar.root),
+    );
     check(
         "Templates lists the defaults",
         w.templates.names() == ["Afhøringsrapport", "Mødereferat", "Notat"],
@@ -516,6 +561,10 @@ fn main() {
         w.settings.speed_text().contains("real time")
     });
     check("the speed test reports a real-time factor", measured);
+    check(
+        "Settings shows only the screens in the sidebar",
+        w.sidebar.context() == "none",
+    );
     screenshot(&w.window, "settings");
     w.settings.show_section("dictation");
     screenshot(&w.window, "settings-dictation");

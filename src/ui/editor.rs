@@ -57,7 +57,7 @@ impl Editor {
             .wrap_mode(gtk::WrapMode::WordChar)
             .pixels_below_lines(14)
             .pixels_inside_wrap(4)
-            .left_margin(4)
+            .left_margin(0)
             .right_margin(4)
             .css_classes(["fx-editor"])
             .vexpand(true)
