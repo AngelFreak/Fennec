@@ -1,6 +1,6 @@
 //! The mockup's example content, staged in the real window and captured in
 //! the same states as the mockup's own screenshots, for a side-by-side check
-//! (scripts/mockup-compare.sh). Each screen's states live in their own module.
+//! (scripts/mockup/README.md). Each screen's states live in their own module.
 //!
 //! Runs only when FENNEC_MOCKUP_DIR names an output folder; needs a Wayland
 //! display of 1280×800 (the mockup's size) and `grim`.
