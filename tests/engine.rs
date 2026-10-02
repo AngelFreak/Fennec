@@ -44,7 +44,7 @@ fn transcribes_danish_clip_into_ordered_segments_within_the_audio() {
     }
     for s in &segments {
         assert!(
-            s.start_ms <= s.end_ms && s.end_ms <= duration_ms + 1000,
+            0 <= s.start_ms && s.start_ms <= s.end_ms && s.end_ms <= duration_ms,
             "bad timing: {s:?}"
         );
         for r in &s.low_confidence {
@@ -63,4 +63,25 @@ fn missing_model_reports_the_path() {
         .unwrap();
     assert!(matches!(err, EngineError::ModelMissing(_)));
     assert!(err.to_string().contains("/nonexistent/model.bin"));
+}
+
+/// Edda on the FLEURS clip. Decoding with timestamp tokens garbled the
+/// first words ("ketchupapirakanske" for "Som i alle sydafrikanske", 38% WER).
+/// Needs the converted model: Settings → Speech model → Edda.
+#[test]
+#[ignore]
+fn edda_transcribes_the_clip_from_its_first_word() {
+    let model = fennec::config::Paths::user().models().join("edda-v0.1-q5_0.bin");
+    let pcm = read_wav_16k_mono(&fixture("da_fleurs_0.wav")).unwrap();
+    let reference = std::fs::read_to_string(fixture("da_fleurs_0.txt")).unwrap();
+    let mut engine = WhisperEngine::load(&model, false).unwrap();
+    let text: String = engine
+        .transcribe(&pcm, &TranscribeOptions::default())
+        .unwrap()
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert!(text.trim_start().starts_with("Som i alle"), "{text}");
+    let wer = fennec::eval::word_errors(&reference, &text).rate();
+    assert!(wer < 0.2, "WER {wer:.2}: {text}");
 }

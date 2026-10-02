@@ -47,6 +47,10 @@ impl Transcriber for WhisperEngine {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_suppress_blank(true);
+        // The Danish fine-tunes were trained without timestamp tokens; asking
+        // for them garbles the first words (FLEURS WER: Edda 18.7% → 7.9%,
+        // Røst 26.1% → 11.5%). Times come from voice detection instead.
+        params.set_no_timestamps(true);
         if let Some(prompt) = &opts.initial_prompt {
             params.set_initial_prompt(prompt);
         }
@@ -54,7 +58,9 @@ impl Transcriber for WhisperEngine {
         self.state.full(params, pcm)?;
 
         let eot = self.ctx.token_eot();
+        let duration_ms = pcm.len() as i64 * 1000 / i64::from(super::SAMPLE_RATE);
         let mut segments = Vec::new();
+        let mut window_start = 0;
         for seg in self.state.as_iter() {
             let mut text = String::new();
             let mut low_confidence = Vec::new();
@@ -82,13 +88,18 @@ impl Transcriber for WhisperEngine {
                     (s < e).then_some(s..e)
                 })
                 .collect();
+            // Without timestamp tokens each segment is one 30 s window: its
+            // end (centiseconds) is the window edge, its start is not
+            // meaningful, so it starts where the previous one ended.
+            let start_ms = window_start;
+            let end_ms = (seg.end_timestamp() * 10).clamp(start_ms, duration_ms);
+            window_start = end_ms;
             if text_trimmed.is_empty() {
                 continue;
             }
             segments.push(Segment {
-                // whisper.cpp timestamps are in centiseconds.
-                start_ms: seg.start_timestamp() * 10,
-                end_ms: seg.end_timestamp() * 10,
+                start_ms,
+                end_ms,
                 text: text_trimmed,
                 low_confidence,
             });

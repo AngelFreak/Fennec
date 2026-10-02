@@ -56,7 +56,16 @@ fn main() -> Result<()> {
         args.models.len()
     );
 
-    let accuracy = run_accuracy_in_parallel(&args, &clips)?;
+    let accuracy = if args.gpu {
+        // Several whisper.cpp contexts on one Vulkan device at once crash
+        // inside ggml, so GPU models take turns.
+        args.models
+            .iter()
+            .map(|m| accuracy_of(m, &args, &clips, default_threads()))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        run_accuracy_in_parallel(&args, &clips)?
+    };
     let speed = run_speed_sequentially(&args, &clips)?;
 
     println!(
@@ -64,8 +73,13 @@ fn main() -> Result<()> {
         "model", "WER", "CER", "load s", "RTF"
     );
     for (a, (load, rtf)) in accuracy.iter().zip(&speed) {
+        let rtf = if rtf.is_finite() {
+            format!("{rtf:.3}")
+        } else {
+            "–".to_string()
+        };
         println!(
-            "{:<34} {:>6.1}% {:>6.1}% {:>9.1} {:>9.3}",
+            "{:<34} {:>6.1}% {:>6.1}% {:>9.1} {:>9}",
             file_name(&a.model),
             a.wer.rate() * 100.0,
             a.cer.rate() * 100.0,
@@ -92,37 +106,37 @@ fn run_accuracy_in_parallel(args: &Args, clips: &[Clip]) -> Result<Vec<Accuracy>
         let handles: Vec<_> = args
             .models
             .iter()
-            .map(|model| {
-                scope.spawn(move || -> Result<Accuracy> {
-                    let mut engine = load_engine(model, args.gpu)?;
-                    let opts = TranscribeOptions {
-                        threads: threads_each,
-                        ..Default::default()
-                    };
-                    let mut acc = Accuracy {
-                        model: model.clone(),
-                        wer: ErrorCount::default(),
-                        cer: ErrorCount::default(),
-                        worst: Vec::new(),
-                    };
-                    for (i, clip) in clips.iter().enumerate() {
-                        let hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
-                        let w = word_errors(&clip.reference, &hyp);
-                        acc.wer.add(w);
-                        acc.cer.add(char_errors(&clip.reference, &hyp));
-                        acc.worst.push((w.rate(), clip.reference.clone(), hyp));
-                        eprintln!("[{}] {}/{}", file_name(model), i + 1, clips.len());
-                    }
-                    acc.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
-                    Ok(acc)
-                })
-            })
+            .map(|model| scope.spawn(move || accuracy_of(model, args, clips, threads_each)))
             .collect();
         handles
             .into_iter()
             .map(|h| h.join().expect("benchmark thread panicked"))
             .collect()
     })
+}
+
+fn accuracy_of(model: &Path, args: &Args, clips: &[Clip], threads: usize) -> Result<Accuracy> {
+    let mut engine = load_engine(model, args.gpu)?;
+    let opts = TranscribeOptions {
+        threads,
+        ..Default::default()
+    };
+    let mut acc = Accuracy {
+        model: model.to_path_buf(),
+        wer: ErrorCount::default(),
+        cer: ErrorCount::default(),
+        worst: Vec::new(),
+    };
+    for (i, clip) in clips.iter().enumerate() {
+        let hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
+        let w = word_errors(&clip.reference, &hyp);
+        acc.wer.add(w);
+        acc.cer.add(char_errors(&clip.reference, &hyp));
+        acc.worst.push((w.rate(), clip.reference.clone(), hyp));
+        eprintln!("[{}] {}/{}", file_name(model), i + 1, clips.len());
+    }
+    acc.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(acc)
 }
 
 /// Returns (load seconds, real-time factor) per model.
