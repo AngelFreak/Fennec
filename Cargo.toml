@@ -15,6 +15,8 @@ cuda = ["whisper-rs/cuda"]
 anyhow = "1"
 cairo-rs = { version = "0.22", features = ["pdf", "png"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+cpal = "0.18.2"
+crossbeam-channel = "0.5.17"
 hound = "3.5"
 pango = "0.22"
 pangocairo = "0.22"

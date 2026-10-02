@@ -60,6 +60,10 @@ pub enum EngineError {
     },
     #[error("transcription failed: {0}")]
     Transcribe(#[from] whisper_rs::WhisperError),
+    #[error("the transcription engine has stopped")]
+    WorkerStopped,
+    #[error("{0}")]
+    Other(String),
 }
 
 pub trait Transcriber: Send {

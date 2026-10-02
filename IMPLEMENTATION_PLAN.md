@@ -32,7 +32,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: cpal capture, utterance builder, partials, voice commands, low-confidence spans, disk buffer, engine priority queue.
 **Success Criteria**: fake audio source → events → paragraphs, commands applied.
 **Tests**: utterance boundaries, force-cut, partial dropping when busy, command matching; integration through the real pipeline.
-**Status**: Not Started
+**Status**: Complete — frame-level Silero over a sliding window; engine worker shared by live and file jobs (finals > file > previews); mic via cpal on its own thread; untested on real hardware until the GTK app runs (Stage 5).
 
 ## Stage 5: GTK shell — window, sidebar, dictation screen
 **Goal**: main window per mockup: header, sidebar (nav, projects, tags, settings), editor with tags, record dock, inspector fields, CSS.

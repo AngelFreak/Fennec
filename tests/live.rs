@@ -1,0 +1,211 @@
+//! Live dictation through the real pipeline: audio source → utterance
+//! builder → engine worker → events → transcript → store.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use fennec::audio::capture::PcmSource;
+use fennec::audio::read_wav_16k_mono;
+use fennec::commands::Command;
+use fennec::engine::{EngineError, Segment, TranscribeOptions, Transcriber, WhisperEngine};
+use fennec::live::{LiveConfig, LiveEvent, LiveSession};
+use fennec::store::{NewDocument, Store};
+use fennec::transcript::Transcript;
+use fennec::utterance::{EnergyVad, SileroFrameVad};
+use fennec::worker::EngineWorker;
+
+const SR: usize = 16_000;
+
+fn tone(secs: f32) -> Vec<f32> {
+    (0..(secs * SR as f32) as usize)
+        .map(|i| (i as f32 * 0.07).sin() * 0.3)
+        .collect()
+}
+
+fn silence(secs: f32) -> Vec<f32> {
+    vec![0.0; (secs * SR as f32) as usize]
+}
+
+/// Answers each utterance with the next scripted line.
+struct Scripted(Vec<&'static str>);
+
+impl Transcriber for Scripted {
+    fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        let text = if self.0.is_empty() { "" } else { self.0.remove(0) };
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1,
+            text: text.into(),
+            low_confidence: vec![],
+        }])
+    }
+}
+
+fn run(
+    source: PcmSource,
+    vad: Box<dyn fennec::utterance::FrameVad>,
+    engine: Box<dyn Transcriber>,
+    cfg: LiveConfig,
+) -> Vec<LiveEvent> {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let worker = Arc::new(EngineWorker::spawn(engine));
+    LiveSession::start(
+        Box::new(source),
+        vad,
+        worker,
+        cfg,
+        Arc::new(move |e| sink.lock().unwrap().push(e)),
+    )
+    .wait();
+    Arc::try_unwrap(events).unwrap().into_inner().unwrap()
+}
+
+#[test]
+fn spoken_commands_shape_paragraphs_that_save_to_the_store() {
+    let mut audio = Vec::new();
+    for _ in 0..3 {
+        audio.extend(tone(1.0));
+        audio.extend(silence(1.0));
+    }
+    let engine = Scripted(vec!["Første sætning.", "Nyt afsnit.", "Anden sætning."]);
+    let cfg = LiveConfig {
+        show_preview: false,
+        ..Default::default()
+    };
+    let events = run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(engine),
+        cfg,
+    );
+
+    assert!(
+        events.contains(&LiveEvent::Command(Command::NewParagraph)),
+        "{events:?}"
+    );
+    assert_eq!(events.last(), Some(&LiveEvent::Stopped));
+    let mut transcript = Transcript::new(10_000);
+    for e in &events {
+        match e {
+            LiveEvent::Final {
+                text,
+                start_ms,
+                end_ms,
+                low_confidence,
+            } => {
+                transcript.add_final(text, *start_ms, *end_ms, low_confidence);
+            }
+            LiveEvent::Command(c) => {
+                transcript.apply(*c);
+            }
+            _ => {}
+        }
+    }
+    let store = Store::open_in_memory().unwrap();
+    let doc = store.create_document(&NewDocument::dictation("Diktat")).unwrap();
+    store.replace_paragraphs(doc, &transcript.paragraphs).unwrap();
+    let saved: Vec<String> = store
+        .paragraphs(doc)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    assert_eq!(saved, ["Første sætning.", "Anden sætning."]);
+    let first = &store.paragraphs(doc).unwrap()[0];
+    assert!(
+        first.start_ms.unwrap() < 200 && (900..1500).contains(&first.end_ms.unwrap()),
+        "{first:?}"
+    );
+}
+
+#[test]
+fn offset_shifts_times_for_dictation_that_continues_a_document() {
+    let mut audio = tone(1.0);
+    audio.extend(silence(1.0));
+    let cfg = LiveConfig {
+        show_preview: false,
+        offset_ms: 60_000,
+        ..Default::default()
+    };
+    let events = run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(Scripted(vec!["Hej."])),
+        cfg,
+    );
+    let start = events.iter().find_map(|e| {
+        if let LiveEvent::Final { start_ms, .. } = e {
+            Some(*start_ms)
+        } else {
+            None
+        }
+    });
+    assert!(start.is_some_and(|s| (60_000..60_300).contains(&s)), "{events:?}");
+}
+
+#[test]
+fn the_recording_on_disk_holds_all_the_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("rec.wav");
+    let mut audio = tone(1.0);
+    audio.extend(silence(1.5));
+    let cfg = LiveConfig {
+        show_preview: false,
+        record_to: Some(wav.clone()),
+        ..Default::default()
+    };
+    run(
+        PcmSource::new(audio.clone()),
+        Box::new(EnergyVad::default()),
+        Box::new(Scripted(vec!["x"])),
+        cfg,
+    );
+    let back = read_wav_16k_mono(&wav).unwrap();
+    assert_eq!(back.len(), audio.len());
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+#[test]
+fn real_engine_and_silero_turn_danish_speech_into_a_final_event() {
+    let models = fixture("models");
+    let mut audio = read_wav_16k_mono(&fixture("da_fleurs_0.wav")).unwrap();
+    audio.extend(silence(1.5));
+    let engine = WhisperEngine::load(&models.join("ggml-tiny.bin"), false).unwrap();
+    let vad = SileroFrameVad::load(&models.join("ggml-silero-v6.2.0.bin")).unwrap();
+    let cfg = LiveConfig {
+        transcribe: TranscribeOptions {
+            threads: 4,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let events = run(PcmSource::new(audio), Box::new(vad), Box::new(engine), cfg);
+
+    let finals: Vec<(&String, i64)> = events
+        .iter()
+        .filter_map(|e| {
+            if let LiveEvent::Final { text, start_ms, .. } = e {
+                Some((text, *start_ms))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(!finals.is_empty(), "{events:?}");
+    assert!(
+        finals[0].1 < 1_500,
+        "speech starts near the beginning: {finals:?}"
+    );
+    assert!(finals.iter().map(|f| f.0.len()).sum::<usize>() > 20, "{finals:?}");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, LiveEvent::Level(l) if *l > 0.01))
+    );
+}

@@ -4,12 +4,17 @@
 #![allow(clippy::single_range_in_vec_init)]
 
 pub mod audio;
+pub mod commands;
 pub mod engine;
 pub mod eval;
 pub mod export;
 pub mod ingest;
+pub mod live;
 pub mod paragraphs;
 pub mod store;
 pub mod template;
 pub mod text;
+pub mod transcript;
+pub mod utterance;
 pub mod vad;
+pub mod worker;

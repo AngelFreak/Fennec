@@ -1,5 +1,6 @@
 //! Audio input: 16 kHz WAV reading (benchmarks) and general file decoding.
 
+pub mod capture;
 pub mod decode;
 
 use std::path::{Path, PathBuf};
