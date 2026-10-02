@@ -23,14 +23,13 @@ struct FieldRow {
 pub struct Inspector {
     pub root: gtk::Box,
     pub template_choice: gtk::DropDown,
-    /// "Suggest values" (visible when AI is on).
-    pub suggest: gtk::Button,
     pub suggest_status: gtk::Label,
     fields_box: gtk::Box,
     entries: RefCell<Vec<FieldRow>>,
-    review_box: gtk::FlowBox,
+    review_box: gtk::Box,
     review_count: gtk::Label,
     pub stats: gtk::Label,
+    pub recorded: gtk::Label,
     templates: RefCell<Vec<Template>>,
     on_change: super::Handler<()>,
     on_review: super::Handler<usize>,
@@ -48,10 +47,6 @@ impl Inspector {
         tpl_box.append(&tpl_label);
         tpl_box.append(&template_choice);
         root.append(&tpl_box);
-        let suggest = gtk::Button::with_label("Suggest values with AI");
-        suggest.add_css_class("fx-secondary");
-        suggest.set_visible(false);
-        root.append(&suggest);
         let suggest_status = label("", &["fx-field-note"]);
         suggest_status.set_wrap(true);
         suggest_status.set_visible(false);
@@ -64,29 +59,30 @@ impl Inspector {
         root.append(&label("REVIEW", &["fx-section-title"]));
         let review_count = label("No unsure words", &["fx-field-label"]);
         root.append(&review_count);
-        let review_box = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(6)
-            .row_spacing(6)
-            .max_children_per_line(4)
-            .build();
+        let review_box = super::wrap::wrap_box();
         root.append(&review_box);
 
+        // Word count on the left, recorded length on the right.
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        footer.set_vexpand(true);
+        footer.set_valign(gtk::Align::End);
         let stats = label("", &["fx-stats"]);
-        stats.set_vexpand(true);
-        stats.set_valign(gtk::Align::End);
-        root.append(&stats);
+        stats.set_hexpand(true);
+        let recorded = label("", &["fx-stats"]);
+        footer.append(&stats);
+        footer.append(&recorded);
+        root.append(&footer);
 
         Rc::new(Self {
             root,
             template_choice,
-            suggest,
             suggest_status,
             fields_box,
             entries: RefCell::default(),
             review_box,
             review_count,
             stats,
+            recorded,
             templates: RefCell::default(),
             on_change: RefCell::default(),
             on_review: RefCell::default(),
@@ -137,7 +133,16 @@ impl Inspector {
             entry.add_css_class("fx-field");
             entry.set_text(values.get(&f.key).map(String::as_str).unwrap_or(""));
             entry.update_property(&[gtk::accessible::Property::Label(&f.label)]);
-            entry.set_placeholder_text(Some("Not filled in"));
+            // As in the mockup: dates Fennec fills itself are shaded, and a
+            // field that takes the user's name asks for it.
+            if f.kind == FieldKind::Date && f.default.contains("{today}") {
+                entry.add_css_class("auto");
+            }
+            entry.set_placeholder_text(Some(if f.default.contains("{user}") {
+                "Your name"
+            } else {
+                "Not filled in"
+            }));
             b.append(&entry);
             let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
             card.add_css_class("fx-suggestion");
@@ -284,7 +289,7 @@ impl Inspector {
                     f(i);
                 }
             });
-            self.review_box.insert(&b, -1);
+            self.review_box.append(&b);
         }
     }
 }

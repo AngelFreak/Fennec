@@ -91,6 +91,10 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (scope, provider_id)
     );
     "#,
+    // 3: which AI provider found an action item
+    r#"
+    ALTER TABLE action_items ADD COLUMN provider TEXT;
+    "#,
 ];
 
 pub(super) fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

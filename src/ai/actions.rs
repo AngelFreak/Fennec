@@ -287,6 +287,7 @@ pub fn action_items(
                 who: text("who"),
                 due,
                 paragraph_id: item["paragraph"].as_i64().filter(|id| ids.contains(id)),
+                provider: Some(llm.config().name.clone()),
             });
         }
     }

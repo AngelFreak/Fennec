@@ -79,9 +79,13 @@ impl Dock {
 
         let status = label("Press the button to start dictating.", &["fx-status"]);
         status.set_hexpand(true);
-        // One line; the full message is in the tooltip when it does not fit.
+        // Up to two lines, as in the mockup; the full message is in the
+        // tooltip when it does not fit.
+        status.set_wrap(true);
+        status.set_lines(2);
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
         status.set_width_chars(10);
+        status.set_max_width_chars(40);
 
         let kbd = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         kbd.set_valign(gtk::Align::Center);

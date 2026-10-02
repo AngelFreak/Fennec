@@ -260,12 +260,14 @@ fn summaries_and_action_items_roll_up_per_project() {
             who: Some("Projektleder".into()),
             due: Some("2026-10-15".into()),
             paragraph_id: None,
+            provider: Some("Claude".into()),
         },
         NewActionItem {
             what: "Send plan".into(),
             who: None,
             due: None,
             paragraph_id: None,
+            provider: Some("Claude".into()),
         },
     ];
     s.replace_action_items(d1, &items).unwrap();
@@ -276,6 +278,7 @@ fn summaries_and_action_items_roll_up_per_project() {
             who: None,
             due: None,
             paragraph_id: None,
+            provider: None,
         }],
     )
     .unwrap();
@@ -284,6 +287,12 @@ fn summaries_and_action_items_roll_up_per_project() {
     assert_eq!(
         roll_up.iter().map(|a| a.what.as_str()).collect::<Vec<_>>(),
         ["Ring til Acme", "Send plan"]
+    );
+    assert!(
+        roll_up
+            .iter()
+            .all(|a| a.provider.as_deref() == Some("Claude") && a.created_at > 0),
+        "items remember who found them, and when"
     );
     s.set_action_done(roll_up[0].id, true).unwrap();
     let after = s.action_items(ProjectFilter::Project(p)).unwrap();

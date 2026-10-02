@@ -90,6 +90,12 @@ window.fennec progressbar.ink progress { background-color: @fx_ink; }
 window.fennec switch { background-color: @fx_track; }
 window.fennec switch:checked { background-color: @fx_accent; }
 
+/* Adwaita resets the font on popovers; give them the interface's. */
+window.fennec popover {
+  font-family: "IBM Plex Sans", Inter, Cantarell, sans-serif;
+  font-size: 13px;
+  color: @fx_text;
+}
 window.fennec popover > contents {
   background-color: @fx_surface;
   border-radius: 10px;
@@ -174,8 +180,13 @@ window.fennec separator { background-color: @fx_border; min-height: 1px; min-wid
 }
 .fx-menu-item:hover { background-color: @fx_chrome; }
 .fx-menu-title { font-size: 13px; font-weight: 500; color: @fx_text; }
+/* Beats the reset that keeps button labels at 400. */
+window.fennec button.fx-menu-item label.fx-menu-title { font-weight: 500; }
 .fx-menu-note { font-size: 12px; color: @fx_muted; }
-.fx-menu-footer { padding: 6px 12px; font-size: 12px; color: @fx_muted; }
+.fx-menu-footer { padding: 12px 12px 8px; font-size: 12px; color: @fx_muted; }
+.fx-dot.cloud { background-color: #2563EB; }
+.fx-dot.network { background-color: @fx_ok; }
+.fx-dot.local { background-color: @fx_faint; }
 .fx-link {
   background: none;
   box-shadow: none;
@@ -186,6 +197,8 @@ window.fennec separator { background-color: @fx_border; min-height: 1px; min-wid
   font-size: 12px;
 }
 .fx-link:hover { color: @fx_accent_hover; }
+/* Links are underlined, as in the mockup. */
+.fx-link label { text-decoration-line: underline; }
 
 /* Segmented control (format, compute). */
 .fx-segmented {
@@ -239,7 +252,9 @@ window.fennec separator { background-color: @fx_border; min-height: 1px; min-wid
   font-size: 13px;
 }
 .fx-header-chip:hover { background-color: @fx_surface; border-color: @fx_faint; }
-.fx-header-chip.strong label { font-weight: 600; color: @fx_text; }
+/* Only the chip's own label: a menu button's popover is its CSS child too. */
+button.fx-header-chip.strong label,
+menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_text; }
 
 /* ---- Sidebar ---- */
 
@@ -413,12 +428,12 @@ window.fennec separator { background-color: @fx_border; min-height: 1px; min-wid
 textview.fx-editor, textview.fx-editor text {
   background-color: @fx_surface;
   color: @fx_text;
-  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
-  font-size: 17px;
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 17px; font-variation-settings: "opsz" 17;
 }
 .fx-doc-title, .fx-doc-title text {
-  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
-  font-size: 30px;
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 30px; font-variation-settings: "opsz" 30;
   font-weight: 600;
 }
 window.fennec entry.fx-doc-title {
@@ -428,8 +443,8 @@ window.fennec entry.fx-doc-title {
   padding: 0;
   min-height: 44px;
 }
-.fx-serif { font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif; font-size: 17px; }
-.fx-serif.small { font-size: 16px; }
+.fx-serif { font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif; font-size: 17px; font-variation-settings: "opsz" 17; }
+.fx-serif.small { font-size: 16px; font-variation-settings: "opsz" 16; }
 
 .fx-chip {
   min-height: 28px;
@@ -494,11 +509,19 @@ window.fennec entry.fx-doc-title {
 /* ---- AI ---- */
 
 .fx-ai-box { border: 1px solid @fx_border; border-radius: 10px; padding: 20px 24px; }
+.fx-summary-para {
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 17px; font-variation-settings: "opsz" 17;
+  line-height: 1.2;
+  color: @fx_text;
+}
+.fx-summary-heading { font-size: 13px; font-weight: 600; color: @fx_text; margin-top: 2px; }
+.fx-summary-bullet { margin-left: 4px; }
 textview.fx-summary-text, textview.fx-summary-text text {
   background-color: transparent;
   color: @fx_text;
-  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
-  font-size: 17px;
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 17px; font-variation-settings: "opsz" 17;
 }
 .fx-bubble {
   background-color: @fx_chip;
@@ -506,7 +529,7 @@ textview.fx-summary-text, textview.fx-summary-text text {
   padding: 10px 14px;
   font-size: 14px;
 }
-.fx-answer { font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif; font-size: 16px; color: @fx_text; }
+.fx-answer { font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif; font-size: 16px; font-variation-settings: "opsz" 16; color: @fx_text; }
 .fx-citation {
   background-color: @fx_chrome;
   box-shadow: 0 0 0 1px @fx_border;
@@ -523,8 +546,8 @@ textview.fx-summary-text, textview.fx-summary-text text {
 textview.fx-diff, textview.fx-diff text {
   background-color: transparent;
   color: @fx_text;
-  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
-  font-size: 16px;
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 16px; font-variation-settings: "opsz" 16;
 }
 .fx-legend-removed { background-color: @fx_accent_soft; color: @fx_accent_text; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
 .fx-legend-added { background-color: @fx_ai_bg; color: @fx_ai_text; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
@@ -537,8 +560,8 @@ textview.fx-diff, textview.fx-diff text {
 .fx-transcript-row.current { background-color: @fx_accent_soft; }
 .fx-transcript-row.current .fx-timestamp { color: @fx_accent_text; font-weight: 500; }
 .fx-transcript-text, .fx-transcript-text text {
-  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
-  font-size: 16px;
+  font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 16px; font-variation-settings: "opsz" 16;
   background: none;
 }
 .fx-timestamp {
@@ -662,3 +685,6 @@ menubutton.fx-chip > button { min-height: 28px; padding: 0 10px; }
 menubutton.fx-tag > button { min-height: 28px; padding: 0 10px; }
 menubutton.fx-header-chip { background-color: @fx_surface; border: 1px solid @fx_border; border-radius: 8px; }
 menubutton.fx-tag arrow, menubutton.fx-chip arrow { min-width: 0; min-height: 0; margin: 0; opacity: 0; -gtk-icon-size: 0; }
+
+/* A value Fennec fills in itself (the date). */
+window.fennec entry.fx-field.auto { background-color: @fx_chip; }

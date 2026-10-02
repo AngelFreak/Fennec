@@ -48,6 +48,8 @@ pub struct DictationPage {
     tab_buttons: Vec<(&'static str, gtk::Button)>,
     pub ai_menu: gtk::MenuButton,
     ai_footer: gtk::Label,
+    /// Coloured by where the provider runs, as in the mockup.
+    ai_footer_dot: gtk::Box,
     pub title: gtk::Entry,
     project_chip: gtk::Label,
     project_menu: gtk::MenuButton,
@@ -70,7 +72,16 @@ impl DictationPage {
         let dock = Dock::new();
         let inspector = Inspector::new();
         let summary = SummaryPanel::new(Rc::clone(&store), "Summarize this document");
+        let place_of = |settings: Rc<RefCell<crate::config::Settings>>| {
+            move |name: &str| {
+                let s = settings.borrow();
+                let p = s.ai.providers.iter().find(|p| p.name == name || p.id == name)?;
+                Some(super::project::locality_word(p.locality).to_string())
+            }
+        };
+        summary.set_place_of(place_of(Rc::clone(&deps.settings)));
         let actions = ActionsPanel::new(Rc::clone(&store), Some("Find action items"), "Source", 64);
+        actions.set_place_of(place_of(Rc::clone(&deps.settings)));
         let cleanup = CleanupPage::new(Rc::clone(&store), Rc::clone(&deps.settings));
 
         let title = gtk::Entry::builder()
@@ -195,6 +206,12 @@ impl DictationPage {
             tab_buttons,
             ai_menu,
             ai_footer,
+            ai_footer_dot: {
+                let d = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                d.add_css_class("fx-dot");
+                d.set_valign(gtk::Align::Center);
+                d
+            },
             title,
             project_chip,
             project_menu,
@@ -526,9 +543,10 @@ impl DictationPage {
         let paragraphs = self.editor.paragraphs();
         let count: usize = paragraphs.iter().map(|p| p.text.split_whitespace().count()).sum();
         let recorded = paragraphs.iter().filter_map(|p| p.end_ms).max().unwrap_or(0);
+        self.inspector.stats.set_text(&format!("{count} words"));
         self.inspector
-            .stats
-            .set_text(&format!("{count} words · Recorded {}", duration(recorded)));
+            .recorded
+            .set_text(&format!("Recorded {}", duration(recorded)));
     }
 
     pub fn toggle_recording(self: &Rc<Self>) {
@@ -741,14 +759,15 @@ impl DictationPage {
     fn build_ai_menu(self: &Rc<Self>) {
         let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
         menu.set_size_request(300, -1);
-        let pop = gtk::Popover::builder().child(&menu).has_arrow(false).build();
+        // Its right edge lines up with the button's, as in the mockup.
+        let pop = gtk::Popover::builder()
+            .child(&menu)
+            .has_arrow(false)
+            .halign(gtk::Align::End)
+            .build();
         type Action = fn(&Rc<DictationPage>);
         let items: [(&str, &str, Action); 4] = [
-            (
-                "Summarise document",
-                "A short summary, saved with the document",
-                |p| p.ai_summarize(),
-            ),
+            ("Summarise document", "Prompt: Kort resumé", |p| p.ai_summarize()),
             (
                 "Clean up text…",
                 "Remove filler words, fix grammar. Review as a diff.",
@@ -786,6 +805,8 @@ impl DictationPage {
         footer.add_css_class("fx-menu-footer");
         self.ai_footer.add_css_class("fx-stats");
         self.ai_footer.set_hexpand(true);
+        self.ai_footer.set_xalign(0.0);
+        footer.append(&self.ai_footer_dot);
         footer.append(&self.ai_footer);
         let change = gtk::Button::with_label("Change in Settings");
         change.add_css_class("fx-link");
@@ -846,12 +867,6 @@ impl DictationPage {
             }
         });
         let weak = Rc::downgrade(self);
-        self.inspector.suggest.connect_clicked(move |_| {
-            if let Some(p) = weak.upgrade() {
-                p.ai_suggest_fields();
-            }
-        });
-        let weak = Rc::downgrade(self);
         self.cleanup.connect_apply(move |id, from, to| {
             weak.upgrade().is_some_and(|p| p.replace_paragraph(id, from, to))
         });
@@ -869,7 +884,6 @@ impl DictationPage {
         let on = ai.enabled;
         self.ai_menu.set_visible(on);
         self.tabs.set_visible(on);
-        self.inspector.suggest.set_visible(on);
         if !on {
             self.show_view("transcript");
             self.inspector.suggest_status.set_visible(false);
@@ -878,6 +892,17 @@ impl DictationPage {
             Some(p) => format!("{} · {}", p.name, p.locality.label().to_lowercase()),
             None => "No provider set up".into(),
         });
+        for c in ["cloud", "network", "local"] {
+            self.ai_footer_dot.remove_css_class(c);
+        }
+        if let Some(p) = ai.active() {
+            self.ai_footer_dot.add_css_class(match p.locality {
+                crate::ai::Locality::Cloud => "cloud",
+                crate::ai::Locality::Network => "network",
+                crate::ai::Locality::ThisComputer => "local",
+            });
+        }
+        self.ai_footer_dot.set_visible(ai.active().is_some());
     }
 
     /// Switches the document view and marks its tab.
@@ -1020,7 +1045,6 @@ impl DictationPage {
         let status = &self.inspector.suggest_status;
         status.set_visible(true);
         status.set_text("Reading the text for field values…");
-        self.inspector.suggest.set_sensitive(false);
         super::ai::run(
             self.root.upcast_ref(),
             &self.deps,
@@ -1031,7 +1055,6 @@ impl DictationPage {
             self.for_doc(
                 doc,
                 |p, r: Result<std::collections::BTreeMap<String, String>, crate::ai::AiError>| {
-                    p.inspector.suggest.set_sensitive(true);
                     let status = &p.inspector.suggest_status;
                     match r {
                         Ok(map) if map.is_empty() => {
@@ -1104,7 +1127,12 @@ fn ai_view(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     col.set_margin_start(56);
     col.set_margin_end(56);
     col.append(child);
-    let clamp = adw::Clamp::builder().maximum_size(660).child(&col).build();
+    // The same column as the transcript's.
+    let clamp = adw::Clamp::builder()
+        .maximum_size(760)
+        .tightening_threshold(760)
+        .child(&col)
+        .build();
     gtk::ScrolledWindow::builder()
         .child(&clamp)
         .vexpand(true)

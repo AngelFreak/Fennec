@@ -51,5 +51,11 @@ opt-level = 3
 name = "ui"
 harness = false
 
+# Stages the mockup's content and screenshots it (FENNEC_MOCKUP_DIR).
+[[test]]
+name = "mockup"
+path = "tests/mockup/main.rs"
+harness = false
+
 [build-dependencies]
 glib-build-tools = "0.22"

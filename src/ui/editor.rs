@@ -55,10 +55,10 @@ impl Editor {
         let view = gtk::TextView::builder()
             .buffer(&buffer)
             .wrap_mode(gtk::WrapMode::WordChar)
-            .pixels_below_lines(14)
+            .pixels_below_lines(24)
             .pixels_inside_wrap(4)
             .left_margin(0)
-            .right_margin(4)
+            .right_margin(0)
             .css_classes(["fx-editor"])
             .vexpand(true)
             .build();

@@ -20,6 +20,7 @@ mod settings_page;
 pub mod sidebar;
 mod templates_page;
 mod window;
+mod wrap;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,6 +32,7 @@ use gtk::prelude::*;
 pub use ai::CloudSend;
 pub use app::application;
 pub use dictation::DictationPage;
+pub use dock::DockState;
 pub use export_page::ExportPage;
 pub use files::FilesPage;
 pub use sidebar::Nav;

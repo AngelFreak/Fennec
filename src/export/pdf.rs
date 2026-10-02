@@ -313,7 +313,9 @@ fn layout(cr: &Context, text: &str, f: &FontDescription, width: f64) -> Layout {
 fn font(family: &str, size: f64, bold: bool) -> FontDescription {
     let mut f = FontDescription::new();
     // Fallback families keep output readable if the template's font is missing.
-    f.set_family(&format!("{family},Source Serif 4,Noto Serif,DejaVu Serif,Serif"));
+    f.set_family(&format!(
+        "{family},Source Serif 4,Source Serif 4 Variable,Noto Serif,DejaVu Serif,Serif"
+    ));
     f.set_size((size * f64::from(pango::SCALE)) as i32);
     if bold {
         f.set_weight(pango::Weight::Bold);

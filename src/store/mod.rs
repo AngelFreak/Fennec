@@ -191,6 +191,8 @@ pub struct NewActionItem {
     pub who: Option<String>,
     pub due: Option<String>,
     pub paragraph_id: Option<ParagraphId>,
+    /// Name of the AI provider that found it.
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +204,8 @@ pub struct ActionItem {
     pub who: Option<String>,
     pub due: Option<String>,
     pub done: bool,
+    pub provider: Option<String>,
+    pub created_at: i64,
 }
 
 pub struct Store {
@@ -721,9 +725,17 @@ impl Store {
         let now = now_ms();
         for item in items {
             tx.execute(
-                "INSERT INTO action_items (document_id, paragraph_id, what, who, due, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, item.paragraph_id, item.what, item.who, item.due, now],
+                "INSERT INTO action_items (document_id, paragraph_id, what, who, due, created_at, provider)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id,
+                    item.paragraph_id,
+                    item.what,
+                    item.who,
+                    item.due,
+                    now,
+                    item.provider
+                ],
             )?;
         }
         tx.commit()?;
@@ -733,7 +745,8 @@ impl Store {
     /// Open items first, then in document and extraction order.
     pub fn action_items(&self, filter: ProjectFilter) -> Result<Vec<ActionItem>> {
         let mut sql = String::from(
-            "SELECT a.id, a.document_id, a.paragraph_id, a.what, a.who, a.due, a.done
+            "SELECT a.id, a.document_id, a.paragraph_id, a.what, a.who, a.due, a.done, a.provider,
+                    a.created_at
              FROM action_items a JOIN documents d ON d.id = a.document_id WHERE 1 = 1",
         );
         let mut args: Vec<Box<dyn ToSql>> = Vec::new();
@@ -756,6 +769,8 @@ impl Store {
                 who: r.get(4)?,
                 due: r.get(5)?,
                 done: r.get(6)?,
+                provider: r.get(7)?,
+                created_at: r.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

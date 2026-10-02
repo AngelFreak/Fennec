@@ -25,7 +25,7 @@ pub struct Sidebar {
     pub root: gtk::Box,
     nav: HashMap<&'static str, gtk::Button>,
     projects: gtk::Box,
-    tags: gtk::FlowBox,
+    tags: gtk::Box,
     /// What sits under the screens: projects and tags, a screen's own list,
     /// or nothing.
     context: gtk::Stack,
@@ -83,14 +83,9 @@ impl Sidebar {
         let tags_title = label("TAGS", &["fx-section-title"]);
         tags_title.set_margin_top(20);
         projects_box.append(&tags_title);
-        let tags = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(6)
-            .row_spacing(6)
-            .max_children_per_line(4)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
+        let tags = super::wrap::wrap_box();
+        tags.set_margin_start(12);
+        tags.set_margin_end(12);
         projects_box.append(&tags);
 
         let settings = nav_button("Settings", "fennec-settings-symbolic");
@@ -283,7 +278,10 @@ impl Sidebar {
         while let Some(c) = self.tags.first_child() {
             self.tags.remove(&c);
         }
-        for (tag, _count) in self.store.tags().unwrap_or_default() {
+        // Most used first, as in the mockup.
+        let mut tags = self.store.tags().unwrap_or_default();
+        tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (tag, _count) in tags {
             let b = gtk::Button::with_label(&format!("#{tag}"));
             b.add_css_class("fx-tag");
             let on_nav = self.on_nav.borrow().clone();
@@ -292,7 +290,7 @@ impl Sidebar {
                     f(Nav::Tag(tag.clone()));
                 }
             });
-            self.tags.insert(&b, -1);
+            self.tags.append(&b);
         }
     }
 

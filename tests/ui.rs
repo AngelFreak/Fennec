@@ -484,6 +484,37 @@ fn main() {
         "the project's Table of contents choice carries over to Export",
         !w.export.table_of_contents(),
     );
+    {
+        // Many tags wrap inside the sidebar instead of widening it.
+        let other = store
+            .create_document(&fennec::store::NewDocument::dictation("Mange mærker"))
+            .unwrap();
+        let tags: Vec<String> = [
+            "inspection",
+            "interview",
+            "meeting",
+            "moisture",
+            "planning",
+            "budget",
+        ]
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+        store.set_tags(other, &tags).unwrap();
+        w.sidebar.refresh();
+        // Dictate leaves room to spare, which a greedy sidebar would take.
+        w.sidebar.go(fennec::ui::Nav::Dictate);
+        pump_until(Duration::from_millis(300), || false);
+        check(
+            "many tags wrap; the sidebar stays 232px",
+            w.sidebar
+                .root
+                .compute_bounds(&w.window)
+                .is_some_and(|b| b.width() == 232.0),
+        );
+        store.delete_document(other).unwrap();
+        w.sidebar.refresh();
+    }
     w.sidebar.go(fennec::ui::Nav::Tag("vendor".into()));
     check(
         "a tag shows documents across projects",
@@ -658,7 +689,7 @@ fn fake_model(rec: &Recorded) -> Reply {
             "Jens sender tilbuddet {marker}, og rabatten er 5 % [d999:p1]."
         ));
     }
-    Reply::Text("Resumé: Jens sender et tilbud på fredag.".into())
+    Reply::Text("Resumé: Jens sender et tilbud på fredag.\n\n**Opfølgning**\n- Ring til Jens.".into())
 }
 
 fn ai_checks(root: &std::path::Path) {
@@ -770,6 +801,31 @@ fn ai_checks(root: &std::path::Path) {
         "the summary is stored",
         store.summaries_for_document(doc).map(|s| s.len()).unwrap_or(0) == 1,
     );
+    check(
+        "the summary reads as paragraphs, headings and bullets",
+        w.dictation.summary.rendered_blocks()
+            == [
+                "Resumé: Jens sender et tilbud på fredag.",
+                "Opfølgning",
+                "• Ring til Jens.",
+            ],
+    );
+    check(
+        "its line names where it ran and the prompt",
+        w.dictation
+            .summary
+            .meta_text()
+            .contains("ollama (m) · this computer · prompt «Kort resumé»"),
+    );
+    w.dictation.summary.press_edit();
+    let editing = w.dictation.summary.is_editing();
+    w.dictation.summary.press_edit();
+    check(
+        "Edit opens the raw text and Done saves it",
+        editing
+            && !w.dictation.summary.is_editing()
+            && store.summaries_for_document(doc).unwrap()[0].text == w.dictation.summary.summary_text(),
+    );
     screenshot(&w.window, "summary");
 
     // Clean-up: review, accept, undo.
@@ -808,6 +864,14 @@ fn ai_checks(root: &std::path::Path) {
     check(
         "action items are listed and stored",
         found && store.document_action_items(doc).unwrap().len() == 1,
+    );
+    check(
+        "they are marked AI-generated with who found them, and when",
+        w.dictation.actions.badge_visible()
+            && w.dictation
+                .actions
+                .summary_text()
+                .starts_with("1 action item · ollama · this computer · today "),
     );
 
     // Field suggestions stay suggestions until accepted.
