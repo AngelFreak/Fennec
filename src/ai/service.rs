@@ -98,11 +98,20 @@ impl AiService {
         if !self.settings.enabled {
             return Err(AiError::Disabled);
         }
-        let cfg = cfg?;
+        let mut cfg = cfg?;
         let docs = scope_documents(store, scope)?;
         let mut local_only = false;
         for id in &docs {
             local_only |= store.document_is_local_only(*id)?;
+        }
+        // Local-only text goes to a non-cloud provider when there is one
+        // (as AiSettings::effective_for); the privacy check below still
+        // refuses the cloud if there is not.
+        if local_only
+            && cfg.locality == super::Locality::Cloud
+            && let Some(alt) = self.settings.local_fallback()
+        {
+            cfg = alt;
         }
         let consented = store.has_cloud_consent(&scope.key(), &cfg.id)?;
         privacy::check(cfg, local_only, consented)?;

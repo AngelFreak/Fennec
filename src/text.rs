@@ -39,6 +39,32 @@ pub fn danish_today() -> String {
     danish_date_of(&Local::now())
 }
 
+/// "Today" or "Sep 30": dates in the interface's lists, as in the mockup.
+pub fn short_date(unix_ms: i64) -> String {
+    match Local.timestamp_millis_opt(unix_ms).single() {
+        Some(dt) => short_day(dt.date_naive(), Local::now().date_naive()),
+        None => String::new(),
+    }
+}
+
+fn short_day(d: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    if d == today {
+        "Today".into()
+    } else {
+        d.format("%b %-d").to_string()
+    }
+}
+
+/// "2 h 57 min", or "48 min" under an hour: totals of audio.
+pub fn hours_minutes(ms: i64) -> String {
+    let min = (ms.max(0) + 30_000) / 60_000;
+    if min >= 60 {
+        format!("{} h {} min", min / 60, min % 60)
+    } else {
+        format!("{min} min")
+    }
+}
+
 /// "00:12:31" (hours always shown, as in the transcript gutter).
 pub fn clock(ms: i64) -> String {
     let s = ms.max(0) / 1000;
@@ -152,5 +178,21 @@ mod tests {
     fn bold_markers_are_dropped_for_plain_text() {
         assert_eq!(strip_bold("a **b** c"), "a b c");
         assert_eq!(strip_bold("one ** left"), "one ** left");
+    }
+    #[test]
+    fn list_dates_are_short_as_in_the_mockup() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
+        assert_eq!(short_day(today, today), "Today");
+        assert_eq!(
+            short_day(chrono::NaiveDate::from_ymd_opt(2026, 9, 30).unwrap(), today),
+            "Sep 30"
+        );
+    }
+
+    #[test]
+    fn audio_totals_read_in_hours_and_minutes() {
+        assert_eq!(hours_minutes(((2 * 60 + 56) * 60 + 35) * 1000), "2 h 57 min");
+        assert_eq!(hours_minutes(48 * 60 * 1000), "48 min");
+        assert_eq!(hours_minutes(20 * 1000), "0 min");
     }
 }

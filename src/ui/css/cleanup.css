@@ -9,9 +9,9 @@
   color: @fx_muted;
   margin-top: 4px;
 }
-.fx-cleanup-buttons button { min-height: 36px; font-size: 12px; padding: 0 10px; }
-.fx-cleanup-buttons button.fx-cleanup-undo { min-height: 32px; }
-.fx-cleanup-outcome { font-size: 12px; color: @fx_text_soft; }
+.fx-cleanup-buttons > button { min-height: 36px; font-size: 12px; padding: 0 12px; }
+.fx-cleanup-buttons > button.fx-cleanup-undo { min-height: 32px; }
+.fx-cleanup-outcome { font-size: 12px; color: @fx_text_soft; margin-top: 4px; }
 
 /* The provider pill's dot follows where it runs. */
 .fx-pill.network .fx-dot { background-color: @fx_ok; }

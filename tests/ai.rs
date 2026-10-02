@@ -683,7 +683,9 @@ fn each_action_goes_to_the_provider_set_for_its_job() {
 }
 
 #[test]
-fn a_job_on_a_cloud_provider_still_respects_local_only_projects() {
+fn a_local_only_project_sends_a_cloud_job_to_a_local_provider_instead() {
+    // As the mockup says: "Local-only projects always use Workstation,
+    // whatever is set here." The cloud provider is never contacted.
     let m = job_mocks();
     let ai = job_service(&m);
     let (store, doc) = store_with_doc(&["Fortroligt."]);
@@ -692,12 +694,11 @@ fn a_job_on_a_cloud_provider_still_respects_local_only_projects() {
     store.set_project_local_only(project, true).unwrap();
     ai.consent_to(&store, &Scope::Document(doc), "fields").unwrap();
 
-    let err = ai
-        .suggest_fields(&store, doc, &one_field_template(), &Cancel::default())
-        .unwrap_err();
+    let _ = ai.suggest_fields(&store, doc, &one_field_template(), &Cancel::default());
+    assert_eq!(m.fields.count(), 0, "the cloud provider was contacted");
     assert!(
-        matches!(err, AiError::Privacy(PrivacyError::LocalOnly { .. })),
-        "{err:?}"
+        m.default.count() > 0,
+        "the local default provider answered instead"
     );
     // Jobs on local and network providers keep working in the same project.
     ai.summarize(&store, &Scope::Document(doc), &Cancel::default(), &mut |_| {})

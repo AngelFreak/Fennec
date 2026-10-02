@@ -34,9 +34,9 @@ pub enum RowState {
 struct Row {
     item: Cleaned,
     state: Cell<RowState>,
-    buffer: gtk::TextBuffer,
-    removed: gtk::TextTag,
-    added: gtk::TextTag,
+    /// The paragraph with its changes marked (a label: text views report
+    /// the wrong height while wrapping, which clipped long paragraphs).
+    text: gtk::Label,
     accept: gtk::Button,
     keep: gtk::Button,
     undo: gtk::Button,
@@ -59,6 +59,9 @@ pub struct CleanupPage {
     store: Rc<Store>,
     settings: Rc<RefCell<Settings>>,
     rows: RefCell<Vec<Rc<Row>>>,
+    /// The document is in a local-only project (the provider pill says who
+    /// really gets the text).
+    local_only: Cell<bool>,
     on_apply: ApplyHandler,
     on_done: Handler<()>,
 }
@@ -127,6 +130,7 @@ impl CleanupPage {
             store,
             settings,
             rows: RefCell::default(),
+            local_only: Cell::new(false),
             on_apply: RefCell::default(),
             on_done: RefCell::default(),
         });
@@ -146,7 +150,7 @@ impl CleanupPage {
         adw::StyleManager::default().connect_dark_notify(move |_| {
             if let Some(p) = weak.upgrade() {
                 for r in p.rows.borrow().iter() {
-                    color_tags(r);
+                    render_text(r);
                 }
             }
         });
@@ -172,7 +176,9 @@ impl CleanupPage {
     /// The pill naming the provider that does the clean-up.
     fn refresh_provider(&self) {
         let settings = self.settings.borrow();
-        let active = settings.ai.active();
+        let active = settings
+            .ai
+            .effective_for(crate::ai::AiJob::Cleanup, self.local_only.get());
         for c in ["network", "cloud", "local"] {
             self.provider.remove_css_class(c);
         }
@@ -190,6 +196,12 @@ impl CleanupPage {
     /// The provider pill's text (tests).
     pub fn provider_text(&self) -> String {
         self.provider_label.text().to_string()
+    }
+
+    /// Whether the document under review is local only.
+    pub fn set_local_only(&self, on: bool) {
+        self.local_only.set(on);
+        self.refresh_provider();
     }
 
     pub fn begin(&self, _doc_title: &str) {
@@ -214,12 +226,65 @@ impl CleanupPage {
     pub fn show(self: &Rc<Self>, items: Vec<Cleaned>) {
         self.clear();
         let places = self.places(&items);
-        for item in items {
-            let place = places.get(&item.paragraph_id).cloned().unwrap_or_default();
-            let row = self.card(item, &place);
+        // In document order, as in the mockup: paragraphs the AI left alone
+        // are listed too, marked as such, so the review reads like the text.
+        let mut items: HashMap<ParagraphId, Cleaned> =
+            items.into_iter().map(|i| (i.paragraph_id, i)).collect();
+        for p in self.document_paragraphs(items.keys().next().copied()) {
+            let Some(id) = p.id else { continue };
+            let place = places.get(&id).cloned().unwrap_or_default();
+            match items.remove(&id) {
+                Some(item) => {
+                    let row = self.card(item, &place);
+                    self.rows.borrow_mut().push(row);
+                }
+                None if !p.text.trim().is_empty() => self.unchanged_card(&p.text, &place),
+                None => {}
+            }
+        }
+        // Anything not found in the document still gets its card.
+        for item in items.into_values() {
+            let row = self.card(item, "");
             self.rows.borrow_mut().push(row);
         }
         self.refresh_status();
+    }
+
+    /// The paragraphs of the document holding `paragraph`.
+    fn document_paragraphs(&self, paragraph: Option<ParagraphId>) -> Vec<crate::store::Paragraph> {
+        let Some(paragraph) = paragraph else {
+            return Vec::new();
+        };
+        self.store
+            .documents(&DocumentFilter::default())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| self.store.paragraphs(d.id).unwrap_or_default())
+            .find(|ps| ps.iter().any(|p| p.id == Some(paragraph)))
+            .unwrap_or_default()
+    }
+
+    /// A paragraph the AI suggested nothing for.
+    fn unchanged_card(&self, text: &str, place: &str) {
+        let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
+        card.add_css_class("fx-diff-card");
+        card.add_css_class("unchanged");
+        let ts = label(place, &["fx-cleanup-ts"]);
+        ts.set_size_request(72, -1);
+        ts.set_valign(gtk::Align::Start);
+        card.append(&ts);
+        let t = label(text, &["fx-diff"]);
+        t.set_wrap(true);
+        t.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        t.set_xalign(0.0);
+        t.set_valign(gtk::Align::Start);
+        t.set_hexpand(true);
+        card.append(&t);
+        let side = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        side.set_size_request(200, -1);
+        side.append(&label("No changes suggested", &["fx-cleanup-outcome"]));
+        card.append(&side);
+        self.list.append(&card);
     }
 
     /// Where each paragraph sits: its start time, or ¶n without audio.
@@ -257,21 +322,15 @@ impl CleanupPage {
         ts.set_valign(gtk::Align::Start);
         card.append(&ts);
 
-        let view = gtk::TextView::builder()
-            .editable(false)
-            .cursor_visible(false)
-            .wrap_mode(gtk::WrapMode::WordChar)
-            .pixels_inside_wrap(7)
-            .hexpand(true)
-            .css_classes(["fx-diff"])
-            .build();
-        view.update_property(&[gtk::accessible::Property::Label("Suggested change")]);
-        let buffer = view.buffer();
-        let removed = buffer
-            .create_tag(Some("removed"), &[("strikethrough", &true)])
-            .expect("new tag");
-        let added = buffer.create_tag(Some("added"), &[]).expect("new tag");
-        card.append(&view);
+        let text = label("", &["fx-diff"]);
+        text.set_wrap(true);
+        text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        text.set_xalign(0.0);
+        text.set_valign(gtk::Align::Start);
+        text.set_hexpand(true);
+        text.set_selectable(true);
+        text.update_property(&[gtk::accessible::Property::Label("Suggested change")]);
+        card.append(&text);
 
         let buttons = gtk::Box::new(gtk::Orientation::Vertical, 6);
         buttons.set_size_request(200, -1);
@@ -290,18 +349,12 @@ impl CleanupPage {
         let note = label("", &["fx-field-note"]);
         note.set_wrap(true);
         note.set_visible(false);
-        // As in the mockup: the two choices side by side, then the outcome
-        // with Undo once one is made.
-        let choices = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        choices.set_halign(gtk::Align::Start);
-        choices.append(&accept);
-        choices.append(&keep);
-        let decided = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        decided.set_halign(gtk::Align::Start);
-        decided.append(&outcome);
-        decided.append(&undo);
-        buttons.append(&choices);
-        buttons.append(&decided);
+        // As in the mockup: the two choices stacked full width, then the
+        // outcome with Undo once one is made.
+        buttons.append(&accept);
+        buttons.append(&keep);
+        buttons.append(&outcome);
+        buttons.append(&undo);
         buttons.append(&note);
         card.append(&buttons);
         self.list.append(&card);
@@ -309,16 +362,13 @@ impl CleanupPage {
         let row = Rc::new(Row {
             item,
             state: Cell::new(RowState::Pending),
-            buffer,
-            removed,
-            added,
+            text,
             accept: accept.clone(),
             keep: keep.clone(),
             undo: undo.clone(),
             outcome,
             note,
         });
-        color_tags(&row);
         render_text(&row);
         for (button, action) in [(accept, 0), (keep, 1), (undo, 2)] {
             let weak = Rc::downgrade(self);
@@ -420,6 +470,17 @@ impl CleanupPage {
         }
     }
 
+    /// Cards for paragraphs without suggestions (tests).
+    pub fn unchanged_count(&self) -> usize {
+        let mut n = 0;
+        let mut c = self.list.first_child();
+        while let Some(w) = c {
+            n += usize::from(w.has_css_class("unchanged"));
+            c = w.next_sibling();
+        }
+        n
+    }
+
     pub fn states(&self) -> Vec<RowState> {
         self.rows.borrow().iter().map(|r| r.state.get()).collect()
     }
@@ -444,29 +505,29 @@ impl CleanupPage {
 
 /// Fills the card's text: the diff while pending, otherwise the chosen text.
 fn render_text(row: &Row) {
-    let buffer = &row.buffer;
-    buffer.set_text("");
-    match row.state.get() {
-        RowState::Pending => {
-            for change in word_diff(&row.item.original, &row.item.cleaned) {
-                let mut end = buffer.end_iter();
-                match change {
-                    Change::Same(t) => buffer.insert(&mut end, &t),
-                    Change::Removed(t) => buffer.insert_with_tags(&mut end, &t, &[&row.removed]),
-                    Change::Added(t) => buffer.insert_with_tags(&mut end, &t, &[&row.added]),
-                }
+    use gtk::glib::markup_escape_text as esc;
+    let markup =
+        match row.state.get() {
+            RowState::Pending => {
+                // Highlight colours for the current light or dark style.
+                let i = usize::from(adw::StyleManager::default().is_dark());
+                let ((rbg, rfg), (abg, afg)) = (REMOVED[i], ADDED[i]);
+                word_diff(&row.item.original, &row.item.cleaned)
+                .into_iter()
+                .map(|change| match change {
+                    Change::Same(t) => esc(&t).to_string(),
+                    Change::Removed(t) => format!(
+                        "<span strikethrough=\"true\" background=\"{rbg}\" foreground=\"{rfg}\">{}</span>",
+                        esc(&t)
+                    ),
+                    Change::Added(t) => {
+                        format!("<span background=\"{abg}\" foreground=\"{afg}\">{}</span>", esc(&t))
+                    }
+                })
+                .collect()
             }
-        }
-        RowState::Accepted => buffer.set_text(&row.item.cleaned),
-        RowState::Kept => buffer.set_text(&row.item.original),
-    }
-}
-
-/// Sets the highlight colours for the current light or dark style.
-fn color_tags(row: &Row) {
-    let i = usize::from(adw::StyleManager::default().is_dark());
-    for (tag, (bg, fg)) in [(&row.removed, REMOVED[i]), (&row.added, ADDED[i])] {
-        tag.set_property("background", bg);
-        tag.set_property("foreground", fg);
-    }
+            RowState::Accepted => esc(&row.item.cleaned).to_string(),
+            RowState::Kept => esc(&row.item.original).to_string(),
+        };
+    row.text.set_markup(&markup);
 }

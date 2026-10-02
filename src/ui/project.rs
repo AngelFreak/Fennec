@@ -17,7 +17,7 @@ use crate::ai::actions::{Answer, Citation};
 use crate::ai::service::Scope as AiScope;
 use crate::store::{DocumentFilter, DocumentId, DocumentSummary, ProjectFilter, Source, Store};
 use crate::template::load_dir;
-use crate::text::{danish_date, duration};
+use crate::text::{duration, hours_minutes, short_date};
 
 pub const COLORS: [&str; 5] = ["#C2410C", "#1D4ED8", "#0F766E", "#6B21A8", "#9AA1AE"];
 const COLOR_NAMES: [&str; 5] = ["Orange", "Blue", "Teal", "Purple", "Grey"];
@@ -79,7 +79,6 @@ pub struct ProjectPage {
     project_fields: gtk::Box,
     name: gtk::Entry,
     swatches: Vec<(&'static str, gtk::Button)>,
-    local_only: gtk::Switch,
     default_template: gtk::DropDown,
     template_ids: RefCell<Vec<String>>,
     only_shown: gtk::CheckButton,
@@ -138,19 +137,24 @@ impl ProjectPage {
         }
 
         // Documents: search, tag chips, the table.
-        let filters = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        // As in the mockup: the search box, then the tag chips (wrapping)
+        // with the count at the right.
+        let filters = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let search = gtk::SearchEntry::builder()
             .placeholder_text("Search text in this project")
             .width_request(260)
+            .halign(gtk::Align::Start)
             .build();
         search.update_property(&[gtk::accessible::Property::Label("Search in project")]);
-        let chips = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let chips = super::wrap::wrap_box();
+        chips.set_hexpand(true);
         let count = label("", &["fx-stats"]);
-        count.set_hexpand(true);
-        count.set_xalign(1.0);
+        count.set_valign(gtk::Align::Center);
+        let chip_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        chip_row.append(&chips);
+        chip_row.append(&count);
         filters.append(&search);
-        filters.append(&chips);
-        filters.append(&count);
+        filters.append(&chip_row);
 
         let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
         table.add_css_class("fx-table");
@@ -305,19 +309,8 @@ impl ProjectPage {
         project_fields.append(&field("Color", &swatch_row, 8));
         let default_template = gtk::DropDown::from_strings(&[]);
         project_fields.append(&field("Default template for new documents", &default_template, 6));
-        let local_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        let local_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        local_text.set_hexpand(true);
-        local_text.append(&label("Local only", &["fx-field-label"]));
-        let local_hint = label("Never send these documents to a cloud AI.", &["fx-field-note"]);
-        local_hint.set_wrap(true);
-        local_text.append(&local_hint);
-        let local_only = gtk::Switch::new();
-        local_only.set_valign(gtk::Align::Center);
-        local_only.update_property(&[gtk::accessible::Property::Label("Local only")]);
-        local_row.append(&local_text);
-        local_row.append(&local_only);
-        project_fields.append(&local_row);
+        // Local only is set in Settings → Privacy; here it shows as a badge,
+        // as in the mockup.
         project_fields.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         panel.append(&project_fields);
 
@@ -406,7 +399,6 @@ impl ProjectPage {
             project_fields,
             name,
             swatches,
-            local_only,
             default_template,
             template_ids: RefCell::default(),
             only_shown,
@@ -518,8 +510,15 @@ impl ProjectPage {
     }
 
     /// "Workstation · network" for the active provider.
+    /// Who answers questions here, after the local-only rule.
     fn provider_text(&self) -> String {
-        match self.deps.settings().ai.active() {
+        let local = self.local_badge.get_visible();
+        match self
+            .deps
+            .settings()
+            .ai
+            .effective_for(crate::ai::AiJob::Ask, local)
+        {
             Some(p) => format!("{} · {}", p.name, locality_word(p.locality)),
             None => "No provider set up".into(),
         }
@@ -530,6 +529,11 @@ impl ProjectPage {
         while let Some(c) = self.citations.first_child() {
             self.citations.remove(&c);
         }
+    }
+
+    /// Types a question into the Ask box (tests).
+    pub fn set_question(&self, text: &str) {
+        self.question.set_text(text);
     }
 
     pub fn ask(self: &Rc<Self>) {
@@ -588,7 +592,7 @@ impl ProjectPage {
             .set_markup(&numbered_markup(&a.text, &a.citations, accent));
         self.ask_status.set_text(match a.citations.len() {
             0 => "No sources were cited; check the answer against the documents.",
-            _ => "Answers come only from these documents. Open a source to check it.",
+            _ => "",
         });
         for (i, c) in a.citations.iter().enumerate() {
             let Ok(doc) = self.store.document(c.document_id) else {
@@ -776,23 +780,6 @@ impl ProjectPage {
             }
         });
         let weak = Rc::downgrade(self);
-        self.local_only.connect_active_notify(move |s| {
-            let Some(p) = weak.upgrade() else { return };
-            if p.loading.get() {
-                return;
-            }
-            if let Some(id) = p.project_id() {
-                if let Err(e) = p.store.set_project_local_only(id, s.is_active()) {
-                    tracing::error!("saving local-only for project {id}: {e}");
-                }
-                p.local_badge.set_visible(s.is_active());
-                p.local_note.set_visible(s.is_active());
-                if let Some(f) = p.on_changed.borrow().clone() {
-                    f(());
-                }
-            }
-        });
-        let weak = Rc::downgrade(self);
         self.only_shown.connect_toggled(move |_| {
             if let Some(p) = weak.upgrade() {
                 p.update_export_button();
@@ -875,7 +862,6 @@ impl ProjectPage {
             templates.iter().map(|t| (t.id.clone(), t.name.clone())).collect();
         if let Some(p) = &project {
             self.name.set_text(&p.name);
-            self.local_only.set_active(p.local_only);
             let mut names = vec!["(app default)".to_string()];
             names.extend(templates.iter().map(|t| t.name.clone()));
             let mut ids = vec![String::new()];
@@ -978,16 +964,16 @@ impl ProjectPage {
             all.iter().map(|d| d.created_at).min(),
             all.iter().map(|d| d.created_at).max(),
         ) {
-            (Some(a), Some(b)) if danish_date(a) != danish_date(b) => {
-                format!(" · {} – {}", danish_date(a), danish_date(b))
+            (Some(a), Some(b)) if short_date(a) != short_date(b) => {
+                format!(" · {} – {}", span_date(a), span_date(b))
             }
-            (Some(a), _) => format!(" · {}", danish_date(a)),
+            (Some(a), _) => format!(" · {}", span_date(a)),
             _ => String::new(),
         };
         self.meta.set_text(&format!(
             "{} · {} of audio{span}",
             plural(all.len(), "document"),
-            duration(total)
+            hours_minutes(total)
         ));
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
@@ -1043,6 +1029,7 @@ impl ProjectPage {
                 None => tags.push((t.clone(), 1)),
             }
         }
+        tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         if tags.is_empty() || matches!(&*self.scope.borrow(), Scope::Tag(_)) {
             return;
         }
@@ -1121,7 +1108,7 @@ impl ProjectPage {
         }
         row.append(&sized(tags, TAGS_WIDTH));
         row.append(&sized(
-            label(&danish_date(d.created_at), &["fx-doc-date"]),
+            label(&short_date(d.created_at), &["fx-doc-date"]),
             DATE_WIDTH,
         ));
         row.append(&sized(
@@ -1161,8 +1148,17 @@ impl ProjectPage {
         self.render_list();
     }
 
+    /// Marks the shown project local only (or not) and saves it.
     pub fn set_local_only(&self, on: bool) {
-        self.local_only.set_active(on);
+        let Some(id) = self.project_id() else { return };
+        if let Err(e) = self.store.set_project_local_only(id, on) {
+            tracing::error!("saving local-only for project {id}: {e}");
+        }
+        self.local_badge.set_visible(on);
+        self.local_note.set_visible(on);
+        if let Some(f) = self.on_changed.borrow().clone() {
+            f(());
+        }
     }
 
     pub fn press_export(&self) {
@@ -1171,6 +1167,13 @@ impl ProjectPage {
 }
 
 /// The short word for where a provider runs, as in "Workstation · network".
+/// "Sep 12" (never "Today": a span reads "Sep 12 – Oct 2").
+fn span_date(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|t| t.with_timezone(&chrono::Local).format("%b %-d").to_string())
+        .unwrap_or_default()
+}
+
 pub fn locality_word(l: Locality) -> &'static str {
     match l {
         Locality::ThisComputer => "this computer",
@@ -1203,7 +1206,7 @@ fn numbered_markup(text: &str, citations: &[Citation], accent: &str) -> String {
         out.push_str(&gtk::glib::markup_escape_text(before));
         match number {
             Some(n) => out.push_str(&format!(
-                "<sup><span font_family=\"IBM Plex Sans\" weight=\"600\" foreground=\"{accent}\">{}</span></sup>",
+                "<sup><span font_family=\"IBM Plex Sans\" weight=\"600\" underline=\"single\" foreground=\"{accent}\">{}</span></sup>",
                 n + 1
             )),
             None => out.push_str(&gtk::glib::markup_escape_text(&rest[start..=start + len])),

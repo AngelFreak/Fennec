@@ -529,7 +529,7 @@ fn main() {
     );
     check(
         "Templates lists the defaults",
-        w.templates.names() == ["Afhøringsrapport", "Mødereferat", "Notat"],
+        w.templates.names() == ["Notat", "Mødereferat", "Afhøringsrapport"],
     );
     w.templates.press_new();
     w.templates.set_name("Besigtigelse");
@@ -834,6 +834,10 @@ fn ai_checks(root: &std::path::Path) {
     let proposed = pump_until(Duration::from_secs(5), || w.dictation.cleanup.states().len() == 1);
     check("clean-up proposes the changed paragraph only", proposed);
     check(
+        "the paragraph left alone is listed as unchanged",
+        w.dictation.cleanup.unchanged_count() == 1,
+    );
+    check(
         "clean-up names the provider and where it runs",
         w.dictation.cleanup.provider_text().contains(" · "),
     );
@@ -974,13 +978,16 @@ fn ai_checks(root: &std::path::Path) {
         "the Privacy checkbox marks the project local only",
         store.projects().unwrap()[0].local_only,
     );
+    let local_before = local.count();
     w.dictation.ai_summarize();
-    let blocked = pump_until(Duration::from_secs(5), || {
-        w.dictation.summary.status.text().contains("local only")
-    });
+    let rerouted = pump_until(Duration::from_secs(5), || local.count() > local_before);
     check(
-        "a local-only project refuses the cloud provider",
-        blocked && cloud.count() == 2,
+        "a local-only project's summary goes to the local provider, never the cloud",
+        rerouted && cloud.count() == 2,
+    );
+    check(
+        "AI defaults names the provider local-only projects use",
+        w.settings.ai.local_note_text() == "Local-only projects always use ollama, whatever is set here.",
     );
 }
 

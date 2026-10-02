@@ -31,6 +31,8 @@ pub struct AiSettingsUi {
     /// One dropdown per job; entry 0 is "Default provider".
     pub job_choices: Vec<(AiJob, gtk::DropDown)>,
     loading_default: Cell<bool>,
+    /// Names the provider local-only projects use instead (AI defaults).
+    local_note: gtk::Label,
     pub message: gtk::Label,
     /// Results of "Test", by provider id; kept across re-renders.
     tested: RefCell<HashMap<String, Status>>,
@@ -65,6 +67,11 @@ impl AiSettingsUi {
             default_choice: gtk::DropDown::from_strings(&[]),
             job_choices,
             loading_default: Cell::new(false),
+            local_note: {
+                let l = label("", &["fx-field-note"]);
+                l.set_wrap(true);
+                l
+            },
             message,
             tested: RefCell::default(),
             editing: RefCell::default(),
@@ -772,19 +779,23 @@ impl AiSettingsUi {
                 u.edit(|ai| ai.language = if v.is_empty() { "dansk".into() } else { v });
             }
         });
-        let note = label(
-            "Local-only projects never use cloud providers, whatever is set here.",
-            &["fx-field-note"],
-        );
-        note.set_wrap(true);
-        b.append(&note);
+        b.append(&self.local_note);
         self.render_default_choice();
         outer
+    }
+
+    /// The note under AI defaults (tests).
+    pub fn local_note_text(&self) -> String {
+        self.local_note.text().to_string()
     }
 
     /// Refills the default and per-job dropdowns from the provider list.
     fn render_default_choice(&self) {
         let ai = self.deps.settings().ai;
+        self.local_note.set_text(&match ai.local_fallback() {
+            Some(p) => format!("Local-only projects always use {}, whatever is set here.", p.name),
+            None => "Local-only projects never use cloud providers, whatever is set here.".into(),
+        });
         let names: Vec<String> = ai.providers.iter().map(choice_label).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         self.loading_default.set(true);

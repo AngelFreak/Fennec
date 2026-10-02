@@ -394,7 +394,14 @@ impl TemplatesPage {
         }
         let default_id = self.default_id();
         let loaded = load_dir(&self.dir);
-        for (i, t) in loaded.iter().enumerate() {
+        // As in the mockup: the default first, then simpler before longer.
+        let mut order: Vec<usize> = (0..loaded.len()).collect();
+        order.sort_by_key(|&i| match &loaded[i] {
+            Ok(t) => (t.id != default_id, t.fields.len(), t.name.to_lowercase()),
+            Err(_) => (true, usize::MAX, String::new()),
+        });
+        for i in order.iter().copied() {
+            let t = &loaded[i];
             let (title, sub) = match t {
                 Ok(t) => {
                     let count = match t.fields.len() {
@@ -418,6 +425,8 @@ impl TemplatesPage {
             b.append(&sub_label);
             let item = gtk::Button::builder().child(&b).build();
             item.add_css_class("fx-template-item");
+            // Rows are sorted; the name ties each to its place in `load_dir`.
+            item.set_widget_name(&format!("template-{i}"));
             let weak = Rc::downgrade(self);
             item.connect_clicked(move |_| {
                 if let Some(p) = weak.upgrade() {
@@ -445,16 +454,15 @@ impl TemplatesPage {
     }
 
     fn mark_active(&self, index: Option<usize>) {
+        let wanted = index.map(|i| format!("template-{i}"));
         let mut child = self.list.first_child();
-        let mut i = 0;
         while let Some(c) = child {
-            if Some(i) == index {
+            if wanted.as_deref() == Some(c.widget_name().as_str()) {
                 c.add_css_class("active");
             } else {
                 c.remove_css_class("active");
             }
             child = c.next_sibling();
-            i += 1;
         }
     }
 

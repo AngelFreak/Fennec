@@ -5,12 +5,15 @@
 //! Runs only when FENNEC_MOCKUP_DIR names an output folder; needs a Wayland
 //! display of 1280×800 (the mockup's size) and `grim`.
 
+mod cleanup;
 mod dictate;
 mod export;
 mod files;
+mod project;
 mod settings;
 #[path = "../support/mod.rs"]
 mod support;
+mod templates;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -198,6 +201,9 @@ fn seed(root: &Path) -> (DocumentId, ProjectId, DocumentId) {
     let harbour = store.create_project("Operation Harbour", "#1D4ED8").unwrap();
     let acme = store.create_project("Vendor – Acme", "#0F766E").unwrap();
     store.set_project_local_only(harbour, true).unwrap();
+    store
+        .update_project(harbour, "Operation Harbour", "#1D4ED8", Some("moedereferat"))
+        .unwrap();
 
     // Unsorted (2) and Vendor – Acme (4), oldest first so the mockup's
     // documents are the newest.
@@ -519,6 +525,20 @@ fn model(rec: &Recorded) -> Reply {
             marker("15. oktober"),
         ));
     }
+    if prompt.contains("Ret hvert afsnit") {
+        // Small grammar edits, as the mockup's review shows them.
+        let paragraphs: Vec<serde_json::Value> = prompt
+            .lines()
+            .filter_map(|l| {
+                let (id, text) = l.strip_prefix("[p")?.split_once("] ")?;
+                let text = text
+                    .replace("Fugten ser ud til at komme", "Fugten kommer sandsynligvis")
+                    .replace("fremstår velholdt", "er velholdt");
+                Some(serde_json::json!({"id": id.parse::<i64>().ok()?, "text": text}))
+            })
+            .collect();
+        return Reply::Text(serde_json::json!({ "paragraphs": paragraphs }).to_string());
+    }
     Reply::Text("OK".into())
 }
 
@@ -624,13 +644,23 @@ fn main() {
     if run("dictate") {
         dictate::capture(&scene);
     }
+    if run("cleanup") {
+        cleanup::capture(&scene);
+    }
     if run("export") {
         export::capture(&scene);
     }
-    if run("files") {
-        files::capture(&scene, &root);
+    if run("project") {
+        project::capture(&scene);
+    }
+    if run("templates") {
+        templates::capture(&scene);
     }
     if run("settings") {
         settings::capture(&scene);
+    }
+    // Last: it adds three documents, which would change other screens' counts.
+    if run("files") {
+        files::capture(&scene, &root);
     }
 }

@@ -256,6 +256,31 @@ impl AiSettings {
             .or_else(|| self.providers.first())
     }
 
+    /// What local-only projects use instead of a cloud provider: the default
+    /// if it is not in the cloud, else a network server, else one on this
+    /// computer.
+    pub fn local_fallback(&self) -> Option<&ProviderConfig> {
+        let not_cloud = |p: &&ProviderConfig| p.locality != Locality::Cloud;
+        self.active()
+            .filter(not_cloud)
+            .or_else(|| self.providers.iter().find(|p| p.locality == Locality::Network))
+            .or_else(|| {
+                self.providers
+                    .iter()
+                    .find(|p| p.locality == Locality::ThisComputer)
+            })
+    }
+
+    /// The provider `job` really uses for text that may (or may not) be
+    /// local only: a cloud choice gives way to [`Self::local_fallback`].
+    pub fn effective_for(&self, job: AiJob, local_only: bool) -> Option<&ProviderConfig> {
+        let chosen = self.for_job(job)?;
+        if local_only && chosen.locality == Locality::Cloud {
+            return self.local_fallback().or(Some(chosen));
+        }
+        Some(chosen)
+    }
+
     /// The provider that runs `job`: its own choice, else the default.
     pub fn for_job(&self, job: AiJob) -> Option<&ProviderConfig> {
         self.jobs
@@ -412,6 +437,22 @@ pub(crate) fn parse_json(text: &str) -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_only_text_uses_a_non_cloud_provider_when_there_is_one() {
+        let mut s = AiSettings::default();
+        for p in presets() {
+            if ["claude", "network"].contains(&p.config.id.as_str()) {
+                s.providers.push(p.config);
+            }
+        }
+        s.default_provider = "claude".into();
+        assert_eq!(s.effective_for(AiJob::Ask, false).unwrap().id, "claude");
+        assert_eq!(s.effective_for(AiJob::Ask, true).unwrap().id, "network");
+        s.providers.retain(|p| p.id == "claude");
+        // Nothing else to use: the cloud choice stands and the privacy gate refuses it.
+        assert_eq!(s.effective_for(AiJob::Ask, true).unwrap().id, "claude");
+    }
 
     #[test]
     fn ai_is_off_by_default() {

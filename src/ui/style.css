@@ -12,7 +12,11 @@ window.fennec {
 /* ---- Resets: Adwaita's defaults give bold buttons and grey fields. ---- */
 
 window.fennec button { font-weight: 400; }
-window.fennec button label { font-weight: inherit; }
+/* Only a plain button's own label; labels laid out inside a button keep their classes. */
+window.fennec button > label { font-weight: inherit; }
+/* The mockup's button weights; these beat the 400 reset above. */
+window.fennec button.fx-primary, window.fennec button.fx-ink { font-weight: 600; }
+window.fennec button.fx-secondary { font-weight: 500; }
 
 window.fennec entry,
 window.fennec spinbutton,
@@ -543,8 +547,8 @@ textview.fx-summary-text, textview.fx-summary-text text {
 
 /* Clean-up diff */
 .fx-diff-card { border: 1px solid @fx_border; border-radius: 10px; padding: 16px 18px; }
-textview.fx-diff, textview.fx-diff text {
-  background-color: transparent;
+.fx-diff {
+  line-height: 1.2;
   color: @fx_text;
   font-family: "Source Serif 4", "Source Serif 4 Variable", "IBM Plex Serif", "Noto Serif", serif;
   font-size: 16px; font-variation-settings: "opsz" 16;

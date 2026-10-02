@@ -1003,6 +1003,8 @@ impl DictationPage {
     pub fn ai_cleanup(self: &Rc<Self>) {
         self.save_now();
         let Some(doc) = self.document() else { return };
+        self.cleanup
+            .set_local_only(self.store.document_is_local_only(doc).unwrap_or(false));
         self.cleanup.begin(self.title.text().trim());
         self.navigate("cleanup");
         super::ai::run(
