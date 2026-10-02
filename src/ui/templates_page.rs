@@ -4,8 +4,8 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gtk::gio;
 use gtk::prelude::*;
+use gtk::{gdk, gio, glib};
 
 use super::label;
 use crate::export::{Report, ReportParagraph, Section, preview_first_page};
@@ -17,6 +17,14 @@ const KINDS: [(FieldKind, &str); 4] = [
     (FieldKind::List, "List"),
     (FieldKind::Multiline, "Multi-line"),
 ];
+
+/// Fixed widths of the field table's columns (label and default share the rest).
+const HANDLE_W: i32 = 24;
+const TYPE_W: i32 = 112;
+const REQUIRED_W: i32 = 64;
+
+/// A command from a field row's handle menu.
+type RowAction = fn(&TemplatesPage, &gtk::Box);
 
 struct FieldRow {
     root: gtk::Box,
@@ -32,16 +40,21 @@ pub struct TemplatesPage {
     /// Buttons for the window header while this screen shows.
     pub header_actions: gtk::Box,
     dir: PathBuf,
-    list: gtk::ListBox,
+    list: gtk::Box,
     current: RefCell<Option<Template>>,
     name: gtk::Entry,
     heading: gtk::Entry,
     footer: gtk::Entry,
     font: gtk::Entry,
-    logo_label: gtk::Label,
+    size: gtk::SpinButton,
+    font_label: gtk::Label,
+    logo_slot: gtk::Stack,
+    logo_picture: gtk::Picture,
+    clear_logo: gtk::Button,
     logo: RefCell<Option<PathBuf>>,
     fields_box: gtk::Box,
     rows: RefCell<Vec<FieldRow>>,
+    next_row: Cell<u32>,
     error: gtk::Label,
     path_label: gtk::Label,
     preview: gtk::Picture,
@@ -50,20 +63,34 @@ pub struct TemplatesPage {
 
 impl TemplatesPage {
     pub fn new(dir: PathBuf) -> Rc<Self> {
-        let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        // Template list: the mockup keeps it in the sidebar; here it is a column.
+        let left = gtk::Box::new(gtk::Orientation::Vertical, 4);
         left.add_css_class("fx-template-list");
-        left.set_size_request(190, -1);
-        let list = gtk::ListBox::new();
-        list.add_css_class("navigation-sidebar");
-        let new_button = gtk::Button::with_label("New template");
-        new_button.add_css_class("fx-secondary");
-        left.append(&label("TEMPLATES", &["fx-section-title"]));
+        let list_head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        list_head.add_css_class("fx-template-list-head");
+        let list_title = label("TEMPLATES", &["fx-section-title"]);
+        list_title.set_hexpand(true);
+        let new_button = super::icon_button("list-add-symbolic", "New template", &["fx-icon-button"]);
+        list_head.append(&list_title);
+        list_head.append(&new_button);
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        left.append(&list_head);
         left.append(&list);
-        left.append(&new_button);
+        let left_scroll = gtk::ScrolledWindow::builder()
+            .child(&left)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build();
+        left_scroll.add_css_class("fx-template-list-scroll");
+        left_scroll.set_size_request(200, -1);
+        left_scroll.set_hexpand(false);
 
-        let editor = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        let editor = gtk::Box::new(gtk::Orientation::Vertical, 24);
         editor.add_css_class("fx-template-editor");
         editor.set_hexpand(true);
+        let error = label("", &["fx-callout"]);
+        error.set_wrap(true);
+        error.set_visible(false);
+        editor.append(&error);
         let name = entry("Name");
         let heading = entry("Document heading");
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 16);
@@ -72,83 +99,162 @@ impl TemplatesPage {
         top.append(&field("Document heading", &heading));
         editor.append(&top);
 
+        // Fields: a table of inline-editable rows.
+        let fields_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let fields_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let ft = label("Fields", &["fx-crumb-current"]);
+        let ft = label("Fields", &["fx-h3"]);
         ft.set_hexpand(true);
-        let add_field = gtk::Button::with_label("Add field");
+        let add_field = icon_text_button("list-add-symbolic", "Add field");
         add_field.add_css_class("fx-secondary");
+        add_field.add_css_class("fx-add-field");
         fields_head.append(&ft);
         fields_head.append(&add_field);
-        editor.append(&fields_head);
-        let fields_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        editor.append(&fields_box);
-        editor.append(&label(
-            "Defaults may use {today}, {user}, {duration} and {model}.",
-            &["fx-field-note"],
+        fields_section.append(&fields_head);
+        let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.add_css_class("fx-table");
+        table.add_css_class("fx-field-table");
+        table.set_overflow(gtk::Overflow::Hidden);
+        let head = row_box(&["fx-table-head"]);
+        head.append(&cell(
+            gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(),
+            HANDLE_W,
         ));
+        let head_label = label("LABEL", &["fx-cell-pad"]);
+        head_label.set_hexpand(true);
+        head.append(&head_label);
+        head.append(&cell(label("TYPE", &["fx-cell-pad"]).upcast(), TYPE_W));
+        let head_default = label("DEFAULT", &["fx-cell-pad"]);
+        head_default.set_hexpand(true);
+        head.append(&head_default);
+        head.append(&cell(label("REQUIRED", &[]).upcast(), REQUIRED_W));
+        table.append(&head);
+        let fields_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.append(&fields_box);
+        fields_section.append(&table);
+        let help = label("", &["fx-field-note"]);
+        help.set_wrap(true);
+        let mono = |p: &str| format!("<span font_family=\"IBM Plex Mono\">{p}</span>");
+        help.set_markup(&format!(
+            "Types: text, date, list, multi-line. Placeholders: {}, {}, {}, {}",
+            mono("{today}"),
+            mono("{user}"),
+            mono("{duration}"),
+            mono("{model}")
+        ));
+        fields_section.append(&help);
+        editor.append(&fields_section);
 
-        editor.append(&label("Layout", &["fx-crumb-current"]));
-        let logo_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let logo_label = label("No logo", &["fx-field-note"]);
-        logo_label.set_hexpand(true);
-        let choose_logo = gtk::Button::with_label("Choose PNG…");
+        // Layout: logo, body font, footer.
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        layout.append(&label("Layout", &["fx-h3"]));
+        let layout_top = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        layout_top.set_homogeneous(true);
+        let logo_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let logo_slot = gtk::Stack::new();
+        logo_slot.add_css_class("fx-logo-slot");
+        logo_slot.set_size_request(72, 40);
+        logo_slot.set_valign(gtk::Align::Center);
+        let empty_logo = label("[LOGO]", &[]);
+        empty_logo.set_xalign(0.5);
+        logo_slot.add_named(&empty_logo, Some("empty"));
+        let logo_picture = gtk::Picture::builder()
+            .can_shrink(true)
+            .content_fit(gtk::ContentFit::Contain)
+            .build();
+        logo_slot.add_named(&logo_picture, Some("logo"));
+        let choose_logo = gtk::Button::with_label("Choose image…");
         choose_logo.add_css_class("fx-secondary");
         let clear_logo = gtk::Button::with_label("Remove");
-        clear_logo.add_css_class("fx-secondary");
-        logo_row.append(&logo_label);
+        clear_logo.add_css_class("fx-quiet");
+        logo_row.append(&logo_slot);
         logo_row.append(&choose_logo);
         logo_row.append(&clear_logo);
-        editor.append(&field("Logo", &logo_row));
+        layout_top.append(&field("Logo", &logo_row));
+
         let font = entry("Body font");
+        let size = gtk::SpinButton::with_range(6.0, 24.0, 0.5);
+        size.set_digits(1);
+        size.update_property(&[gtk::accessible::Property::Label("Body size in points")]);
+        let font_pop_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        font_pop_box.add_css_class("fx-font-popover");
+        font_pop_box.append(&field("Font", &font));
+        font_pop_box.append(&field("Size (pt)", &size));
+        let font_pop = gtk::Popover::builder().child(&font_pop_box).build();
+        let font_label = label("", &[]);
+        font_label.set_hexpand(true);
+        font_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let font_child = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        font_child.append(&font_label);
+        let chevron = gtk::Image::from_icon_name("pan-down-symbolic");
+        chevron.add_css_class("fx-chevron");
+        font_child.append(&chevron);
+        let font_button = gtk::MenuButton::builder()
+            .child(&font_child)
+            .popover(&font_pop)
+            .build();
+        font_button.add_css_class("fx-select");
+        font_button.update_property(&[gtk::accessible::Property::Label("Body font")]);
+        layout_top.append(&field("Body font", &font_button));
+        layout.append(&layout_top);
         let footer = entry("Footer");
         footer.set_placeholder_text(Some("e.g. department, address or classification"));
-        editor.append(&field("Body font", &font));
-        editor.append(&field("Footer", &footer));
+        layout.append(&field("Footer", &footer));
+        editor.append(&layout);
 
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let error = label("", &["fx-field-error"]);
-        error.set_hexpand(true);
-        error.set_wrap(true);
-        let open_file = gtk::Button::with_label("Open as file");
-        open_file.add_css_class("fx-secondary");
-        let delete = gtk::Button::with_label("Delete");
-        delete.add_css_class("fx-secondary");
-        let save = gtk::Button::with_label("Save template");
-        save.add_css_class("fx-primary");
-        actions.set_halign(gtk::Align::End);
-        editor.append(&error);
-        actions.append(&delete);
-        actions.append(&open_file);
-        actions.append(&save);
-        editor.append(&actions);
-        let path_label = label("", &["fx-field-note"]);
-        editor.append(&path_label);
+        let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let path_label = label("", &["fx-field-note", "fx-mono"]);
+        path_label.set_hexpand(true);
+        path_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        let delete = gtk::Button::with_label("Delete template");
+        delete.add_css_class("fx-quiet");
+        bottom.append(&path_label);
+        bottom.append(&delete);
+        editor.append(&bottom);
         let editor_scroll = gtk::ScrolledWindow::builder()
             .child(&editor)
             .hexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
-        editor_scroll.set_size_request(560, -1);
 
+        // Preview: the first page as the export renders it, on the canvas.
         let preview = gtk::Picture::builder()
             .can_shrink(true)
             .content_fit(gtk::ContentFit::Contain)
             .build();
-        preview.add_css_class("fx-page-preview");
+        // A non-scrolling frame keeps the picture's natural size out of the
+        // layout, so the aside stays 340px wide.
+        let page_frame = gtk::ScrolledWindow::builder()
+            .child(&preview)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .halign(gtk::Align::Center)
+            .build();
+        page_frame.set_size_request(292, 413);
+        page_frame.add_css_class("fx-page-preview");
         let preview_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
         preview_box.add_css_class("fx-preview-area");
-        preview_box.set_size_request(260, -1);
+        preview_box.add_css_class("fx-template-preview");
+        preview_box.set_size_request(340, -1);
+        preview_box.set_hexpand(false);
         preview_box.append(&label("PREVIEW", &["fx-section-title"]));
-        preview_box.append(&preview);
+        preview_box.append(&page_frame);
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&left);
+        root.append(&left_scroll);
         root.append(&editor_scroll);
         root.append(&preview_box);
 
+        let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let open_file = gtk::Button::with_label("Open as file");
+        open_file.add_css_class("fx-secondary");
+        let save = gtk::Button::with_label("Save template");
+        save.add_css_class("fx-primary");
+        header_actions.append(&open_file);
+        header_actions.append(&save);
+
         let page = Rc::new(Self {
             root,
-            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
+            header_actions,
             dir,
             list,
             current: RefCell::default(),
@@ -156,10 +262,15 @@ impl TemplatesPage {
             heading,
             footer,
             font,
-            logo_label,
+            size,
+            font_label,
+            logo_slot,
+            logo_picture,
+            clear_logo: clear_logo.clone(),
             logo: RefCell::default(),
             fields_box,
             rows: RefCell::default(),
+            next_row: Cell::new(0),
             error,
             path_label,
             preview,
@@ -261,14 +372,16 @@ impl TemplatesPage {
             let weak = Rc::downgrade(self);
             e.connect_changed(move |_| {
                 if let Some(p) = weak.upgrade() {
+                    p.show_font();
                     p.update_preview();
                 }
             });
         }
         let weak = Rc::downgrade(self);
-        self.list.connect_row_activated(move |_, row| {
+        self.size.connect_value_changed(move |_| {
             if let Some(p) = weak.upgrade() {
-                p.open_index(row.index() as usize);
+                p.show_font();
+                p.update_preview();
             }
         });
     }
@@ -278,23 +391,39 @@ impl TemplatesPage {
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
         }
+        let default_id = self.default_id();
         let loaded = load_dir(&self.dir);
-        for t in &loaded {
+        for (i, t) in loaded.iter().enumerate() {
             let (title, sub) = match t {
-                Ok(t) => (
-                    t.name.clone(),
-                    if t.fields.len() == 1 {
-                        "1 field".into()
+                Ok(t) => {
+                    let count = match t.fields.len() {
+                        0 => "Text only".to_string(),
+                        1 => "1 field".to_string(),
+                        n => format!("{n} fields"),
+                    };
+                    let sub = if t.id == default_id {
+                        format!("Default · {count}")
                     } else {
-                        format!("{} fields", t.fields.len())
-                    },
-                ),
+                        count
+                    };
+                    (t.name.clone(), sub)
+                }
                 Err(e) => (file_label(e), "Cannot be read: open the file to fix it".into()),
             };
             let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            b.append(&label(&title, &["fx-field-label"]));
-            b.append(&label(&sub, &["fx-stats"]));
-            self.list.append(&b);
+            b.append(&label(&title, &["fx-template-name"]));
+            let sub_label = label(&sub, &["fx-stats"]);
+            sub_label.set_wrap(true);
+            b.append(&sub_label);
+            let item = gtk::Button::builder().child(&b).build();
+            item.add_css_class("fx-template-item");
+            let weak = Rc::downgrade(self);
+            item.connect_clicked(move |_| {
+                if let Some(p) = weak.upgrade() {
+                    p.open_index(i);
+                }
+            });
+            self.list.append(&item);
         }
         let index = select
             .and_then(|id| loaded.iter().position(|t| t.as_ref().is_ok_and(|t| t.id == id)))
@@ -305,14 +434,38 @@ impl TemplatesPage {
         }
     }
 
-    fn open_index(self: &Rc<Self>, i: usize) {
-        let Some(Ok(t)) = load_dir(&self.dir).into_iter().nth(i) else {
-            return;
-        };
-        if let Some(row) = self.list.row_at_index(i as i32) {
-            self.list.select_row(Some(&row));
+    /// The id of the template new documents use (from the settings file).
+    fn default_id(&self) -> String {
+        self.dir
+            .parent()
+            .and_then(|config| crate::config::Settings::load(&config.join("settings.toml")).ok())
+            .map(|s| s.default_template)
+            .unwrap_or_else(|| crate::config::Settings::default().default_template)
+    }
+
+    fn mark_active(&self, index: Option<usize>) {
+        let mut child = self.list.first_child();
+        let mut i = 0;
+        while let Some(c) = child {
+            if Some(i) == index {
+                c.add_css_class("active");
+            } else {
+                c.remove_css_class("active");
+            }
+            child = c.next_sibling();
+            i += 1;
         }
-        self.open(t);
+    }
+
+    fn open_index(self: &Rc<Self>, i: usize) {
+        match load_dir(&self.dir).into_iter().nth(i) {
+            Some(Ok(t)) => {
+                self.mark_active(Some(i));
+                self.open(t);
+            }
+            Some(Err(e)) => self.set_error(&e.to_string()),
+            None => {}
+        }
     }
 
     fn open(self: &Rc<Self>, t: Template) {
@@ -321,6 +474,8 @@ impl TemplatesPage {
         self.heading.set_text(&t.heading);
         self.footer.set_text(&t.footer);
         self.font.set_text(&t.body_font);
+        self.size.set_value(t.body_size_pt);
+        self.show_font();
         *self.logo.borrow_mut() = t.logo_path();
         self.show_logo();
         while let Some(c) = self.fields_box.first_child() {
@@ -330,7 +485,7 @@ impl TemplatesPage {
         for f in &t.fields {
             self.add_field_row(f);
         }
-        self.error.set_text("");
+        self.set_error("");
         self.path_label.set_text(
             &self
                 .dir
@@ -356,54 +511,67 @@ impl TemplatesPage {
             heading: "NOTAT".into(),
             ..Template::blank()
         };
-        self.list.unselect_all();
+        self.mark_active(None);
         self.open(t);
     }
 
     fn add_field_row(self: &Rc<Self>, f: &Field) {
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        root.add_css_class("fx-field-row");
+        let root = row_box(&["fx-table-row"]);
+        let id = self.next_row.get();
+        self.next_row.set(id + 1);
+        root.set_widget_name(&format!("field-row-{id}"));
+
+        let handle = self.row_handle(&root);
+        root.append(&cell(handle.upcast(), HANDLE_W));
         let label_e = gtk::Entry::builder()
             .text(f.label.as_str())
             .hexpand(true)
-            .width_chars(14)
+            .width_chars(4)
             .build();
+        label_e.add_css_class("fx-cell-entry");
         label_e.update_property(&[gtk::accessible::Property::Label("Field label")]);
+        root.append(&label_e);
         let names: Vec<&str> = KINDS.iter().map(|(_, n)| *n).collect();
         let kind = gtk::DropDown::from_strings(&names);
+        kind.add_css_class("fx-cell-select");
         kind.set_selected(KINDS.iter().position(|(k, _)| *k == f.kind).unwrap_or(0) as u32);
+        kind.update_property(&[gtk::accessible::Property::Label("Field type")]);
+        root.append(&cell(kind.clone().upcast(), TYPE_W));
         let default = gtk::Entry::builder()
             .text(f.default.as_str())
-            .placeholder_text("Default")
-            .width_chars(10)
+            .placeholder_text("–")
+            .hexpand(true)
+            .width_chars(4)
             .build();
-        let required = gtk::CheckButton::with_label("Required");
+        default.add_css_class("fx-cell-entry");
+        default.update_property(&[gtk::accessible::Property::Label("Default value")]);
+        mark_placeholder(&default);
+        root.append(&default);
+        let required = gtk::CheckButton::new();
         required.set_active(f.required);
-        let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-        remove.set_tooltip_text(Some("Remove field"));
-        remove.add_css_class("flat");
-        for w in [
-            label_e.upcast_ref::<gtk::Widget>(),
-            kind.upcast_ref(),
-            default.upcast_ref(),
-            required.upcast_ref(),
-            remove.upcast_ref(),
-        ] {
-            root.append(w);
-        }
-        self.fields_box.append(&root);
+        required.update_property(&[gtk::accessible::Property::Label("Required")]);
+        let required_cell = cell(required.clone().upcast(), REQUIRED_W);
+        required_cell.set_halign(gtk::Align::Start);
+        root.append(&required_cell);
+
+        // Drop another row's handle here to move that row above this one.
+        let drop = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
         let weak = Rc::downgrade(self);
-        let row_root = root.clone();
-        remove.connect_clicked(move |_| {
-            if let Some(p) = weak.upgrade() {
-                p.fields_box.remove(&row_root);
-                p.rows.borrow_mut().retain(|r| r.root != row_root);
-                p.update_preview();
-            }
+        let target = root.clone();
+        drop.connect_drop(move |_, value, _, _| {
+            let (Some(p), Ok(name)) = (weak.upgrade(), value.get::<String>()) else {
+                return false;
+            };
+            p.move_row_to(&name, &target);
+            true
         });
+        root.add_controller(drop);
+
+        self.fields_box.append(&root);
         for e in [&label_e, &default] {
             let weak = Rc::downgrade(self);
-            e.connect_changed(move |_| {
+            e.connect_changed(move |e| {
+                mark_placeholder(e);
                 if let Some(p) = weak.upgrade() {
                     p.update_preview();
                 }
@@ -419,6 +587,94 @@ impl TemplatesPage {
         });
     }
 
+    /// The ⋮⋮ handle: drag it to reorder, click it for move and remove.
+    fn row_handle(self: &Rc<Self>, row: &gtk::Box) -> gtk::MenuButton {
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let pop = gtk::Popover::builder().child(&menu).build();
+        let actions: [(&str, RowAction); 3] = [
+            ("Move up", |p, r| p.shift_row(r, -1)),
+            ("Move down", |p, r| p.shift_row(r, 1)),
+            ("Remove field", |p, r| p.remove_row(r)),
+        ];
+        for (text, f) in actions {
+            let b = gtk::Button::with_label(text);
+            b.add_css_class("fx-menu-item");
+            if let Some(l) = b.child().and_downcast::<gtk::Label>() {
+                l.set_xalign(0.0);
+            }
+            let weak = Rc::downgrade(self);
+            let row = row.clone();
+            let pop = pop.clone();
+            b.connect_clicked(move |_| {
+                pop.popdown();
+                if let Some(p) = weak.upgrade() {
+                    f(&p, &row);
+                }
+            });
+            menu.append(&b);
+        }
+        let handle = gtk::MenuButton::builder()
+            .child(&label("⋮⋮", &[]))
+            .popover(&pop)
+            .tooltip_text("Drag to reorder")
+            .build();
+        handle.add_css_class("fx-handle");
+        handle.update_property(&[gtk::accessible::Property::Label("Move or remove field")]);
+        let drag = gtk::DragSource::new();
+        drag.set_actions(gdk::DragAction::MOVE);
+        let name = row.widget_name().to_string();
+        drag.connect_prepare(move |_, _, _| Some(gdk::ContentProvider::for_value(&name.to_value())));
+        handle.add_controller(drag);
+        handle
+    }
+
+    fn row_index(&self, row: &gtk::Box) -> Option<usize> {
+        self.rows.borrow().iter().position(|r| &r.root == row)
+    }
+
+    /// Moves the row named `name` to where `target` is.
+    fn move_row_to(&self, name: &str, target: &gtk::Box) {
+        let from = self
+            .rows
+            .borrow()
+            .iter()
+            .position(|r| r.root.widget_name() == name);
+        if let (Some(from), Some(to)) = (from, self.row_index(target)) {
+            self.reorder(from, to);
+        }
+    }
+
+    fn shift_row(&self, row: &gtk::Box, by: isize) {
+        let Some(from) = self.row_index(row) else { return };
+        let to = from as isize + by;
+        if to >= 0 && (to as usize) < self.rows.borrow().len() {
+            self.reorder(from, to as usize);
+        }
+    }
+
+    fn reorder(&self, from: usize, to: usize) {
+        if from == to {
+            return;
+        }
+        {
+            let mut rows = self.rows.borrow_mut();
+            let r = rows.remove(from);
+            rows.insert(to, r);
+            let mut prev: Option<gtk::Widget> = None;
+            for r in rows.iter() {
+                self.fields_box.reorder_child_after(&r.root, prev.as_ref());
+                prev = Some(r.root.clone().upcast());
+            }
+        }
+        self.update_preview();
+    }
+
+    fn remove_row(&self, row: &gtk::Box) {
+        self.fields_box.remove(row);
+        self.rows.borrow_mut().retain(|r| &r.root != row);
+        self.update_preview();
+    }
+
     fn set_logo(self: &Rc<Self>, path: &std::path::Path) {
         let Some(id) = self.current.borrow().as_ref().map(|t| t.id.clone()) else {
             return;
@@ -426,20 +682,52 @@ impl TemplatesPage {
         let target = self.dir.join(format!("{id}-logo.png"));
         match std::fs::create_dir_all(&self.dir).and_then(|_| std::fs::copy(path, &target)) {
             Ok(_) => *self.logo.borrow_mut() = Some(target),
-            Err(e) => self.error.set_text(&format!("Could not copy the logo: {e}")),
+            Err(e) => self.set_error(&format!("Could not copy the logo: {e}")),
         }
         self.show_logo();
         self.update_preview();
     }
 
     fn show_logo(&self) {
-        let text = self
+        let logo = self.logo.borrow().clone().filter(|p| p.exists());
+        match &logo {
+            Some(p) => {
+                self.logo_picture.set_filename(Some(p));
+                self.logo_slot.set_visible_child_name("logo");
+                self.logo_slot.add_css_class("filled");
+            }
+            None => {
+                self.logo_picture.set_paintable(gdk::Paintable::NONE);
+                self.logo_slot.set_visible_child_name("empty");
+                self.logo_slot.remove_css_class("filled");
+            }
+        }
+        let name = self
             .logo
             .borrow()
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned());
-        self.logo_label.set_text(text.as_deref().unwrap_or("No logo"));
+        self.logo_slot.set_tooltip_text(name.as_deref());
+        self.clear_logo.set_visible(self.logo.borrow().is_some());
+    }
+
+    fn show_font(&self) {
+        let font = self.font.text();
+        let font = font.trim();
+        let font = if font.is_empty() { "Source Serif 4" } else { font };
+        let size = self.size.value();
+        let size = if size.fract() == 0.0 {
+            format!("{size:.0}")
+        } else {
+            format!("{size:.1}")
+        };
+        self.font_label.set_text(&format!("{font} · {size} pt"));
+    }
+
+    fn set_error(&self, msg: &str) {
+        self.error.set_text(msg);
+        self.error.set_visible(!msg.is_empty());
     }
 
     /// The template as edited (not yet validated).
@@ -454,6 +742,7 @@ impl TemplatesPage {
         } else {
             font
         };
+        t.body_size_pt = self.size.value();
         t.logo = self
             .logo
             .borrow()
@@ -497,14 +786,14 @@ impl TemplatesPage {
         let checked = Template::parse(&t.id, &t.to_toml(), &path);
         match checked.and_then(|_| t.save(&self.dir)) {
             Ok(p) => {
-                self.error.set_text("");
+                self.set_error("");
                 let id = t.id.clone();
                 self.reload(Some(&id));
                 Ok(p)
             }
             Err(e) => {
                 let msg = e.to_string();
-                self.error.set_text(msg.rsplit(": ").next().unwrap_or(&msg));
+                self.set_error(msg.rsplit(": ").next().unwrap_or(&msg));
                 Err(e)
             }
         }
@@ -518,8 +807,7 @@ impl TemplatesPage {
         if let Err(e) = std::fs::remove_file(&path)
             && e.kind() != std::io::ErrorKind::NotFound
         {
-            self.error
-                .set_text(&format!("Could not delete {}: {e}", path.display()));
+            self.set_error(&format!("Could not delete {}: {e}", path.display()));
             return;
         }
         self.reload(None);
@@ -544,7 +832,7 @@ impl TemplatesPage {
         let report = Report::from_template(&t, vec![section]);
         match preview_first_page(&report, 600) {
             Ok(s) => self.preview.set_paintable(Some(&super::export_page::texture(s))),
-            Err(e) => self.error.set_text(&e.to_string()),
+            Err(e) => self.set_error(&e.to_string()),
         }
     }
 
@@ -584,6 +872,30 @@ impl TemplatesPage {
     pub fn has_preview(&self) -> bool {
         self.preview.paintable().is_some()
     }
+    /// Labels of the open template's fields, in order (tests).
+    pub fn field_labels(&self) -> Vec<String> {
+        self.rows
+            .borrow()
+            .iter()
+            .map(|r| r.label.text().to_string())
+            .collect()
+    }
+    /// Moves a field one step like the handle's menu does (tests).
+    pub fn move_field(&self, index: usize, down: bool) {
+        let row = self.rows.borrow().get(index).map(|r| r.root.clone());
+        if let Some(row) = row {
+            self.shift_row(&row, if down { 1 } else { -1 });
+        }
+    }
+}
+
+/// Defaults that are placeholders ({today}) show in the mono accent style.
+fn mark_placeholder(e: &gtk::Entry) {
+    if e.text().contains('{') {
+        e.add_css_class("placeholder-value");
+    } else {
+        e.remove_css_class("placeholder-value");
+    }
 }
 
 fn entry(name: &str) -> gtk::Entry {
@@ -598,6 +910,31 @@ fn field(name: &str, w: &impl IsA<gtk::Widget>) -> gtk::Box {
     b.append(&label(name, &["fx-field-label"]));
     b.append(w);
     b
+}
+
+fn icon_text_button(icon: &str, text: &str) -> gtk::Button {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    b.append(&gtk::Image::from_icon_name(icon));
+    b.append(&gtk::Label::new(Some(text)));
+    gtk::Button::builder().child(&b).build()
+}
+
+fn row_box(classes: &[&str]) -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    for c in classes {
+        b.add_css_class(c);
+    }
+    b
+}
+
+fn cell(w: gtk::Widget, width: i32) -> gtk::Widget {
+    w.set_size_request(width, -1);
+    w.set_hexpand(false);
+    w.set_valign(gtk::Align::Center);
+    if let Some(l) = w.downcast_ref::<gtk::Label>() {
+        l.set_xalign(0.0);
+    }
+    w
 }
 
 fn file_label(e: &TemplateError) -> String {

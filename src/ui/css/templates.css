@@ -1,1 +1,80 @@
 /* templates screen */
+
+/* The template list column, styled like the mockup's sidebar list. */
+.fx-template-list-scroll { background-color: @fx_chrome; border-right: 1px solid @fx_border; }
+.fx-template-list { padding: 16px 12px; }
+.fx-template-list-head { padding: 0 0 4px 12px; }
+.fx-template-item > box { padding: 0; }
+.fx-template-name { font-size: 13px; font-weight: 500; color: @fx_text; }
+
+/* Quiet text buttons (Remove logo, Delete template). */
+.fx-quiet {
+  background: none;
+  border: none;
+  box-shadow: none;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: @fx_muted;
+  font-size: 13px;
+}
+.fx-quiet:hover { background-color: alpha(@fx_text, 0.05); color: @fx_accent_text; }
+
+.fx-add-field { min-height: 34px; }
+
+/* Field table: 48px rows whose entries blend in until hovered or focused. */
+.fx-field-table .fx-table-head { padding: 0 14px; }
+.fx-field-table .fx-table-row { padding: 0 14px; min-height: 48px; }
+.fx-cell-pad { margin-left: 9px; }
+
+window.fennec entry.fx-cell-entry {
+  background: none;
+  border-color: transparent;
+  min-height: 32px;
+  padding: 0 8px;
+}
+window.fennec entry.fx-cell-entry:hover { border-color: @fx_border; }
+window.fennec entry.fx-cell-entry:focus-within { border-color: @fx_accent; }
+window.fennec entry.fx-cell-entry.placeholder-value {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: @fx_accent_text;
+}
+window.fennec entry.fx-cell-entry placeholder { color: @fx_muted; }
+
+window.fennec dropdown.fx-cell-select > button {
+  background: none;
+  border-color: transparent;
+  min-height: 32px;
+  padding: 0 8px;
+  color: @fx_muted;
+}
+window.fennec dropdown.fx-cell-select > button:hover { border-color: @fx_border; background: none; }
+window.fennec dropdown.fx-cell-select > button arrow { opacity: 0; }
+window.fennec dropdown.fx-cell-select > button:hover arrow { opacity: 1; }
+
+window.fennec .fx-field-table checkbutton { min-height: 0; padding: 0; }
+window.fennec .fx-field-table checkbutton check { min-width: 14px; min-height: 14px; padding: 1px; margin: 0; }
+
+menubutton.fx-handle > button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  min-height: 28px;
+  min-width: 24px;
+  padding: 0;
+  color: @fx_faint;
+  font-size: 14px;
+}
+menubutton.fx-handle > button:hover { color: @fx_text_soft; background-color: alpha(@fx_text, 0.05); }
+
+/* Logo slot and body font picker. */
+.fx-logo-slot { padding: 0; }
+.fx-logo-slot.filled { border-style: solid; border-color: @fx_border; }
+menubutton.fx-select > button { min-height: 38px; }
+menubutton.fx-select label { color: @fx_text; }
+.fx-chevron { color: @fx_muted; }
+.fx-font-popover { padding: 8px; min-width: 240px; }
+
+/* Preview aside. */
+.fx-template-preview { border-left: 1px solid @fx_border; }
