@@ -6,6 +6,8 @@
 //! display of 1280×800 (the mockup's size) and `grim`.
 
 mod dictate;
+mod export;
+mod files;
 mod settings;
 #[path = "../support/mod.rs"]
 mod support;
@@ -24,7 +26,7 @@ use fennec::engine::{EngineError, Segment, TranscribeOptions, Transcriber};
 use fennec::store::{DocumentId, NewActionItem, NewDocument, NewSummary, Paragraph, ProjectId, Store};
 use fennec::ui::{self, Deps};
 use fennec::utterance::{EnergyVad, FrameVad};
-use fennec::vad::{SpeechDetector, WholeAudio};
+use fennec::vad::SpeechDetector;
 use gtk::glib;
 use gtk::prelude::*;
 use support::{MockLlm, Recorded, Reply, Wire};
@@ -73,10 +75,32 @@ pub fn pump_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     true
 }
 
-struct Silent;
-impl Transcriber for Silent {
-    fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        Ok(vec![])
+/// Transcribes the Files scene: the interview (the loudest file) gets the
+/// mockup's sentences and then stalls mid-way, so it stays "Transcribing";
+/// other files get one short line.
+struct Scripted;
+impl Transcriber for Scripted {
+    fn transcribe(&mut self, pcm: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static INTERVIEW: AtomicUsize = AtomicUsize::new(0);
+        let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let text = if peak > files::INTERVIEW_LEVEL - 0.01 {
+            let n = INTERVIEW.fetch_add(1, Ordering::SeqCst);
+            match files::INTERVIEW_LINES.get(n) {
+                Some(line) => *line,
+                None => loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                },
+            }
+        } else {
+            "Kort diktat fra bilen om dagens aftaler."
+        };
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 900,
+            text: text.into(),
+            low_confidence: vec![],
+        }])
     }
 }
 
@@ -165,7 +189,8 @@ viceværten været kendt siden sidste vinter.\n\n**Opfølgning**\n- Undersøg ne
 
 /// Seeds the database the way the mockup's sidebar and lists show it.
 fn seed(root: &Path) -> (DocumentId, ProjectId, DocumentId) {
-    std::fs::create_dir_all(root.join("data")).unwrap();
+    std::fs::create_dir_all(root.join("data/models")).unwrap();
+    std::fs::write(root.join("data/models/edda-v0.1-q5_0.bin"), b"stand-in").unwrap();
     let path = root.join("data/fennec.db");
     let store = Store::open(&path).unwrap();
     let db = rusqlite::Connection::open(&path).unwrap();
@@ -560,10 +585,10 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
     Deps {
         paths: Paths::under(root),
         settings: Rc::new(RefCell::new(settings)),
-        engine: Arc::new(|_, _| Ok(Box::new(Silent) as Box<dyn Transcriber>)),
+        engine: Arc::new(|_, _| Ok(Box::new(Scripted) as Box<dyn Transcriber>)),
         audio: Arc::new(|_| Ok(Box::new(PcmSource::new(vec![0.0; 16_000])) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
-        file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
+        file_vad: Arc::new(|_, _| Box::new(files::EverySecond) as Box<dyn SpeechDetector>),
         secrets: Arc::new(MemorySecrets::with("claude", "sk-ant-mockup")),
         confirm_cloud: Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -598,6 +623,12 @@ fn main() {
     let run = |name: &str| only.as_deref().is_none_or(|o| o == name);
     if run("dictate") {
         dictate::capture(&scene);
+    }
+    if run("export") {
+        export::capture(&scene);
+    }
+    if run("files") {
+        files::capture(&scene, &root);
     }
     if run("settings") {
         settings::capture(&scene);

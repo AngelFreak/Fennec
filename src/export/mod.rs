@@ -66,6 +66,9 @@ pub enum ExportError {
     Pdf(String),
 }
 
+/// Stands in for an empty required field in previews (exports are blocked).
+pub const MISSING: &str = "[missing]";
+
 /// Everything a writer needs, already resolved from the store and template.
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -124,7 +127,13 @@ impl Report {
         template: &Template,
         opts: ExportOptions,
     ) -> Result<Report, ExportError> {
-        let section = build_section(store, id, template, opts)?;
+        let mut section = build_section(store, id, template, opts)?;
+        let missing = template.missing_required(&store.document(id)?.fields);
+        for (label, value) in &mut section.fields {
+            if missing.contains(label) {
+                *value = MISSING.to_string();
+            }
+        }
         Ok(Report::with_sections(template, None, false, vec![section]))
     }
 

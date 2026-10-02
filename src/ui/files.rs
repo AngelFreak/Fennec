@@ -843,6 +843,19 @@ impl FilesPage {
         self.header_changed();
     }
 
+    /// Selects the queued file with this name (tests).
+    pub fn select_file(self: &Rc<Self>, name: &str) {
+        let id = self
+            .items
+            .borrow()
+            .iter()
+            .find(|i| i.path.file_name().is_some_and(|n| n == name))
+            .map(|i| i.id);
+        if let Some(id) = id {
+            self.select(id);
+        }
+    }
+
     /// The document of the selected file, for Export.
     pub fn current_document(&self) -> Option<DocumentId> {
         self.selected_doc()

@@ -3,7 +3,8 @@
 .fx-files-banner .fx-status { font-size: 13px; }
 
 .fx-transcript-list { padding: 20px 28px; }
-.fx-transcript-text { line-height: 1.65; color: @fx_text; }
+/* GTK scales the font's own line height: 1.17 here is the mockup's 1.65 × 16px. */
+.fx-transcript-text { line-height: 1.17; color: @fx_text; }
 .fx-transcript-row.pending { padding-top: 10px; padding-bottom: 10px; }
 .fx-pending-note { padding: 0 12px; }
 .fx-gutter { min-width: 84px; }

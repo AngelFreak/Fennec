@@ -272,3 +272,84 @@ fn a_non_png_logo_is_rejected_before_writing() {
     let err = write(&report, Format::Pdf, &dir.path().join("x.pdf")).unwrap_err();
     assert!(matches!(err, ExportError::LogoNotPng { .. }));
 }
+
+const MARKDOWN_SUMMARY: &str = "Kort om fugten.\n\n**Opfølgning**\n- Undersøg brønden.\n- Følg revnerne.";
+
+fn with_markdown_summary() -> (Store, i64) {
+    let (s, doc) = seeded();
+    s.add_summary(&NewSummary {
+        document_id: Some(doc),
+        project_id: None,
+        prompt_id: "summary".into(),
+        provider: "Claude".into(),
+        model: "claude-opus-5-5".into(),
+        text: MARKDOWN_SUMMARY.into(),
+    })
+    .unwrap();
+    (s, doc)
+}
+
+#[test]
+fn summary_headings_and_bullets_are_formatted_not_printed_raw() {
+    let (s, doc) = with_markdown_summary();
+    let report = Report::for_document(&s, doc, &template(), ExportOptions::default()).unwrap();
+    let txt = fennec::export::render_txt(&report);
+    assert!(!txt.contains("**"), "{txt}");
+    assert!(
+        txt.contains("Opfølgning\n- Undersøg brønden.\n- Følg revnerne."),
+        "{txt}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("r.pdf");
+    write(&report, Format::Pdf, &pdf).unwrap();
+    let text = pdf_text(&pdf);
+    assert!(!text.contains("**"), "{text}");
+    assert!(text.contains("• Undersøg brønden."), "{text}");
+
+    let docx = dir.path().join("r.docx");
+    write(&report, Format::Docx, &docx).unwrap();
+    let xml = docx_xml(&docx);
+    assert!(!xml.contains("**"), "raw markdown in the DOCX");
+    assert!(xml.contains("• Undersøg brønden."), "no bullet in the DOCX");
+}
+
+#[test]
+fn a_draft_marks_empty_required_fields_while_an_export_is_still_blocked() {
+    let (s, doc) = seeded();
+    s.update_document(doc, "Besigtigelse Nørregade 14", Some("notat"), &BTreeMap::new())
+        .unwrap();
+    let draft = Report::draft_for_document(&s, doc, &template(), ExportOptions::default()).unwrap();
+    assert!(
+        draft.sections[0]
+            .fields
+            .contains(&("Sagsnr.".to_string(), fennec::export::MISSING.to_string())),
+        "{:?}",
+        draft.sections[0].fields
+    );
+    assert!(matches!(
+        Report::for_document(&s, doc, &template(), ExportOptions::default()),
+        Err(ExportError::MissingFields(_))
+    ));
+}
+
+#[test]
+fn the_pdf_heading_sits_on_the_right_as_in_the_mockup() {
+    let (s, doc) = seeded();
+    let report = Report::for_document(&s, doc, &template(), ExportOptions::default()).unwrap();
+    let page = fennec::export::preview_first_page(&report, 600).unwrap();
+    let (w, h) = (page.width() as usize, page.height() as usize);
+    let stride = page.stride() as usize;
+    let mut page = page;
+    let data = page.data().unwrap();
+    // The first row with dark ink is the heading's.
+    let dark = |x: usize, y: usize| {
+        let i = y * stride + x * 4;
+        data[i] < 100 && data[i + 1] < 100 && data[i + 2] < 100
+    };
+    let row = (0..h / 4)
+        .find(|&y| (0..w).any(|x| dark(x, y)))
+        .expect("ink at the top");
+    let first = (0..w).find(|&x| dark(x, row)).unwrap();
+    assert!(first > w / 2, "the heading starts at x={first} of {w}");
+}

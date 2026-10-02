@@ -62,7 +62,7 @@ fn styles(report: &Report) -> String {
     let size = (report.body_size_pt * 2.0).round() as i64;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/><w:sz w:val="{size}"/><w:lang w:val="da-DK"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ReportHeading"><w:name w:val="Report Heading"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="right"/><w:pBdr><w:bottom w:val="single" w:sz="12" w:space="4" w:color="15171C"/></w:pBdr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:spacing w:val="40"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="160"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="160" w:after="80"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:tabs><w:tab w:val="right" w:pos="9026"/></w:tabs></w:pPr><w:rPr><w:color w:val="5A6170"/><w:sz w:val="16"/></w:rPr></w:style></w:styles>"#
+<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/><w:sz w:val="{size}"/><w:lang w:val="da-DK"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ReportHeading"><w:name w:val="Report Heading"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="right"/><w:pBdr><w:bottom w:val="single" w:sz="12" w:space="4" w:color="15171C"/></w:pBdr><w:spacing w:after="240"/></w:pPr><w:rPr><w:rFonts w:ascii="IBM Plex Sans" w:hAnsi="IBM Plex Sans" w:cs="IBM Plex Sans"/><w:b/><w:spacing w:val="40"/><w:sz w:val="20"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="160"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="160" w:after="80"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="DCE0E6"/></w:pBdr><w:tabs><w:tab w:val="right" w:pos="9026"/></w:tabs></w:pPr><w:rPr><w:rFonts w:ascii="IBM Plex Sans" w:hAnsi="IBM Plex Sans" w:cs="IBM Plex Sans"/><w:color w:val="5A6170"/><w:sz w:val="15"/></w:rPr></w:style></w:styles>"#
     )
 }
 
@@ -108,22 +108,48 @@ fn document(report: &Report, logo: Option<&[u8]>) -> String {
 
 fn section_body(body: &mut String, report: &Report, section: &Section) {
     if !section.fields.is_empty() {
-        body.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLook w:val="0000"/></w:tblPr><w:tblGrid><w:gridCol w:w="2600"/><w:gridCol w:w="6400"/></w:tblGrid>"#);
-        for (label, value) in &section.fields {
-            let _ = write!(
-                body,
-                r#"<w:tr><w:tc><w:p><w:pPr><w:spacing w:after="40"/></w:pPr>{}</w:p></w:tc><w:tc><w:p><w:pPr><w:spacing w:after="40"/></w:pPr>{}</w:p></w:tc></w:tr>"#,
-                run(label, r#"<w:color w:val="5A6170"/>"#),
-                multiline_runs(value)
-            );
+        // Two columns, a small grey label above each value, as in the mockup.
+        body.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLook w:val="0000"/></w:tblPr><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>"#);
+        for pair in section.fields.chunks(2) {
+            body.push_str("<w:tr>");
+            for i in 0..2 {
+                let cell = match pair.get(i) {
+                    Some((label, value)) => format!(
+                        r#"<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>{}</w:p><w:p><w:pPr><w:spacing w:after="120"/></w:pPr>{}</w:p>"#,
+                        run(
+                            label,
+                            r#"<w:rFonts w:ascii="IBM Plex Sans" w:hAnsi="IBM Plex Sans" w:cs="IBM Plex Sans"/><w:color w:val="5A6170"/><w:sz w:val="14"/>"#
+                        ),
+                        if value == super::MISSING {
+                            run(
+                                value,
+                                r#"<w:rFonts w:ascii="IBM Plex Sans" w:hAnsi="IBM Plex Sans" w:cs="IBM Plex Sans"/><w:color w:val="C2410C"/><w:sz w:val="17"/>"#,
+                            )
+                        } else {
+                            multiline_runs_with(
+                                value,
+                                r#"<w:rFonts w:ascii="IBM Plex Sans" w:hAnsi="IBM Plex Sans" w:cs="IBM Plex Sans"/><w:sz w:val="17"/>"#,
+                            )
+                        }
+                    ),
+                    None => "<w:p/>".to_string(),
+                };
+                let _ = write!(body, "<w:tc>{cell}</w:tc>");
+            }
+            body.push_str("</w:tr>");
         }
         body.push_str("</w:tbl>");
     }
     para(body, "Heading1", &run(&section.title, ""));
     if let Some(summary) = &section.summary {
         para(body, "Heading2", &run(&report.summary_heading, ""));
-        for line in summary.lines().filter(|l| !l.trim().is_empty()) {
-            para(body, "Normal", &run(line.trim(), ""));
+        use crate::text::{Block, strip_bold, summary_blocks};
+        for block in summary_blocks(summary) {
+            match block {
+                Block::Paragraph(t) => para(body, "Normal", &run(&strip_bold(&t), "")),
+                Block::Heading(t) => para(body, "Normal", &run(&t, "<w:b/>")),
+                Block::Bullet(t) => para(body, "Normal", &run(&format!("• {}", strip_bold(&t)), "")),
+            }
         }
     }
     for p in &section.paragraphs {
@@ -150,9 +176,9 @@ fn paragraph_runs(p: &ReportParagraph) -> String {
     out
 }
 
-fn multiline_runs(text: &str) -> String {
+fn multiline_runs_with(text: &str, rpr: &str) -> String {
     text.lines()
-        .map(|l| run(l, ""))
+        .map(|l| run(l, rpr))
         .collect::<Vec<_>>()
         .join("<w:r><w:br/></w:r>")
 }

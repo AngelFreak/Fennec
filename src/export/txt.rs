@@ -38,7 +38,7 @@ pub fn render_txt(report: &Report) -> String {
         out.push('\n');
         if let Some(summary) = &section.summary {
             push_line(&mut out, &report.summary_heading);
-            push_line(&mut out, summary.trim());
+            summary_lines(&mut out, summary);
             out.push('\n');
         }
         for p in &section.paragraphs {
@@ -56,6 +56,29 @@ pub fn render_txt(report: &Report) -> String {
     out.truncate(trimmed);
     out.push('\n');
     out
+}
+
+/// The summary as plain text: headings on their own line after a blank
+/// one, bullets as "- ", no `**` markers.
+fn summary_lines(out: &mut String, summary: &str) {
+    use crate::text::{Block, strip_bold, summary_blocks};
+    for (i, block) in summary_blocks(summary).iter().enumerate() {
+        match block {
+            Block::Paragraph(t) => {
+                if i > 0 {
+                    out.push('\n');
+                }
+                push_line(out, &strip_bold(t));
+            }
+            Block::Heading(t) => {
+                if i > 0 {
+                    out.push('\n');
+                }
+                push_line(out, t);
+            }
+            Block::Bullet(t) => push_line(out, &format!("- {}", strip_bold(t))),
+        }
+    }
 }
 
 fn push_line(out: &mut String, line: &str) {

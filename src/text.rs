@@ -55,6 +55,63 @@ pub fn duration(ms: i64) -> String {
     }
 }
 
+/// A piece of a summary as the AI writes it: plain paragraphs, `**bold**`
+/// lines as headings, and `-` or `*` bullets.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Block {
+    Paragraph(String),
+    Heading(String),
+    Bullet(String),
+}
+
+pub fn summary_blocks(text: &str) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut para: Vec<&str> = Vec::new();
+    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
+        if !para.is_empty() {
+            out.push(Block::Paragraph(para.join("\n")));
+            para.clear();
+        }
+    };
+    for line in text.lines().map(str::trim_end) {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            flush(&mut para, &mut out);
+        } else if let Some(item) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+            flush(&mut para, &mut out);
+            out.push(Block::Bullet(item.trim().into()));
+        } else if let Some(h) = trimmed
+            .strip_prefix("**")
+            .and_then(|t| t.strip_suffix("**"))
+            .filter(|h| !h.is_empty() && !h.contains("**"))
+        {
+            flush(&mut para, &mut out);
+            out.push(Block::Heading(h.trim().into()));
+        } else {
+            para.push(line);
+        }
+    }
+    flush(&mut para, &mut out);
+    out
+}
+
+/// The text with `**bold**` markers removed, for plain-text output.
+pub fn strip_bold(text: &str) -> String {
+    let parts: Vec<&str> = text.split("**").collect();
+    if parts.len() < 3 {
+        return text.to_string();
+    }
+    let pairs = (parts.len() - 1) / 2 * 2;
+    let mut out = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i > pairs {
+            out.push_str("**");
+        }
+        out.push_str(part);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +133,24 @@ mod tests {
     fn duration_drops_hours_when_short() {
         assert_eq!(duration(2_892_000), "48:12");
         assert_eq!(duration(4_360_000), "1:12:40");
+    }
+    #[test]
+    fn summaries_render_paragraphs_headings_and_bullets() {
+        let text = "Første afsnit\nfortsætter her.\n\n**Opfølgning**\n- Undersøg brønden.\n* Følg revnerne.";
+        assert_eq!(
+            summary_blocks(text),
+            vec![
+                Block::Paragraph("Første afsnit\nfortsætter her.".into()),
+                Block::Heading("Opfølgning".into()),
+                Block::Bullet("Undersøg brønden.".into()),
+                Block::Bullet("Følg revnerne.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn bold_markers_are_dropped_for_plain_text() {
+        assert_eq!(strip_bold("a **b** c"), "a b c");
+        assert_eq!(strip_bold("one ** left"), "one ** left");
     }
 }

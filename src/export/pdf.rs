@@ -12,7 +12,6 @@ const PAGE_W: f64 = 595.28;
 const PAGE_H: f64 = 841.89;
 const MARGIN: f64 = 64.0;
 const FOOTER_SPACE: f64 = 36.0;
-const LABEL_W: f64 = 140.0;
 
 fn load_logo(report: &Report) -> Result<Option<cairo::ImageSurface>, ExportError> {
     Ok(match &report.logo {
@@ -41,7 +40,9 @@ pub fn preview(report: &Report, width_px: i32) -> Result<cairo::ImageSurface, Ex
         cr.set_source_rgb(1.0, 1.0, 1.0);
         cr.paint().map_err(pdf_err)?;
         cr.scale(scale, scale);
-        match render(report, &cr, logo.as_ref(), None, true) {
+        // "Side 1 af N" as in the written file.
+        let total = page_count(report).ok();
+        match render(report, &cr, logo.as_ref(), total, true) {
             Ok(_) => {}
             Err(ExportError::Pdf(m)) if m == PREVIEW_DONE => {}
             Err(e) => return Err(e),
@@ -123,7 +124,12 @@ impl Pager<'_> {
 
     fn footer(&self) -> Result<(), ExportError> {
         let y = PAGE_H - MARGIN;
-        let small = font(&self.report.body_font, 8.0, false);
+        let small = sans(7.5, false);
+        self.cr.set_source_rgb(0.863, 0.878, 0.902);
+        self.cr.set_line_width(0.6);
+        self.cr.move_to(MARGIN, y - 8.0);
+        self.cr.line_to(PAGE_W - MARGIN, y - 8.0);
+        self.cr.stroke().map_err(pdf_err)?;
         if !self.report.footer.is_empty() {
             let l = layout(self.cr, &self.report.footer, &small, PAGE_W - 2.0 * MARGIN - 80.0);
             gray(self.cr);
@@ -224,33 +230,59 @@ fn render(
             }
         }
         if !report.heading.is_empty() {
-            let l = layout(cr, &report.heading, &bold(11.0), width);
+            let l = layout(cr, &report.heading, &sans(10.0, true), width);
             // No letter-spacing: it makes PDF text extraction split the word into letters.
             l.set_alignment(pango::Alignment::Right);
             if logo.is_some() && (i == 0 || report.collection_title.is_some()) {
                 p.gap(12.0);
             }
-            p.place(&l, MARGIN)?;
-            p.gap(6.0);
+            // Drawn whole: line by line would lose the right alignment.
+            let h = f64::from(l.pixel_size().1);
+            p.keep(h)?;
+            cr.move_to(MARGIN, p.y);
+            pangocairo::functions::show_layout(cr, &l);
+            p.gap(h + 6.0);
             cr.set_line_width(1.5);
             cr.move_to(MARGIN, p.y);
             cr.line_to(PAGE_W - MARGIN, p.y);
             cr.stroke().map_err(pdf_err)?;
             p.gap(14.0);
         }
-        let label_font = font(&report.body_font, 9.0, false);
-        for (label, value) in &section.fields {
-            let lv = layout(cr, value, &body, width - LABEL_W);
-            let ll = layout(cr, label, &label_font, LABEL_W - 8.0);
-            let h = f64::from(lv.pixel_size().1).max(f64::from(ll.pixel_size().1));
+        // Two columns, a small grey label above each value, as in the mockup.
+        let label_font = sans(7.5, false);
+        let value_font = sans(9.0, false);
+        let col = width / 2.0;
+        for pair in section.fields.chunks(2) {
+            let cells: Vec<(Layout, Layout, bool)> = pair
+                .iter()
+                .map(|(label, value)| {
+                    (
+                        layout(cr, label, &label_font, col - 12.0),
+                        layout(cr, value, &value_font, col - 12.0),
+                        value == super::MISSING,
+                    )
+                })
+                .collect();
+            let h = cells
+                .iter()
+                .map(|(l, v, _)| f64::from(l.pixel_size().1 + v.pixel_size().1) + 1.0)
+                .fold(0.0, f64::max);
             p.keep(h)?;
-            gray(cr);
-            cr.move_to(MARGIN, p.y + 1.5);
-            pangocairo::functions::show_layout(cr, &ll);
+            for (n, (l, v, missing)) in cells.iter().enumerate() {
+                let x = MARGIN + col * n as f64;
+                gray(cr);
+                cr.move_to(x, p.y);
+                pangocairo::functions::show_layout(cr, l);
+                if *missing {
+                    accent(cr);
+                } else {
+                    black(cr);
+                }
+                cr.move_to(x, p.y + f64::from(l.pixel_size().1) + 1.0);
+                pangocairo::functions::show_layout(cr, v);
+            }
             black(cr);
-            cr.move_to(MARGIN + LABEL_W, p.y);
-            pangocairo::functions::show_layout(cr, &lv);
-            p.gap(h + 4.0);
+            p.gap(h + 8.0);
         }
         if !section.fields.is_empty() {
             p.gap(10.0);
@@ -259,10 +291,28 @@ fn render(
         p.place(&layout(cr, &section.title, &bold(17.0), width), MARGIN)?;
         p.gap(10.0);
         if let Some(summary) = &section.summary {
+            use crate::text::{Block, strip_bold, summary_blocks};
             p.keep(40.0)?;
             p.place(&layout(cr, &report.summary_heading, &bold(12.0), width), MARGIN)?;
             p.gap(4.0);
-            p.place(&layout(cr, summary.trim(), &body, width), MARGIN)?;
+            for block in summary_blocks(summary) {
+                match block {
+                    Block::Paragraph(t) => {
+                        p.place(&layout(cr, &strip_bold(&t), &body, width), MARGIN)?;
+                        p.gap(report.body_size_pt * 0.5);
+                    }
+                    Block::Heading(t) => {
+                        p.keep(30.0)?;
+                        p.gap(2.0);
+                        p.place(&layout(cr, &t, &bold(report.body_size_pt), width), MARGIN)?;
+                        p.gap(2.0);
+                    }
+                    Block::Bullet(t) => {
+                        let text = format!("• {}", strip_bold(&t));
+                        p.place(&layout(cr, &text, &body, width - 10.0), MARGIN + 10.0)?;
+                    }
+                }
+            }
             p.gap(10.0);
         }
         for para in &section.paragraphs {
@@ -323,8 +373,24 @@ fn font(family: &str, size: f64, bold: bool) -> FontDescription {
     f
 }
 
+/// The interface face, for the header block and footer (as in the mockup).
+fn sans(size: f64, bold: bool) -> FontDescription {
+    let mut f = FontDescription::new();
+    f.set_family("IBM Plex Sans,Noto Sans,DejaVu Sans,Sans");
+    f.set_size((size * f64::from(pango::SCALE)) as i32);
+    if bold {
+        f.set_weight(pango::Weight::Bold);
+    }
+    f
+}
+
 fn gray(cr: &Context) {
     cr.set_source_rgb(0.353, 0.380, 0.439);
+}
+
+/// The accent, for "[missing]" in previews.
+fn accent(cr: &Context) {
+    cr.set_source_rgb(0.761, 0.255, 0.047);
 }
 
 fn black(cr: &Context) {

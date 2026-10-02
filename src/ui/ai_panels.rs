@@ -379,45 +379,7 @@ fn when(ms: i64) -> String {
     }
 }
 
-/// A piece of a summary as the AI writes it: plain paragraphs, `**bold**`
-/// lines as headings, and `-` or `*` bullets.
-#[derive(Debug, Clone, PartialEq)]
-enum Block {
-    Paragraph(String),
-    Heading(String),
-    Bullet(String),
-}
-
-fn summary_blocks(text: &str) -> Vec<Block> {
-    let mut out = Vec::new();
-    let mut para: Vec<&str> = Vec::new();
-    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
-        if !para.is_empty() {
-            out.push(Block::Paragraph(para.join("\n")));
-            para.clear();
-        }
-    };
-    for line in text.lines().map(str::trim_end) {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            flush(&mut para, &mut out);
-        } else if let Some(item) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
-            flush(&mut para, &mut out);
-            out.push(Block::Bullet(item.trim().into()));
-        } else if let Some(h) = trimmed
-            .strip_prefix("**")
-            .and_then(|t| t.strip_suffix("**"))
-            .filter(|h| !h.is_empty() && !h.contains("**"))
-        {
-            flush(&mut para, &mut out);
-            out.push(Block::Heading(h.trim().into()));
-        } else {
-            para.push(line);
-        }
-    }
-    flush(&mut para, &mut out);
-    out
-}
+use crate::text::{Block, summary_blocks};
 
 /// Pango markup for a line: `**bold**` pairs become bold, the rest is escaped.
 fn inline_markup(text: &str) -> String {
@@ -724,20 +686,6 @@ fn due_text(iso: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn summaries_render_paragraphs_headings_and_bullets() {
-        let text = "Første afsnit\nfortsætter her.\n\n**Opfølgning**\n- Undersøg brønden.\n* Følg revnerne.";
-        assert_eq!(
-            summary_blocks(text),
-            vec![
-                Block::Paragraph("Første afsnit\nfortsætter her.".into()),
-                Block::Heading("Opfølgning".into()),
-                Block::Bullet("Undersøg brønden.".into()),
-                Block::Bullet("Følg revnerne.".into()),
-            ]
-        );
-    }
 
     #[test]
     fn inline_bold_becomes_markup_and_the_rest_is_escaped() {
