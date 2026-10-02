@@ -1,1 +1,32 @@
 /* project screen */
+
+.fx-local-badge {
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background-color: @fx_chip;
+  color: @fx_text_soft;
+  font-size: 11px;
+}
+.fx-local-badge label { font-weight: 600; }
+
+.fx-project-main searchentry > image { color: @fx_muted; }
+
+/* Documents table */
+.fx-project-doc-row { min-height: 60px; padding: 0 16px; }
+.fx-doc-row-title { font-size: 14px; font-weight: 500; color: @fx_text; }
+.fx-doc-date { font-size: 13px; color: @fx_text_soft; }
+.fx-doc-length { color: @fx_text_soft; }
+.fx-doc-icon image { color: @fx_text_soft; }
+.fx-tag-pill { background: none; }
+
+/* Ask */
+.fx-answer-card { border: 1px solid @fx_border; border-radius: 10px; padding: 16px 18px; }
+.fx-answer { line-height: 1.3; }
+.fx-citations > flowboxchild { padding: 0; background: none; }
+window.fennec entry.fx-ask-entry { min-height: 42px; border-radius: 10px; padding: 0 14px; font-size: 14px; }
+.fx-ask-button { min-height: 44px; border-radius: 10px; padding: 0 18px; }
+
+/* Panel */
+window.fennec .fx-project-export checkbutton { min-height: 36px; }
+.fx-project-main .fx-link label.fx-mono { font-family: "IBM Plex Sans", sans-serif; font-size: 12px; }

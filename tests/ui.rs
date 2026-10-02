@@ -657,6 +657,10 @@ fn ai_checks(root: &std::path::Path) {
     check("clean-up opens its review screen", w.visible_page() == "cleanup");
     let proposed = pump_until(Duration::from_secs(5), || w.dictation.cleanup.states().len() == 1);
     check("clean-up proposes the changed paragraph only", proposed);
+    check(
+        "clean-up names the provider and where it runs",
+        w.dictation.cleanup.provider_text().contains(" · "),
+    );
     screenshot(&w.window, "cleanup");
     w.dictation.cleanup.accept_row(0);
     let first = |w: &ui::MainWindow| w.dictation.editor.paragraphs()[0].text.clone();
@@ -721,7 +725,17 @@ fn ai_checks(root: &std::path::Path) {
         "unknown citations are dropped",
         !w.project.answer.text().contains("d999") && w.project.citation_labels().len() == 1,
     );
+    check(
+        "the answer numbers its source like the citation chip",
+        !w.project.answer.text().contains("[d")
+            && w.project
+                .citation_labels()
+                .first()
+                .is_some_and(|c| c.starts_with("1 ")),
+    );
     screenshot(&w.window, "ask");
+    w.project.show_tab("actions");
+    screenshot(&w.window, "project-actions");
     check("no request went to the cloud", cloud.count() == 0);
 
     // A cloud provider asks first, once per document.

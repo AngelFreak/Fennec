@@ -71,7 +71,7 @@ impl DictationPage {
         let inspector = Inspector::new();
         let summary = SummaryPanel::new(Rc::clone(&store), "Summarize this document");
         let actions = ActionsPanel::new(Rc::clone(&store), Some("Find action items"), "Source", 64);
-        let cleanup = CleanupPage::new();
+        let cleanup = CleanupPage::new(Rc::clone(&store), Rc::clone(&deps.settings));
 
         let title = gtk::Entry::builder()
             .css_classes(["fx-doc-title"])
