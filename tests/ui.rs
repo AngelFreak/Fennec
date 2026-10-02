@@ -184,6 +184,14 @@ fn main() {
     check("dictated text is saved to the database", saved == texts);
     w.window.present();
     screenshot(&w.window, "dictate");
+    pump_until(Duration::from_millis(300), || w.sidebar.root.width() > 0);
+    check(
+        "the sidebar keeps the mockup's 232px width",
+        w.sidebar
+            .root
+            .compute_bounds(&w.window)
+            .is_some_and(|b| b.width() == 232.0),
+    );
     let first = &store.paragraphs(doc).unwrap()[0];
     check(
         "paragraphs keep their timestamps",

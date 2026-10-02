@@ -36,6 +36,8 @@ impl Sidebar {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
         root.add_css_class("fx-sidebar");
         root.set_size_request(232, -1);
+        // Children that expand (the section titles) must not widen the sidebar.
+        root.set_hexpand(false);
 
         let mut nav = HashMap::new();
         for (key, text, icon) in [
