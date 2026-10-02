@@ -26,7 +26,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: decode (symphonia + ffmpeg fallback), resample, VAD chunking, ingest job with progress into the store.
 **Success Criteria**: a WAV/MP3 becomes timestamped paragraphs in the DB.
 **Tests**: resampler, VAD on synthetic tone/silence; integration: file → engine → store → DOCX.
-**Status**: Not Started
+**Status**: Complete — symphonia with ffmpeg fallback, rubato FFT resampling, Silero VAD via whisper-rs, paragraph builder shared with live dictation.
 
 ## Stage 4: Live dictation pipeline
 **Goal**: cpal capture, utterance builder, partials, voice commands, low-confidence spans, disk buffer, engine priority queue.
@@ -51,6 +51,12 @@ commit. Integration tests drive the real wiring.
 **Success Criteria**: switch model/backend from Settings; Vulkan build works on this laptop.
 **Tests**: catalog/path logic; fallback chain with a failing backend stub.
 **Status**: Not Started
+
+## Stage 7b (optional, last): Hviske v6 sidecar engine
+**Goal**: second `Transcriber` running syvai/hviske-v6 (Whisper encoder + Qwen3 decoder, custom transformers code) in a Python helper process; selectable in Settings and in fennec-bench.
+**Success Criteria**: v6 transcribes file chunks and dictation utterances through the same pipeline; timestamps come from VAD chunks; no low-confidence spans.
+**Tests**: protocol unit tests with a fake helper script; integration run against the real model behind `#[ignore]` (needs the 2.8 GB download).
+**Status**: Deferred — leaderboard (RyeAI, same harness for all) puts Edda first among open models (9.21 mean WER vs 10.36 for v6); do after Stage 9.
 
 ## Stage 8: AI providers and actions
 **Goal**: Anthropic + OpenAI-compatible providers, keyring, privacy gate, summary/clean-up/action items/ask/fields, Settings AI sections, UI (AI menu, tabs, diff view, Ask tab).

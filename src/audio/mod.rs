@@ -1,5 +1,6 @@
-//! Audio input. Stage 0 only reads 16 kHz WAV; decoding other formats and
-//! resampling arrive with file ingest.
+//! Audio input: 16 kHz WAV reading (benchmarks) and general file decoding.
+
+pub mod decode;
 
 use std::path::{Path, PathBuf};
 

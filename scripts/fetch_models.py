@@ -14,6 +14,7 @@ FIXTURES = Path(__file__).resolve().parent.parent / "tests/fixtures/models"
 
 def edda():       return snapshot_download("danish-foundation-models/edda-v0.1")
 def hviske():     return snapshot_download("syvai/hviske-v3-conversation")
+def hviske6():    return snapshot_download("syvai/hviske-v6")
 def roest():
     p = hf_hub_download("alfanova/roest-v3-whisper-ggml", "roest-v3-q8_0.bin")
     shutil.copy(p, MODELS / "roest-v3-q8_0.bin"); return str(MODELS / "roest-v3-q8_0.bin")
@@ -22,12 +23,13 @@ def tiny():
     shutil.copy(p, FIXTURES / "ggml-tiny.bin"); return str(FIXTURES / "ggml-tiny.bin")
 def vad():
     p = hf_hub_download("ggml-org/whisper-vad", "ggml-silero-v6.2.0.bin")
+    shutil.copy(p, FIXTURES / "ggml-silero-v6.2.0.bin")  # tests use the same model
     shutil.copy(p, MODELS / "ggml-silero-v6.2.0.bin"); return str(MODELS / "ggml-silero-v6.2.0.bin")
 def fleurs():
     return hf_hub_download("google/fleurs", "data/da_dk/test.tsv", repo_type="dataset") + " + " + \
            hf_hub_download("google/fleurs", "data/da_dk/audio/test.tar.gz", repo_type="dataset")
 
-ALL = {"tiny": tiny, "vad": vad, "fleurs": fleurs, "roest": roest, "edda": edda, "hviske": hviske}
+ALL = {"tiny": tiny, "vad": vad, "fleurs": fleurs, "roest": roest, "edda": edda, "hviske": hviske, "hviske6": hviske6}
 names = sys.argv[1:] or list(ALL)
 failed = 0
 for n in names:
