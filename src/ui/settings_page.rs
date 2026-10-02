@@ -15,14 +15,24 @@ use super::mic_test::MicTest;
 use super::settings_ai::AiSettingsUi;
 use super::{Deps, Handler, label};
 use crate::audio::capture::input_devices;
+use crate::config::Backend;
 use crate::models::{self, Progress, Source};
 use crate::worker::Priority;
 
-/// A model download or conversion in progress.
+/// "Delete audio after" choices: label and days (`None`: never).
+const RETENTION: [(&str, Option<u32>); 4] = [
+    ("Never", None),
+    ("30 days", Some(30)),
+    ("90 days", Some(90)),
+    ("1 year", Some(365)),
+];
+
+/// A model download or conversion in progress, shown inside its card.
 struct Install {
     _cancel: Arc<AtomicBool>,
     bar: gtk::ProgressBar,
     status: gtk::Label,
+    percent: gtk::Label,
 }
 
 pub struct SettingsPage {
@@ -35,12 +45,15 @@ pub struct SettingsPage {
     nav: RefCell<Vec<(String, gtk::Button)>>,
     models_box: gtk::Box,
     installing: RefCell<Option<Install>>,
-    backend_box: gtk::Box,
+    backend_box: gtk::Grid,
+    backend_note: gtk::Label,
     speed_label: gtk::Label,
     message: gtk::Label,
     pub ai: Rc<AiSettingsUi>,
     pub mic_test: Rc<MicTest>,
     pub input_gain: RefCell<Option<gtk::Scale>>,
+    /// "Delete audio after" (Storage).
+    pub audio_retention: gtk::DropDown,
     on_model_changed: Handler<()>,
 }
 
@@ -50,17 +63,27 @@ impl SettingsPage {
         stack.set_hexpand(true);
         let nav_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
         nav_box.add_css_class("fx-settings-nav");
-        nav_box.set_size_request(200, -1);
+        nav_box.set_size_request(220, -1);
 
-        let models_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let backend_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        backend_box.add_css_class("linked");
-        backend_box.set_homogeneous(true);
+        let models_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let backend_box = gtk::Grid::builder()
+            .column_homogeneous(true)
+            .row_homogeneous(true)
+            .column_spacing(4)
+            .row_spacing(4)
+            .css_classes(["fx-segmented", "grid"])
+            .build();
+        backend_box.update_property(&[gtk::accessible::Property::Label("Compute")]);
+        let backend_note = label("", &["fx-field-note"]);
+        backend_note.set_wrap(true);
         let speed_label = label("Latency per sentence: not measured yet", &["fx-status"]);
         speed_label.set_wrap(true);
         speed_label.set_hexpand(true);
         let message = label("", &["fx-field-error"]);
         message.set_wrap(true);
+        message.set_visible(false);
+        let retention_labels: Vec<&str> = RETENTION.iter().map(|(l, _)| *l).collect();
+        let audio_retention = gtk::DropDown::from_strings(&retention_labels);
 
         let ai = AiSettingsUi::new(deps.clone());
         let mic_test = MicTest::new(deps.clone());
@@ -70,6 +93,7 @@ impl SettingsPage {
             ai,
             mic_test,
             input_gain: RefCell::default(),
+            audio_retention,
             deps,
             engine,
             stack,
@@ -77,6 +101,7 @@ impl SettingsPage {
             models_box,
             installing: RefCell::default(),
             backend_box,
+            backend_note,
             speed_label,
             message,
             on_model_changed: RefCell::default(),
@@ -98,8 +123,10 @@ impl SettingsPage {
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .build();
             page.stack.add_named(&scroll, Some(id));
-            let b = gtk::Button::with_label(title);
-            b.add_css_class("fx-nav");
+            let b = gtk::Button::builder()
+                .child(&label(title, &[]))
+                .css_classes(["fx-settings-tab"])
+                .build();
             nav_box.append(&b);
             nav.push((id.to_string(), b));
         }
@@ -141,36 +168,58 @@ impl SettingsPage {
         }
     }
 
+    fn show_message(&self, text: &str) {
+        self.message.set_text(text);
+        self.message.set_visible(!text.is_empty());
+    }
+
     fn save(&self) {
         if let Err(e) = self.deps.save_settings() {
-            self.message.set_text(&format!("Settings not saved: {e}"));
+            self.show_message(&format!("Settings not saved: {e}"));
         }
     }
 
+    // ---- Speech model ----
+
     fn model_section(self: &Rc<Self>) -> gtk::Box {
-        let b = section("Speech model");
+        let (outer, b) = page(None, 22);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let hint = label(
-            "Models live in the models folder; conversions need Python with torch.",
-            &["fx-field-note"],
-        );
-        hint.set_hexpand(true);
-        hint.set_wrap(true);
+        let title = label("Speech model", &["fx-h1"]);
+        title.set_hexpand(true);
         let add = gtk::Button::with_label("Add custom GGML model…");
         add.add_css_class("fx-secondary");
-        head.append(&hint);
+        add.set_valign(gtk::Align::Center);
+        add.set_tooltip_text(Some(
+            "Copies a GGML .bin file into the models folder. Converting catalog models needs Python with torch.",
+        ));
+        head.append(&title);
         head.append(&add);
         b.append(&head);
         b.append(&self.models_box);
         b.append(&self.message);
-        b.append(&label("Compute", &["fx-crumb-current"]));
-        b.append(&self.backend_box);
+
+        let bottom = gtk::Grid::builder()
+            .column_homogeneous(true)
+            .column_spacing(24)
+            .build();
+        let compute = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        compute.append(&label("Compute", &["fx-h2"]));
+        compute.append(&self.backend_box);
+        compute.append(&self.backend_note);
+        let speed = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        speed.set_valign(gtk::Align::Start);
+        speed.append(&label("Speed test", &["fx-h2"]));
         let speed_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let run = gtk::Button::with_label("Run speed test");
+        speed_row.add_css_class("fx-test-box");
+        let run = gtk::Button::with_label("Run test");
         run.add_css_class("fx-secondary");
+        run.set_valign(gtk::Align::Center);
         speed_row.append(&self.speed_label);
         speed_row.append(&run);
-        b.append(&speed_row);
+        speed.append(&speed_row);
+        bottom.attach(&compute, 0, 0, 1, 1);
+        bottom.attach(&speed, 1, 0, 1, 1);
+        b.append(&bottom);
 
         let weak = Rc::downgrade(self);
         run.connect_clicked(move |_| {
@@ -198,7 +247,7 @@ impl SettingsPage {
                 },
             );
         });
-        b
+        outer
     }
 
     /// Copies a GGML file into the models folder and selects it.
@@ -207,9 +256,7 @@ impl SettingsPage {
         let dest = self.deps.paths.models().join(name);
         match std::fs::create_dir_all(self.deps.paths.models()).and_then(|_| std::fs::copy(path, &dest)) {
             Ok(_) => self.use_model(&name.to_string_lossy()),
-            Err(e) => self
-                .message
-                .set_text(&format!("Could not copy {}: {e}", path.display())),
+            Err(e) => self.show_message(&format!("Could not copy {}: {e}", path.display())),
         }
     }
 
@@ -229,47 +276,56 @@ impl SettingsPage {
             self.models_box.remove(&c);
         }
         let active = self.deps.settings.borrow().model.clone();
-        let grid = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .max_children_per_line(3)
-            .min_children_per_line(1)
+        let grid = gtk::Grid::builder()
+            .column_homogeneous(true)
             .column_spacing(14)
             .row_spacing(14)
-            .homogeneous(true)
             .build();
+        let mut cards = Vec::new();
         for m in models::catalog() {
             let installed = models::is_installed(&m, &self.deps.paths);
-            let card = card(m.name, m.publisher, m.description, &tags(&m));
-            if m.file_name == active {
-                card.add_css_class("active");
-            }
-            card.append(&self.model_action(m.file_name, installed, m.file_name == active, Some(m.clone())));
-            grid.insert(&card, -1);
+            let is_active = m.file_name == active;
+            let card = card(m.name, m.publisher, m.description, &tags(&m), is_active);
+            card.append(&self.model_action(m.file_name, installed, is_active, Some(m.clone())));
+            cards.push(card);
         }
         for p in models::custom_models(&self.deps.paths) {
             let name = p
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let card = card(&name, "Custom", "A GGML model you added.", &[]);
-            if name == active {
-                card.add_css_class("active");
-            }
-            card.append(&self.model_action(&name, true, name == active, None));
-            grid.insert(&card, -1);
+            let is_active = name == active;
+            let card = card(
+                &name,
+                "Custom",
+                "A GGML model you added.",
+                &[("GGML".to_string(), false)],
+                is_active,
+            );
+            card.append(&self.model_action(&name, true, is_active, None));
+            cards.push(card);
+        }
+        for (i, card) in cards.iter().enumerate() {
+            grid.attach(card, (i % 3) as i32, (i / 3) as i32, 1, 1);
+        }
+        // Keep three columns even with fewer cards.
+        for i in cards.len()..3 {
+            grid.attach(&gtk::Box::new(gtk::Orientation::Vertical, 0), i as i32, 0, 1, 1);
         }
         self.models_box.append(&grid);
     }
 
+    /// The bottom of a model card: Use / Download, or nothing when active.
     fn model_action(
         self: &Rc<Self>,
         file: &str,
         installed: bool,
         active: bool,
         entry: Option<models::CatalogModel>,
-    ) -> gtk::Widget {
+    ) -> gtk::Box {
+        let area = gtk::Box::new(gtk::Orientation::Vertical, 6);
         if active && installed {
-            return label("Active", &["fx-rec-state"]).upcast();
+            return area;
         }
         let b = gtk::Button::with_label(if installed {
             "Use"
@@ -281,10 +337,10 @@ impl SettingsPage {
             "Download"
         });
         b.add_css_class("fx-secondary");
-        b.set_halign(gtk::Align::Start);
         if active {
             b.set_tooltip_text(Some("This model is selected but not on this computer yet"));
         }
+        area.append(&b);
         let file = file.to_string();
         let weak = Rc::downgrade(self);
         b.connect_clicked(move |b| {
@@ -294,27 +350,41 @@ impl SettingsPage {
                 _ => p.use_model(&file),
             }
         });
-        b.upcast()
+        area
     }
 
     fn install(self: &Rc<Self>, m: models::CatalogModel, button: &gtk::Button) {
         if self.installing.borrow().is_some() {
-            self.message.set_text("Another model is already being installed.");
+            self.show_message("Another model is already being installed.");
             return;
         }
-        let progress = gtk::ProgressBar::new();
-        progress.set_show_text(true);
-        let status = label("Starting…", &["fx-field-note"]);
-        if let Some(parent) = button.parent().and_downcast::<gtk::Box>() {
-            parent.append(&progress);
-            parent.append(&status);
+        let converting = matches!(m.source, Source::Convert { .. });
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let status = label(
+            if converting {
+                "Converting to GGML"
+            } else {
+                "Downloading"
+            },
+            &["fx-install-text"],
+        );
+        status.set_hexpand(true);
+        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let percent = label("", &["fx-install-text"]);
+        line.append(&status);
+        line.append(&percent);
+        let progress = gtk::ProgressBar::builder().css_classes(["thin", "ink"]).build();
+        if let Some(area) = button.parent().and_downcast::<gtk::Box>() {
+            area.remove(button);
+            area.append(&line);
+            area.append(&progress);
         }
-        button.set_sensitive(false);
         let cancel = Arc::new(AtomicBool::new(false));
         *self.installing.borrow_mut() = Some(Install {
             _cancel: Arc::clone(&cancel),
             bar: progress,
             status,
+            percent,
         });
         let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
         let paths = self.deps.paths.clone();
@@ -356,28 +426,34 @@ impl SettingsPage {
             while let Ok(msg) = rx.recv().await {
                 let Some(p) = weak.upgrade() else { return };
                 let guard = p.installing.borrow();
-                let Some(Install { bar, status, .. }) = guard.as_ref() else {
+                let Some(Install {
+                    bar, status, percent, ..
+                }) = guard.as_ref()
+                else {
                     return;
                 };
                 match msg {
                     Ok(Progress::Bytes { done, total }) => {
                         if let Some(t) = total.filter(|t| *t > 0) {
-                            bar.set_fraction(done as f64 / t as f64);
+                            let f = done as f64 / t as f64;
+                            bar.set_fraction(f);
+                            percent.set_text(&format!("{:.0}%", f * 100.0));
                         } else {
                             bar.pulse();
+                            percent.set_text(&format!("{} MB", done / 1_000_000));
                         }
-                        bar.set_text(Some(&format!("{} MB", done / 1_000_000)));
                     }
                     Ok(Progress::Line(line)) => {
                         bar.pulse();
                         status.set_text(&line.chars().take(90).collect::<String>());
+                        status.set_tooltip_text(Some(&line));
                     }
                     Err(result) => {
                         drop(guard);
                         p.installing.borrow_mut().take();
                         match result {
-                            Ok(()) => p.message.set_text(""),
-                            Err(e) => p.message.set_text(&format!("Installing the model failed: {e}")),
+                            Ok(()) => p.show_message(""),
+                            Err(e) => p.show_message(&format!("Installing the model failed: {e}")),
                         }
                         p.render_models();
                         return;
@@ -392,16 +468,35 @@ impl SettingsPage {
             self.backend_box.remove(&c);
         }
         let current = self.deps.settings.borrow().backend;
+        let infos = models::backends();
+        let auto_uses = infos
+            .iter()
+            .find(|i| i.available && i.backend != Backend::Auto)
+            .map(|i| i.label)
+            .unwrap_or("CPU");
         let mut group: Option<gtk::ToggleButton> = None;
-        for info in models::backends() {
-            let inner = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            inner.append(&label(info.label, &["fx-field-label"]));
-            inner.append(&label(&info.detail, &["fx-field-note"]));
+        for (i, info) in infos.iter().enumerate() {
+            let sub = match info.backend {
+                Backend::Auto => format!("Uses: {auto_uses}"),
+                Backend::Cpu => cpu_name()
+                    .map(|n| format!("{n} · {}", info.detail))
+                    .unwrap_or_else(|| info.detail.clone()),
+                _ => info.detail.clone(),
+            };
+            let inner = gtk::Box::new(gtk::Orientation::Vertical, 1);
+            inner.set_valign(gtk::Align::Center);
+            let title = gtk::Label::new(Some(info.label));
+            let sub_label = gtk::Label::new(Some(&sub));
+            sub_label.add_css_class("fx-seg-sub");
+            sub_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            inner.append(&title);
+            inner.append(&sub_label);
             let b = gtk::ToggleButton::builder()
                 .child(&inner)
                 .sensitive(info.available)
                 .tooltip_text(info.detail.as_str())
                 .build();
+            b.update_property(&[gtk::accessible::Property::Label(info.label)]);
             if let Some(g) = &group {
                 b.set_group(Some(g));
             } else {
@@ -416,6 +511,7 @@ impl SettingsPage {
                     && p.deps.settings.borrow().backend != backend
                 {
                     p.deps.settings.borrow_mut().backend = backend;
+                    p.backend_note.set_text(backend_note(backend));
                     p.save();
                     p.engine.reset();
                     if let Some(f) = p.on_model_changed.borrow().clone() {
@@ -423,8 +519,9 @@ impl SettingsPage {
                     }
                 }
             });
-            self.backend_box.append(&b);
+            self.backend_box.attach(&b, (i % 2) as i32, (i / 2) as i32, 1, 1);
         }
+        self.backend_note.set_text(backend_note(current));
     }
 
     pub fn run_speed_test(self: &Rc<Self>) {
@@ -470,14 +567,24 @@ impl SettingsPage {
         self.speed_label.text().to_string()
     }
 
+    // ---- Dictation ----
+
     fn dictation_section(self: &Rc<Self>) -> gtk::Box {
-        let b = section("Dictation");
+        let (outer, b) = page(Some(760), 20);
+        b.append(&label("Dictation", &["fx-h1"]));
         let s = self.deps.settings();
+        let grid = gtk::Grid::builder()
+            .column_homogeneous(true)
+            .column_spacing(20)
+            .row_spacing(20)
+            .build();
+
         let devices = input_devices();
         let mut names = vec!["Default microphone".to_string()];
         names.extend(devices.iter().map(|d| d.name.clone()));
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let mic = gtk::DropDown::from_strings(&refs);
+        mic.update_property(&[gtk::accessible::Property::Label("Microphone")]);
         mic.set_selected(
             devices
                 .iter()
@@ -485,25 +592,7 @@ impl SettingsPage {
                 .map(|i| i as u32 + 1)
                 .unwrap_or(0),
         );
-        b.append(&field("Microphone", &mic));
-
-        let gain = gtk::Scale::with_range(gtk::Orientation::Horizontal, -20.0, 20.0, 1.0);
-        gain.set_value(f64::from(s.input_gain_db));
-        gain.set_draw_value(true);
-        gain.set_value_pos(gtk::PositionType::Right);
-        gain.set_format_value_func(|_, v| format!("{v:+.0} dB"));
-        gain.add_mark(0.0, gtk::PositionType::Bottom, None);
-        gain.update_property(&[gtk::accessible::Property::Label("Input volume, decibels")]);
-        b.append(&field("Input volume (added to the system level)", &gain));
-        *self.input_gain.borrow_mut() = Some(gain.clone());
-        let weak = Rc::downgrade(self);
-        gain.connect_value_changed(move |sc| {
-            if let Some(p) = weak.upgrade() {
-                p.deps.settings.borrow_mut().input_gain_db = sc.value().round() as f32;
-                p.save();
-            }
-        });
-        b.append(&self.mic_test.root);
+        grid.attach(&field("Microphone", &mic), 0, 0, 1, 1);
         let weak = Rc::downgrade(self);
         mic.connect_selected_notify(move |dd| {
             let Some(p) = weak.upgrade() else { return };
@@ -519,36 +608,44 @@ impl SettingsPage {
 
         let pause = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.3, 2.0, 0.1);
         pause.set_value(f64::from(s.pause_ms) / 1000.0);
-        pause.set_draw_value(true);
-        pause.set_value_pos(gtk::PositionType::Right);
         pause.update_property(&[gtk::accessible::Property::Label(
             "Pause before text is committed, seconds",
         )]);
-        b.append(&field("Pause before text is committed (seconds)", &pause));
+        let (pause_field, pause_value) = slider_field("Pause before text is committed", &pause);
+        let show_pause = move |v: f64| pause_value.set_text(&format!("{v:.1} s"));
+        show_pause(pause.value());
+        grid.attach(&pause_field, 1, 0, 1, 1);
         let weak = Rc::downgrade(self);
         pause.connect_value_changed(move |sc| {
+            show_pause(sc.value());
             if let Some(p) = weak.upgrade() {
                 p.deps.settings.borrow_mut().pause_ms = (sc.value() * 1000.0).round() as u32;
                 p.save();
             }
         });
 
-        b.append(
-            &self.switch_row("Show a live preview while I speak", s.show_preview, |s, v| {
-                s.show_preview = v
-            }),
-        );
-        b.append(&self.switch_row(
-            "Keep the audio of dictations (for playback)",
-            s.keep_dictation_audio,
-            |s, v| s.keep_dictation_audio = v,
-        ));
+        let gain = gtk::Scale::with_range(gtk::Orientation::Horizontal, -20.0, 20.0, 1.0);
+        gain.set_value(f64::from(s.input_gain_db));
+        gain.update_property(&[gtk::accessible::Property::Label("Input volume, decibels")]);
+        let (gain_field, gain_value) = slider_field("Input volume (added to the system level)", &gain);
+        let show_gain = move |v: f64| gain_value.set_text(&format!("{v:+.0} dB"));
+        show_gain(gain.value());
+        grid.attach(&gain_field, 0, 1, 1, 1);
+        *self.input_gain.borrow_mut() = Some(gain.clone());
+        let weak = Rc::downgrade(self);
+        gain.connect_value_changed(move |sc| {
+            show_gain(sc.value());
+            if let Some(p) = weak.upgrade() {
+                p.deps.settings.borrow_mut().input_gain_db = sc.value().round() as f32;
+                p.save();
+            }
+        });
 
         let user = gtk::Entry::builder()
             .text(s.user_name.as_str())
             .placeholder_text("Used for {user} in templates")
             .build();
-        b.append(&field("Your name", &user));
+        grid.attach(&field("Your name", &user), 1, 1, 1, 1);
         let weak = Rc::downgrade(self);
         user.connect_changed(move |e| {
             if let Some(p) = weak.upgrade() {
@@ -556,17 +653,69 @@ impl SettingsPage {
                 p.save();
             }
         });
+        b.append(&grid);
 
+        self.mic_test.root.add_css_class("fx-test-box");
+        b.append(&self.mic_test.root);
+
+        let checks = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        checks.append(
+            &self.check_row("Show live preview while I speak", s.show_preview, |s, v| {
+                s.show_preview = v
+            }),
+        );
+        checks.append(&self.check_row(
+            "Keep the audio of dictations (needed for playback)",
+            s.keep_dictation_audio,
+            |s, v| s.keep_dictation_audio = v,
+        ));
+        b.append(&checks);
+
+        let commands = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let title = label("Voice commands", &["fx-h2"]);
+        title.set_hexpand(true);
+        head.append(&title);
+        head.append(&label(
+            "Only trigger when the whole utterance is the command",
+            &["fx-field-note"],
+        ));
+        commands.append(&head);
+        let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.add_css_class("fx-table");
+        table.set_overflow(gtk::Overflow::Hidden);
+        let row = |a: &str, b: &str, classes: &[&str]| {
+            let r = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            r.set_homogeneous(true);
+            for c in classes {
+                r.add_css_class(c);
+            }
+            r.append(&label(a, &[]));
+            r.append(&label(b, &[]));
+            r
+        };
+        table.append(&row("SAY", "ACTION", &["fx-table-head"]));
+        for (say, c) in &s.commands.phrases {
+            table.append(&row(&format!("«{say}»"), c.label(), &["fx-table-row", "cmd"]));
+        }
+        commands.append(&table);
+        b.append(&commands);
+
+        let vocab_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        vocab_box.append(&label("Vocabulary", &["fx-h2"]));
+        vocab_box.append(&label(
+            "Names and terms the model should know. Passed as context with each sentence.",
+            &["fx-field-note"],
+        ));
         let vocab = gtk::TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
-            .height_request(80)
+            .height_request(60)
+            .css_classes(["fx-boxed"])
             .build();
-        vocab.add_css_class("fx-vocab");
+        vocab.update_property(&[gtk::accessible::Property::Label("Vocabulary")]);
         vocab.buffer().set_text(&s.vocabulary);
-        b.append(&field(
-            "Vocabulary: names and terms the model should know",
-            &vocab,
-        ));
+        vocab_box.append(&vocab);
+        b.append(&vocab_box);
         let weak = Rc::downgrade(self);
         vocab.buffer().connect_changed(move |buf| {
             if let Some(p) = weak.upgrade() {
@@ -575,73 +724,74 @@ impl SettingsPage {
                 p.save();
             }
         });
-        let cmds: Vec<String> = s
-            .commands
-            .phrases
-            .iter()
-            .map(|(say, c)| format!("«{say}» → {}", c.label()))
-            .collect();
-        let note = label(
-            &format!("Voice commands (whole utterance only): {}", cmds.join(" · ")),
+        let shortcut = label(
+            "Shortcut: Ctrl+Space starts and stops dictation inside Fennec. A system-wide shortcut comes later.",
             &["fx-field-note"],
         );
-        note.set_wrap(true);
-        b.append(&note);
-        b.append(&label(
-            "Shortcut: Ctrl+Space starts and stops dictation inside Fennec.",
-            &["fx-field-note"],
-        ));
-        b
+        shortcut.set_wrap(true);
+        b.append(&shortcut);
+        outer
     }
 
-    fn switch_row(
+    fn check_row(
         self: &Rc<Self>,
         text: &str,
         value: bool,
         set: fn(&mut crate::config::Settings, bool),
-    ) -> gtk::Box {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        let l = label(text, &["fx-field-label"]);
-        l.set_hexpand(true);
-        let sw = gtk::Switch::builder()
-            .active(value)
-            .valign(gtk::Align::Center)
-            .build();
-        sw.update_property(&[gtk::accessible::Property::Label(text)]);
-        row.append(&l);
-        row.append(&sw);
+    ) -> gtk::CheckButton {
+        let c = gtk::CheckButton::builder().label(text).active(value).build();
         let weak = Rc::downgrade(self);
-        sw.connect_active_notify(move |sw| {
+        c.connect_toggled(move |c| {
             if let Some(p) = weak.upgrade() {
-                set(&mut p.deps.settings.borrow_mut(), sw.is_active());
+                set(&mut p.deps.settings.borrow_mut(), c.is_active());
                 p.save();
             }
         });
-        row
+        c
     }
 
-    fn storage_section(&self) -> gtk::Box {
-        let b = section("Storage");
+    // ---- Storage ----
+
+    fn storage_section(self: &Rc<Self>) -> gtk::Box {
+        let (outer, b) = page(Some(760), 16);
+        b.append(&label("Storage", &["fx-h1"]));
+        let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.add_css_class("fx-table");
+        table.set_overflow(gtk::Overflow::Hidden);
         let p = &self.deps.paths;
-        for (name, path) in [
+        for (i, (name, path)) in [
             ("Documents", p.database()),
             ("Audio", p.audio()),
             ("Speech models", p.models()),
             ("Templates & prompts", p.config_dir.clone()),
             ("Exports", p.exports()),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
             row.add_css_class("fx-storage-row");
-            let n = label(name, &["fx-field-label"]);
+            if i == 0 {
+                row.add_css_class("first");
+            }
+            let n = label(name, &["fx-storage-name"]);
             n.set_size_request(160, -1);
-            let shown = path
-                .to_string_lossy()
-                .replacen(&std::env::var("HOME").unwrap_or_default(), "~", 1);
-            let v = label(&shown, &["fx-stats"]);
+            let mut shown =
+                path.to_string_lossy()
+                    .replacen(&std::env::var("HOME").unwrap_or_default(), "~", 1);
+            if path.extension().is_none() {
+                shown.push('/');
+            }
+            let v = label(&shown, &["fx-mono"]);
             v.set_hexpand(true);
             v.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            v.set_tooltip_text(Some(&shown));
             let open = gtk::Button::with_label("Open folder");
             open.add_css_class("fx-secondary");
+            open.set_valign(gtk::Align::Center);
+            open.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Open the {name} folder"
+            ))]);
             let folder: PathBuf = if path.extension().is_some() {
                 path.parent().map(PathBuf::from).unwrap_or(path.clone())
             } else {
@@ -659,9 +809,43 @@ impl SettingsPage {
             row.append(&n);
             row.append(&v);
             row.append(&open);
-            b.append(&row);
+            table.append(&row);
         }
-        b
+        b.append(&table);
+
+        let days = self.deps.settings().delete_audio_after_days;
+        let sel = RETENTION
+            .iter()
+            .position(|(_, d)| *d == days)
+            .or_else(|| {
+                days.map(|d| {
+                    RETENTION
+                        .iter()
+                        .rposition(|(_, r)| r.is_some_and(|r| r <= d))
+                        .unwrap_or(1)
+                })
+            })
+            .unwrap_or(0);
+        self.audio_retention.set_selected(sel as u32);
+        self.audio_retention
+            .update_property(&[gtk::accessible::Property::Label("Delete audio after")]);
+        let retention = field("Delete audio after", &self.audio_retention);
+        let note = label(
+            "Text is kept. Playback and re-transcribing need the audio. Applied when Fennec starts.",
+            &["fx-field-note"],
+        );
+        note.set_wrap(true);
+        retention.append(&note);
+        b.append(&narrow(&retention, 320));
+        let weak = Rc::downgrade(self);
+        self.audio_retention.connect_selected_notify(move |dd| {
+            if let Some(p) = weak.upgrade() {
+                let days = RETENTION.get(dd.selected() as usize).and_then(|(_, d)| *d);
+                p.deps.settings.borrow_mut().delete_audio_after_days = days;
+                p.save();
+            }
+        });
+        outer
     }
 
     /// Model card titles, in order (tests).
@@ -685,42 +869,249 @@ impl SettingsPage {
     }
 }
 
-fn tags(m: &models::CatalogModel) -> Vec<String> {
-    let mut t = vec![m.license.to_string(), m.size.to_string()];
+fn backend_note(b: Backend) -> &'static str {
+    match b {
+        Backend::Auto => {
+            "Picks NVIDIA (CUDA) if present, then Vulkan, then CPU. Falls back to CPU if the GPU fails to start."
+        }
+        Backend::Cuda => "Fastest on NVIDIA GPUs. Falls back to CPU if the GPU fails to start.",
+        Backend::Vulkan => "Works on AMD, Intel and NVIDIA GPUs.",
+        Backend::Cpu => "Works everywhere. Slower: run the speed test to see if live dictation keeps up.",
+    }
+}
+
+/// "Ryzen 5 7640U" from /proc/cpuinfo, without the vendor's boilerplate.
+fn cpu_name() -> Option<String> {
+    let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let name = info.lines().find_map(|l| {
+        l.strip_prefix("model name")?
+            .split_once(':')
+            .map(|(_, v)| v.trim().to_string())
+    })?;
+    let name = name
+        .replace("AMD ", "")
+        .replace("Intel(R) Core(TM) ", "")
+        .replace("(R)", "")
+        .replace("(TM)", "");
+    let name = name.split(" w/ ").next().unwrap_or(&name);
+    let name = name.split(" with ").next().unwrap_or(name);
+    let name = name.trim_end_matches(" CPU").trim_end_matches(" Processor");
+    let words: Vec<&str> = name
+        .split_whitespace()
+        .filter(|w| !w.ends_with("-Core") && *w != "CPU" && !w.starts_with('@'))
+        .collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// Licence (warn style when non-commercial), size and WER.
+fn tags(m: &models::CatalogModel) -> Vec<(String, bool)> {
+    let licence = if m.non_commercial && m.license.contains("non-commercial") {
+        "Non-commercial".to_string()
+    } else {
+        m.license.to_string()
+    };
+    let mut t = vec![(licence, m.non_commercial), (m.size.to_string(), false)];
     if let Some(w) = m.mean_wer {
-        t.push(format!("Mean WER {w}"));
+        t.push((format!("Mean WER {w}"), false));
     }
     t
 }
 
-fn card(name: &str, publisher: &str, description: &str, tags: &[String]) -> gtk::Box {
-    let c = gtk::Box::new(gtk::Orientation::Vertical, 8);
+fn card(name: &str, publisher: &str, description: &str, tags: &[(String, bool)], active: bool) -> gtk::Box {
+    let c = gtk::Box::new(gtk::Orientation::Vertical, 10);
     c.add_css_class("fx-model-card");
-    c.append(&label(name, &["fx-crumb-current"]));
-    c.append(&label(publisher, &["fx-stats"]));
-    let d = label(description, &["fx-field-note"]);
-    d.set_wrap(true);
-    d.set_max_width_chars(36);
-    d.set_width_chars(24);
-    c.append(&d);
-    let t = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    for tag in tags {
-        t.append(&label(tag, &["fx-chip"]));
+    c.set_hexpand(true);
+    if active {
+        c.add_css_class("active");
     }
-    c.append(&t);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    titles.set_hexpand(true);
+    let n = label(name, &["fx-model-name"]);
+    n.set_wrap(true);
+    titles.append(&n);
+    titles.append(&label(publisher, &["fx-model-publisher"]));
+    top.append(&titles);
+    if active {
+        let pill = label("Active", &["fx-badge", "active"]);
+        pill.set_valign(gtk::Align::Start);
+        top.append(&pill);
+    }
+    c.append(&top);
+    let d = label(description, &["fx-model-desc"]);
+    d.set_wrap(true);
+    d.set_width_chars(20);
+    d.set_max_width_chars(40);
+    d.set_yalign(0.0);
+    c.append(&d);
+    let chips = wrap_box();
+    for (tag, warn) in tags {
+        chips.append(&label(tag, &["fx-badge", if *warn { "warn" } else { "plain" }]));
+    }
+    c.append(&chips);
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    c.append(&spacer);
     c
 }
 
-fn section(title: &str) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    b.add_css_class("fx-settings-section");
-    b.append(&label(title, &["fx-project-title"]));
+/// A box that lays its children out left to right at their natural width,
+/// wrapping onto a new line when the next one does not fit (tag chips).
+fn wrap_box() -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    b.set_layout_manager(Some(glib::Object::new::<wrap::WrapLayout>()));
     b
 }
 
-fn field(name: &str, w: &impl IsA<gtk::Widget>) -> gtk::Box {
+mod wrap {
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+
+    const GAP: i32 = 6;
+
+    glib::wrapper! {
+        pub struct WrapLayout(ObjectSubclass<imp::WrapLayout>) @extends gtk::LayoutManager;
+    }
+
+    fn children(w: &gtk::Widget) -> Vec<gtk::Widget> {
+        let mut out = Vec::new();
+        let mut c = w.first_child();
+        while let Some(x) = c {
+            c = x.next_sibling();
+            if x.is_visible() {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    /// Where each child goes for a line `width` wide, and the total height.
+    #[allow(clippy::type_complexity)]
+    fn place(w: &gtk::Widget, width: i32) -> (Vec<(gtk::Widget, gtk::Allocation)>, i32) {
+        let (mut x, mut y, mut line_h) = (0, 0, 0);
+        let mut out = Vec::new();
+        for c in children(w) {
+            let cw = c.measure(gtk::Orientation::Horizontal, -1).1.min(width.max(1));
+            let ch = c.measure(gtk::Orientation::Vertical, cw).1;
+            if x > 0 && x + cw > width {
+                x = 0;
+                y += line_h + GAP;
+                line_h = 0;
+            }
+            out.push((c, gtk::Allocation::new(x, y, cw, ch)));
+            x += cw + GAP;
+            line_h = line_h.max(ch);
+        }
+        (out, y + line_h)
+    }
+
+    mod imp {
+        use super::*;
+
+        #[derive(Default)]
+        pub struct WrapLayout;
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for WrapLayout {
+            const NAME: &'static str = "FennecWrapLayout";
+            type Type = super::WrapLayout;
+            type ParentType = gtk::LayoutManager;
+        }
+
+        impl ObjectImpl for WrapLayout {}
+
+        impl LayoutManagerImpl for WrapLayout {
+            fn request_mode(&self, _: &gtk::Widget) -> gtk::SizeRequestMode {
+                gtk::SizeRequestMode::HeightForWidth
+            }
+
+            fn measure(
+                &self,
+                w: &gtk::Widget,
+                orientation: gtk::Orientation,
+                for_size: i32,
+            ) -> (i32, i32, i32, i32) {
+                if orientation == gtk::Orientation::Horizontal {
+                    let kids = children(w);
+                    let sizes: Vec<(i32, i32)> = kids
+                        .iter()
+                        .map(|c| {
+                            let (min, nat, _, _) = c.measure(gtk::Orientation::Horizontal, -1);
+                            (min, nat)
+                        })
+                        .collect();
+                    let min = sizes.iter().map(|s| s.0).max().unwrap_or(0);
+                    let nat = sizes.iter().map(|s| s.1).sum::<i32>() + GAP * (kids.len() as i32 - 1).max(0);
+                    (min, nat, -1, -1)
+                } else {
+                    let width = if for_size < 0 { i32::MAX / 4 } else { for_size };
+                    let h = place(w, width).1;
+                    (h, h, -1, -1)
+                }
+            }
+
+            fn allocate(&self, w: &gtk::Widget, width: i32, _: i32, _: i32) {
+                for (c, a) in place(w, width).0 {
+                    c.size_allocate(&a, -1);
+                }
+            }
+        }
+    }
+}
+
+/// A settings page: padded, at most `max_width` wide. Returns the page and
+/// the box its content goes in.
+pub(super) fn page(max_width: Option<i32>, spacing: i32) -> (gtk::Box, gtk::Box) {
+    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    outer.add_css_class("fx-settings-section");
+    let content = gtk::Box::new(gtk::Orientation::Vertical, spacing);
+    match max_width {
+        Some(w) => {
+            let clamp = adw::Clamp::builder()
+                .maximum_size(w)
+                .tightening_threshold(w)
+                .child(&content)
+                .build();
+            // Left-aligned like the mockup, not centred.
+            clamp.set_halign(gtk::Align::Start);
+            outer.append(&clamp);
+        }
+        None => outer.append(&content),
+    }
+    (outer, content)
+}
+
+/// `w` at most `width` wide, on the left.
+pub(super) fn narrow(w: &impl IsA<gtk::Widget>, width: i32) -> adw::Clamp {
+    let clamp = adw::Clamp::builder()
+        .maximum_size(width)
+        .tightening_threshold(width)
+        .child(w)
+        .build();
+    clamp.set_halign(gtk::Align::Start);
+    clamp.set_size_request(width.min(240), -1);
+    clamp
+}
+
+pub(super) fn field(name: &str, w: &impl IsA<gtk::Widget>) -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
     b.append(&label(name, &["fx-field-label"]));
     b.append(w);
     b
+}
+
+/// A labelled slider with its value in mono on the right.
+fn slider_field(name: &str, scale: &gtk::Scale) -> (gtk::Box, gtk::Label) {
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let l = label(name, &["fx-field-label"]);
+    l.set_hexpand(true);
+    let value = label("", &["fx-mono-value"]);
+    head.append(&l);
+    head.append(&value);
+    b.append(&head);
+    scale.set_draw_value(false);
+    b.append(scale);
+    (b, value)
 }

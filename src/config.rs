@@ -86,6 +86,9 @@ pub struct Settings {
     pub pause_ms: u32,
     pub show_preview: bool,
     pub keep_dictation_audio: bool,
+    /// Recordings older than this many days are deleted at startup (the
+    /// text stays). `None`: keep them.
+    pub delete_audio_after_days: Option<u32>,
     pub vocabulary: String,
     /// Used for `{user}` in templates.
     pub user_name: String,
@@ -104,6 +107,7 @@ impl Default for Settings {
             pause_ms: 600,
             show_preview: true,
             keep_dictation_audio: true,
+            delete_audio_after_days: None,
             vocabulary: String::new(),
             user_name: String::new(),
             default_template: "notat".into(),
@@ -180,6 +184,7 @@ mod tests {
         let s = Settings {
             user_name: "Ane".into(),
             pause_ms: 800,
+            delete_audio_after_days: Some(90),
             ..Default::default()
         };
         s.save(&p).unwrap();

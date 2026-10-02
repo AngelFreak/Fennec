@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::actions::{self, Answer, Citation, Cleaned, DocText};
-use super::{AiError, AiSettings, Cancel, LlmProvider, Locality, SecretStore, connect, privacy};
+use super::{AiError, AiJob, AiSettings, Cancel, LlmProvider, Locality, SecretStore, connect, privacy};
 use crate::store::{ActionItem, DocumentFilter, DocumentId, NewSummary, ProjectFilter, Store};
 use crate::template::Template;
 
@@ -73,10 +73,32 @@ impl AiService {
 
     /// The default provider, cleared for `scope` by the privacy gate.
     pub fn provider_for(&self, store: &Store, scope: &Scope) -> Result<Box<dyn LlmProvider>, AiError> {
+        let cfg = self.settings.active().ok_or(AiError::NoProvider);
+        self.gate(store, scope, cfg)
+    }
+
+    /// The provider set for `job` (else the default), cleared for `scope`
+    /// by the privacy gate.
+    pub fn provider_for_job(
+        &self,
+        store: &Store,
+        scope: &Scope,
+        job: AiJob,
+    ) -> Result<Box<dyn LlmProvider>, AiError> {
+        let cfg = self.settings.for_job(job).ok_or(AiError::NoProvider);
+        self.gate(store, scope, cfg)
+    }
+
+    fn gate(
+        &self,
+        store: &Store,
+        scope: &Scope,
+        cfg: Result<&super::ProviderConfig, AiError>,
+    ) -> Result<Box<dyn LlmProvider>, AiError> {
         if !self.settings.enabled {
             return Err(AiError::Disabled);
         }
-        let cfg = self.settings.active().ok_or(AiError::NoProvider)?;
+        let cfg = cfg?;
         let docs = scope_documents(store, scope)?;
         let mut local_only = false;
         for id in &docs {
@@ -90,6 +112,14 @@ impl AiService {
     /// Records that the user agreed to send `scope` to the default provider.
     pub fn consent(&self, store: &Store, scope: &Scope) -> Result<(), AiError> {
         let cfg = self.settings.active().ok_or(AiError::NoProvider)?;
+        store.add_cloud_consent(&scope.key(), &cfg.id)?;
+        Ok(())
+    }
+
+    /// Records that the user agreed to send `scope` to the provider `provider_id`
+    /// (the one a [`privacy::PrivacyError::NeedsConsent`] names).
+    pub fn consent_to(&self, store: &Store, scope: &Scope, provider_id: &str) -> Result<(), AiError> {
+        let cfg = self.settings.provider(provider_id).ok_or(AiError::NoProvider)?;
         store.add_cloud_consent(&scope.key(), &cfg.id)?;
         Ok(())
     }
@@ -112,9 +142,10 @@ impl AiService {
         &self,
         store: &Store,
         scope: &Scope,
+        job: AiJob,
         cancel: &Cancel,
     ) -> Result<(Box<dyn LlmProvider>, Vec<DocText>), AiError> {
-        let llm = self.provider_for(store, scope)?;
+        let llm = self.provider_for_job(store, scope, job)?;
         let docs = scope_documents(store, scope)?
             .into_iter()
             .map(|id| doc_text(store, id))
@@ -131,7 +162,7 @@ impl AiService {
         cancel: &Cancel,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Summarized, AiError> {
-        let (llm, docs) = self.prepare(store, scope, cancel)?;
+        let (llm, docs) = self.prepare(store, scope, AiJob::Summaries, cancel)?;
         let text = actions::summarize(llm.as_ref(), &docs, &self.settings.language, cancel, on_delta)?;
         let cfg = llm.config();
         let (document_id, project_id) = match scope {
@@ -161,7 +192,7 @@ impl AiService {
 
     /// Proposed clean-ups; the caller decides what to apply.
     pub fn cleanup(&self, store: &Store, doc: DocumentId, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
-        let (llm, docs) = self.prepare(store, &Scope::Document(doc), cancel)?;
+        let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::Cleanup, cancel)?;
         actions::cleanup(llm.as_ref(), &docs[0], &self.settings.language, cancel)
     }
 
@@ -172,7 +203,7 @@ impl AiService {
         doc: DocumentId,
         cancel: &Cancel,
     ) -> Result<Vec<ActionItem>, AiError> {
-        let (llm, docs) = self.prepare(store, &Scope::Document(doc), cancel)?;
+        let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::ActionItems, cancel)?;
         let items = actions::action_items(llm.as_ref(), &docs[0], &self.settings.language, cancel)?;
         store.replace_action_items(doc, &items)?;
         Ok(store.document_action_items(doc)?)
@@ -186,7 +217,7 @@ impl AiService {
         cancel: &Cancel,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Answer, AiError> {
-        let (llm, docs) = self.prepare(store, scope, cancel)?;
+        let (llm, docs) = self.prepare(store, scope, AiJob::Ask, cancel)?;
         let hits = ranked_hits(store, scope, &docs, question)?;
         let context = actions::ask_context(&docs, &hits, llm.config().context_chars);
         actions::ask(
@@ -208,7 +239,7 @@ impl AiService {
         template: &Template,
         cancel: &Cancel,
     ) -> Result<BTreeMap<String, String>, AiError> {
-        let (llm, docs) = self.prepare(store, &Scope::Document(doc), cancel)?;
+        let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::FillFields, cancel)?;
         let values = store.document(doc)?.fields;
         actions::suggest_fields(
             llm.as_ref(),

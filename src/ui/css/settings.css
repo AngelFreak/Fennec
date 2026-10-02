@@ -1,1 +1,85 @@
-/* settings screen */
+/* Settings screen. Shared classes live in style.css; these are its own. */
+
+.fx-settings-nav { padding: 20px 12px; }
+.fx-settings-tab label { font-weight: 400; }
+.fx-settings-section .fx-h1 { margin-bottom: 0; }
+
+/* Speech model cards */
+.fx-model-publisher { font-size: 12px; color: @fx_muted; }
+.fx-model-desc { font-size: 13px; color: @fx_text_soft; }
+.fx-model-card .fx-badge { min-height: 22px; }
+.fx-model-card .fx-badge.active { min-height: 24px; }
+.fx-model-card button.fx-secondary { min-height: 40px; color: @fx_text; }
+.fx-model-card button.fx-secondary label { font-weight: 500; }
+.fx-install-text { font-size: 12px; color: @fx_muted; }
+
+/* Compute: a 2x2 segmented grid with a device line under each option.
+   (A GTK 4 toggle button's CSS node is `button`, with the `.toggle` class.) */
+.fx-segmented.grid > button { min-height: 52px; padding: 0 8px; }
+.fx-segmented.grid > button label { color: @fx_text; font-weight: 600; }
+.fx-segmented.grid > button label.fx-seg-sub { color: @fx_muted; font-weight: 400; font-size: 11px; }
+.fx-segmented.grid > button:checked {
+  background-color: @fx_surface;
+  box-shadow: 0 1px 2px alpha(black, 0.15);
+}
+.fx-segmented.grid > button:disabled { opacity: 0.55; }
+.fx-segmented.grid > button:disabled label { color: @fx_text; }
+.fx-segmented.grid > button:disabled label.fx-seg-sub { color: @fx_muted; }
+
+/* A bordered row: result text and a button (speed test, microphone test). */
+.fx-test-box { border: 1px solid @fx_border; border-radius: 10px; padding: 12px 14px; }
+.fx-test-box .fx-status { font-size: 13px; }
+
+/* Dictation */
+.fx-mono-value { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: @fx_text; }
+.fx-settings-section scale { margin-top: 6px; padding-left: 0; padding-right: 0; }
+.fx-settings-section checkbutton { color: @fx_text; border-spacing: 10px; padding-left: 0; }
+.fx-settings-section checkbutton check { min-width: 15px; min-height: 15px; padding: 0; margin: 0; }
+.fx-settings-section checkbutton:disabled { color: @fx_text; opacity: 1; filter: none; }
+.fx-settings-section checkbutton:disabled label { color: @fx_text; opacity: 1; filter: none; }
+.fx-settings-section checkbutton:disabled check { filter: none; opacity: 0.85; }
+.fx-table-row.first { border-top: none; }
+.fx-table-row.cmd { min-height: 20px; }
+.fx-settings-section textview.fx-boxed { min-height: 38px; padding: 10px 12px; font-size: 13px; }
+
+/* AI providers */
+menubutton.fx-add { padding: 0; min-height: 0; background: none; border: none; box-shadow: none; }
+menubutton.fx-add > button {
+  background-color: @fx_accent;
+  color: white;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: none;
+  box-shadow: none;
+}
+menubutton.fx-add > button:hover { background-color: @fx_accent_hover; }
+menubutton.fx-add > button label { font-weight: 600; color: white; }
+menubutton.fx-add > button image { color: white; }
+.fx-provider-proto { font-size: 12px; color: @fx_muted; }
+.fx-provider-addr { color: @fx_text_soft; }
+.fx-status-line .fx-dot { background-color: @fx_faint; }
+.fx-status-line.ok .fx-dot { background-color: @fx_ok; }
+.fx-status-line.bad .fx-dot { background-color: @fx_accent; }
+.fx-provider-editor { border-top: 1px solid @fx_divider; padding-top: 14px; margin-top: 16px; }
+.fx-switch-row { padding: 2px 0; }
+
+/* AI defaults */
+.fx-job-row { border-top: 1px solid @fx_divider; padding: 10px 16px; }
+.fx-job-row.first { border-top: none; }
+.fx-job-title { font-size: 14px; font-weight: 500; color: @fx_text; }
+
+/* Privacy */
+.fx-callout.neutral image { color: @fx_text; }
+.fx-project-check { border-top: 1px solid @fx_divider; padding: 0 16px; min-height: 48px; }
+.fx-project-check.first { border-top: none; }
+.fx-project-check label { font-size: 13px; color: @fx_text; }
+
+/* Storage */
+.fx-storage-name { font-size: 13px; font-weight: 500; color: @fx_text; }
+.fx-storage-row .fx-mono { color: @fx_text_soft; }
+.fx-storage-row button.fx-secondary { min-height: 36px; font-size: 12px; }
+.fx-badge.local { background-color: @fx_chip; color: @fx_text_soft; }
+.fx-test-box levelbar.fx-meter trough, .fx-test-box levelbar.fx-meter block { min-height: 8px; }
+menubutton.fx-secondary { padding: 0; }
+menubutton.fx-secondary > button { background: none; border: none; box-shadow: none; min-height: 38px; padding: 0 12px; color: inherit; }

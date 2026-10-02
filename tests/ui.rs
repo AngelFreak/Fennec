@@ -470,6 +470,18 @@ fn main() {
     });
     check("the speed test reports a real-time factor", measured);
     screenshot(&w.window, "settings");
+    w.settings.show_section("dictation");
+    screenshot(&w.window, "settings-dictation");
+    w.settings.show_section("storage");
+    w.settings.audio_retention.set_selected(2);
+    let on_disk = Settings::load(&root.join("config/settings.toml")).unwrap();
+    check(
+        "Delete audio after is saved to settings.toml",
+        on_disk.delete_audio_after_days == Some(90),
+    );
+    screenshot(&w.window, "settings-storage");
+    w.settings.audio_retention.set_selected(0);
+    w.settings.show_section("model");
 
     // --- a missing model explains itself instead of failing silently
     let root_b = tmp.path().join("b");
@@ -637,6 +649,18 @@ fn ai_checks(root: &std::path::Path) {
     let saved = std::fs::read_to_string(root.join("config/settings.toml")).unwrap_or_default();
     check("the AI switch is saved", saved.contains("enabled = true"));
     screenshot(&w.window, "settings-ai");
+    w.settings.ai.set_editing("claude", true);
+    screenshot(&w.window, "settings-ai-edit");
+    w.settings.ai.set_editing("claude", false);
+    w.settings.show_section("ai-defaults");
+    screenshot(&w.window, "settings-ai-defaults");
+    w.settings.show_section("privacy");
+    let rows = w.settings.ai.local_only_rows();
+    check(
+        "Privacy lists the projects, none local only yet",
+        !rows.is_empty() && rows.iter().all(|(_, on)| !on),
+    );
+    screenshot(&w.window, "settings-privacy");
     w.sidebar.go(ui::Nav::Dictate);
 
     // Summary streams into the panel and is stored.
@@ -740,8 +764,42 @@ fn ai_checks(root: &std::path::Path) {
     pump_until(Duration::from_secs(5), || cloud.count() == 2);
     check("the next send does not ask again", asked.borrow().len() == 1);
 
-    // Local-only projects never reach the cloud.
-    store.set_project_local_only(project, true).unwrap();
+    // A job can use its own provider: summaries on the local one, the
+    // default staying on the cloud.
+    let summaries = &w.settings.ai.job_choices[0];
+    check(
+        "the first job row is Summaries",
+        summaries.0 == fennec::ai::AiJob::Summaries,
+    );
+    summaries.1.set_selected(1);
+    let saved = std::fs::read_to_string(root.join("config/settings.toml")).unwrap_or_default();
+    check(
+        "the job's provider is saved",
+        saved.contains("summaries = \"ollama\""),
+    );
+    let local_before = local.count();
+    w.dictation.ai_summarize();
+    let routed = pump_until(Duration::from_secs(5), || {
+        local.count() > local_before && w.dictation.summary.meta_text().contains("ollama")
+    });
+    check(
+        "a summary goes to the provider set for summaries",
+        routed && cloud.count() == 2,
+    );
+    summaries.1.set_selected(0);
+    check(
+        "Default provider clears the job's choice",
+        !w.settings.settings().ai.jobs.contains_key("summaries"),
+    );
+
+    // Local-only projects never reach the cloud; the box is in Settings → Privacy.
+    let name = store.projects().unwrap()[0].name.clone();
+    w.settings.ai.render_projects();
+    w.settings.ai.set_local_only(&name, true);
+    check(
+        "the Privacy checkbox marks the project local only",
+        store.projects().unwrap()[0].local_only,
+    );
     w.dictation.ai_summarize();
     let blocked = pump_until(Duration::from_secs(5), || {
         w.dictation.summary.status.text().contains("local only")
