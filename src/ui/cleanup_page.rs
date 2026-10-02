@@ -290,10 +290,18 @@ impl CleanupPage {
         let note = label("", &["fx-field-note"]);
         note.set_wrap(true);
         note.set_visible(false);
-        buttons.append(&accept);
-        buttons.append(&keep);
-        buttons.append(&outcome);
-        buttons.append(&undo);
+        // As in the mockup: the two choices side by side, then the outcome
+        // with Undo once one is made.
+        let choices = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        choices.set_halign(gtk::Align::Start);
+        choices.append(&accept);
+        choices.append(&keep);
+        let decided = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        decided.set_halign(gtk::Align::Start);
+        decided.append(&outcome);
+        decided.append(&undo);
+        buttons.append(&choices);
+        buttons.append(&decided);
         buttons.append(&note);
         card.append(&buttons);
         self.list.append(&card);
