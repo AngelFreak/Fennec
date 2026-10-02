@@ -38,8 +38,12 @@ make install FEATURES=cuda   # NVIDIA; needs the CUDA toolkit
 Without root, `glslc` can be unpacked from Ubuntu's packages:
 `apt-get download glslc libshaderc1`, `dpkg -x` each into a folder, then put
 its `usr/bin` on `PATH` and its `usr/lib/x86_64-linux-gnu` on
-`LD_LIBRARY_PATH`. On a Radeon 760M the Vulkan build runs about 2.4× faster
-than the CPU build.
+`LD_LIBRARY_PATH`.
+
+On a laptop with a Ryzen 5 7640U and a Radeon 760M, Edda transcribes at 0.19×
+real time with Vulkan and 1.9× on the CPU alone. The CPU is too slow to keep
+up with live dictation, so use the GPU build there. File transcription works
+either way. Numbers and method are in `docs/plans/stage0-notes.md`.
 
 Settings → Speech model shows which backends this build and computer can
 use. If the GPU fails to start, Fennec falls back to the CPU.
@@ -64,7 +68,8 @@ Open **Settings → Speech model** and install a model. The voice detector
 | Røst v3 Whisper 1.5B | CoRal project | OpenRAIL | 1.7 GB (q8_0) | 13.7 % |
 | Hviske v6 | syv.ai | CC BY-NC 4.0 | 2.8 GB | 10.2 % |
 
-\* From the [Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard).
+\* From the [Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard). On 200 Danish FLEURS clips
+here, Edda scored 8.8 % WER and Røst 11.6 %.
 
 Røst v3 downloads as a ready-made GGML file. Edda and Hviske are published
 only as Hugging Face checkpoints, so Fennec converts them, which needs:
@@ -106,6 +111,13 @@ computer.
 | Models | `~/.local/share/fennec/models/` |
 | Dictation audio | `~/.local/share/fennec/audio/` |
 | Exports | `~/Documents/Fennec/` |
+
+## Not yet verified
+
+- The AI actions are tested against mock servers that speak each API, but
+  not yet with a real Claude or ChatGPT key.
+- Hviske v6 is tested with a stand-in model; the real 2.8 GB model has not
+  been run (`cargo test --test sidecar -- --ignored` once it is downloaded).
 
 ## Development
 
