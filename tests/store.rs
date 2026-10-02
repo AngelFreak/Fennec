@@ -300,3 +300,23 @@ fn summaries_and_action_items_roll_up_per_project() {
     assert_eq!(summaries[0].text, "Kort resumé.");
     assert!(summaries[0].include_in_export);
 }
+
+#[test]
+fn syncing_paragraphs_keeps_ids_and_search_in_step() {
+    let (_d, s) = store();
+    let doc = s.create_document(&NewDocument::dictation("x")).unwrap();
+    s.sync_paragraphs(
+        doc,
+        &[Paragraph::new("en"), Paragraph::new("to"), Paragraph::new("tre")],
+    )
+    .unwrap();
+    let before: Vec<_> = s.paragraphs(doc).unwrap().into_iter().map(|p| p.id).collect();
+    s.sync_paragraphs(doc, &[Paragraph::new("et"), Paragraph::new("to")])
+        .unwrap();
+    let after = s.paragraphs(doc).unwrap();
+    assert_eq!(after.iter().map(|p| p.id).collect::<Vec<_>>(), before[..2]);
+    assert_eq!(after[0].text, "et");
+    assert!(s.search("tre", ProjectFilter::All).unwrap().is_empty());
+    assert!(s.search("en", ProjectFilter::All).unwrap().is_empty());
+    assert_eq!(s.search("et", ProjectFilter::All).unwrap().len(), 1);
+}

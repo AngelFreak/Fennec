@@ -1,0 +1,15 @@
+@define-color fx_surface #17191E;
+@define-color fx_chrome #1E2127;
+@define-color fx_inspector #1B1E23;
+@define-color fx_chip #262A31;
+@define-color fx_border #30343C;
+@define-color fx_text #ECEDF0;
+@define-color fx_text_soft #D3D6DC;
+@define-color fx_muted #9AA1AE;
+@define-color fx_preview #8A919E;
+@define-color fx_accent #E0652C;
+@define-color fx_accent_hover #F07A42;
+@define-color fx_accent_soft #3A2418;
+@define-color fx_accent_text #F59A6B;
+@define-color fx_unsure_border #6B3A22;
+@define-color fx_error #F97066;

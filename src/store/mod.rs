@@ -561,6 +561,42 @@ impl Store {
         Ok(())
     }
 
+    /// Saves editor content, keeping paragraph ids stable by position so
+    /// links to paragraphs (action items, citations) survive autosave.
+    pub fn sync_paragraphs(&self, id: DocumentId, paragraphs: &[Paragraph]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let existing: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM paragraphs WHERE document_id = ?1 ORDER BY ord")?;
+            stmt.query_map([id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for (ord, p) in paragraphs.iter().enumerate() {
+            let spans: Vec<(usize, usize)> = p.low_confidence.iter().map(|r| (r.start, r.end)).collect();
+            let spans = serde_json::to_string(&spans)?;
+            match existing.get(ord) {
+                Some(pid) => {
+                    tx.execute(
+                        "UPDATE paragraphs SET ord = ?2, text = ?3, start_ms = ?4, end_ms = ?5, low_conf_json = ?6,
+                         speaker = ?7 WHERE id = ?1",
+                        params![pid, ord as i64, p.text, p.start_ms, p.end_ms, spans, p.speaker],
+                    )?;
+                }
+                None => {
+                    insert_paragraph(&tx, id, ord as i64, p)?;
+                }
+            }
+        }
+        for pid in existing.iter().skip(paragraphs.len()) {
+            tx.execute("DELETE FROM paragraphs WHERE id = ?1", [pid])?;
+        }
+        tx.execute(
+            "UPDATE documents SET updated_at = ?2 WHERE id = ?1",
+            params![id, now_ms()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Adds a paragraph at the end (committed dictation or ingest output).
     pub fn append_paragraph(&self, id: DocumentId, p: &Paragraph) -> Result<ParagraphId> {
         let tx = self.conn.unchecked_transaction()?;

@@ -12,11 +12,14 @@ vulkan = ["whisper-rs/vulkan"]
 cuda = ["whisper-rs/cuda"]
 
 [dependencies]
+adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }
 anyhow = "1"
+async-channel = "2.5.0"
 cairo-rs = { version = "0.22", features = ["pdf", "png"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
+gtk = { version = "0.11", package = "gtk4", features = ["v4_14"] }
 hound = "3.5"
 pango = "0.22"
 pangocairo = "0.22"
@@ -41,3 +44,7 @@ strip = true
 # whisper.cpp is unusably slow unoptimised, so optimise dependencies in dev builds too.
 [profile.dev.package."*"]
 opt-level = 3
+
+[[test]]
+name = "ui"
+harness = false

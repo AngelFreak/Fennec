@@ -5,6 +5,7 @@
 
 pub mod audio;
 pub mod commands;
+pub mod config;
 pub mod engine;
 pub mod eval;
 pub mod export;
@@ -15,6 +16,7 @@ pub mod store;
 pub mod template;
 pub mod text;
 pub mod transcript;
+pub mod ui;
 pub mod utterance;
 pub mod vad;
 pub mod worker;

@@ -38,7 +38,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: main window per mockup: header, sidebar (nav, projects, tags, settings), editor with tags, record dock, inspector fields, CSS.
 **Success Criteria**: app launches, dictation writes into the editor, autosave to DB.
 **Tests**: UI smoke test builds window; editor-model unit tests (partial replace, paragraph mapping).
-**Status**: Not Started
+**Status**: Complete — tests/ui.rs drives the real window with a scripted engine and synthetic audio (22 checks); optional PNG screenshots via FENNEC_SCREENSHOT_DIR. Files/Templates/Project/Settings pages are placeholders until Stage 6–7.
 
 ## Stage 6: Files, export, templates, project screens
 **Goal**: file queue + player/timeline, export dialog with preview, template editor, project view (docs/filter/search).

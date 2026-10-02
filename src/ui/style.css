@@ -1,0 +1,187 @@
+/* Fennec: quiet neutral surfaces, one fox-orange accent. Colours come from
+   style-light.css / style-dark.css (@define-color tokens). */
+
+window.fennec {
+  background-color: @fx_surface;
+  color: @fx_text;
+  font-family: "IBM Plex Sans", Inter, Cantarell, sans-serif;
+}
+
+.fx-header {
+  background-color: @fx_chrome;
+  border-bottom: 1px solid @fx_border;
+  min-height: 52px;
+  padding: 0 8px;
+}
+
+.fx-logo {
+  background-color: @fx_accent;
+  color: white;
+  border-radius: 7px;
+  min-width: 26px;
+  min-height: 26px;
+  font-weight: 700;
+}
+
+.fx-app-name { font-weight: 600; font-size: 15px; }
+.fx-crumb { color: @fx_muted; font-size: 14px; }
+.fx-crumb-current { font-weight: 600; font-size: 14px; }
+.fx-saved { color: @fx_muted; font-size: 12px; }
+
+.fx-sidebar {
+  background-color: @fx_chrome;
+  border-right: 1px solid @fx_border;
+  padding: 12px;
+}
+
+.fx-nav {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  background: none;
+  box-shadow: none;
+  color: @fx_text_soft;
+}
+.fx-nav:hover { background-color: alpha(@fx_text, 0.05); }
+.fx-nav.active {
+  background-color: @fx_surface;
+  box-shadow: 0 0 0 1px @fx_border;
+  color: @fx_text;
+  font-weight: 600;
+}
+.fx-nav.active image { color: @fx_accent; }
+
+.fx-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: @fx_muted;
+  margin: 20px 12px 4px 12px;
+}
+
+.fx-project-row {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+}
+.fx-project-row.active { background-color: @fx_accent_soft; font-weight: 500; }
+.fx-swatch { min-width: 10px; min-height: 10px; border-radius: 3px; }
+.fx-count { color: @fx_muted; font-size: 12px; }
+
+.fx-tag {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background-color: @fx_surface;
+  box-shadow: 0 0 0 1px @fx_border;
+  font-size: 12px;
+  color: @fx_text_soft;
+}
+
+.fx-primary {
+  background-color: @fx_accent;
+  color: white;
+  font-weight: 600;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+}
+.fx-primary:hover { background-color: @fx_accent_hover; }
+.fx-primary:disabled { opacity: 0.5; }
+
+.fx-secondary {
+  background-color: @fx_surface;
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+/* Editor */
+.fx-editor-scroller { background-color: @fx_surface; }
+textview.fx-editor, textview.fx-editor text {
+  background-color: @fx_surface;
+  color: @fx_text;
+  font-family: "Source Serif 4", "Noto Serif", "DejaVu Serif", serif;
+  font-size: 17px;
+}
+.fx-doc-title {
+  font-family: "Source Serif 4", "Noto Serif", "DejaVu Serif", serif;
+  font-size: 30px;
+  font-weight: 600;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+.fx-chip {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background-color: @fx_chip;
+  font-size: 12px;
+  font-weight: 500;
+}
+.fx-tabs { border-bottom: 1px solid @fx_border; padding: 0 24px; }
+.fx-tab {
+  min-height: 44px;
+  padding: 0 14px;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  color: @fx_muted;
+  font-size: 13px;
+}
+.fx-tab.active { color: @fx_text; font-weight: 600; box-shadow: inset 0 -2px 0 @fx_accent; }
+
+/* Record dock */
+.fx-dock { border-top: 1px solid @fx_border; padding: 0 28px; min-height: 96px; background-color: @fx_surface; }
+.fx-record {
+  min-width: 60px;
+  min-height: 60px;
+  border-radius: 999px;
+  background-color: @fx_accent;
+  color: white;
+  box-shadow: 0 0 0 6px @fx_accent_soft;
+  padding: 0;
+}
+.fx-record:hover { background-color: @fx_accent_hover; }
+.fx-record:disabled { opacity: 0.6; }
+.fx-rec-state { color: @fx_accent_text; font-size: 12px; font-weight: 600; }
+.fx-timer { font-family: "IBM Plex Mono", monospace; font-size: 22px; font-weight: 500; }
+.fx-status { color: @fx_muted; font-size: 13px; }
+.fx-status.error { color: @fx_error; }
+.fx-kbd {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid @fx_border;
+  border-bottom-width: 2px;
+  background-color: @fx_chrome;
+}
+
+/* Inspector */
+.fx-inspector { background-color: @fx_inspector; border-left: 1px solid @fx_border; padding: 20px; }
+.fx-field-label { font-size: 12px; font-weight: 500; color: @fx_text_soft; }
+.fx-field-note { font-size: 11px; color: @fx_muted; }
+.fx-field-error { font-size: 11px; color: @fx_accent_text; }
+entry.fx-field { min-height: 40px; border-radius: 8px; }
+entry.fx-field.required-empty { border: 1px solid @fx_accent; }
+.fx-unsure-word {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid @fx_unsure_border;
+  background-color: @fx_accent_soft;
+  color: @fx_accent_text;
+  font-size: 12px;
+}
+.fx-stats { color: @fx_muted; font-size: 12px; }
+
+.fx-banner { background-color: @fx_accent_soft; color: @fx_accent_text; padding: 8px 16px; font-size: 13px; }

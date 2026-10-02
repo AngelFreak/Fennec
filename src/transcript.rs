@@ -113,7 +113,7 @@ impl Transcript {
 }
 
 /// Byte index where the last sentence begins (after the previous . ! ? or newline).
-fn last_sentence_start(text: &str) -> usize {
+pub fn last_sentence_start(text: &str) -> usize {
     let body = text.trim_end().trim_end_matches(['.', '!', '?']);
     body.rfind(['.', '!', '?', '\n']).map(|i| i + 1).unwrap_or(0)
 }
