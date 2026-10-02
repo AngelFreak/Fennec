@@ -17,7 +17,7 @@ use crate::audio::capture::AudioSource;
 use crate::commands::{Command, CommandTable};
 use crate::engine::{SAMPLE_RATE, TranscribeOptions};
 use crate::ingest::prompt;
-use crate::utterance::{FrameVad, Utterance, UtteranceBuilder, UtteranceConfig, UtteranceEvent, rms};
+use crate::utterance::{FrameVad, Utterance, UtteranceBuilder, UtteranceConfig, UtteranceEvent};
 use crate::worker::{EngineWorker, Priority, Reply};
 
 #[derive(Debug, Clone)]
@@ -51,6 +51,8 @@ impl Default for LiveConfig {
 pub enum LiveEvent {
     /// Input loudness (RMS of the last chunk), for the level meter.
     Level(f32),
+    /// The input hit the ceiling; at most one every few seconds.
+    Clipping,
     SpeechStarted,
     Preview(String),
     Final {
@@ -138,13 +140,25 @@ impl LiveSession {
                             }
                         }
                     };
+                    // Audio time of the last clipping warning.
+                    let mut warned_at: Option<usize> = None;
+                    let mut heard = 0usize;
                     loop {
                         if stop.load(Ordering::Relaxed) {
                             break;
                         }
                         match source.next_chunk() {
                             Ok(Some(chunk)) => {
-                                on_event(LiveEvent::Level(rms(&chunk)));
+                                let (peak, level) = crate::audio::level::measure(&chunk);
+                                on_event(LiveEvent::Level(level));
+                                heard += chunk.len();
+                                if peak >= crate::audio::level::CLIP
+                                    && warned_at
+                                        .is_none_or(|t| heard - t >= 5 * crate::engine::SAMPLE_RATE as usize)
+                                {
+                                    warned_at = Some(heard);
+                                    on_event(LiveEvent::Clipping);
+                                }
                                 if let Some(w) = &mut recorder {
                                     write_recording(w, &chunk);
                                 }

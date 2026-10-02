@@ -17,7 +17,7 @@ anyhow = "1"
 async-channel = "2.5.0"
 cairo-rs = { version = "0.22", features = ["pdf", "png"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-cpal = "0.18.2"
+cpal = { version = "0.18", features = ["pulseaudio"] }
 crossbeam-channel = "0.5.17"
 gtk = { version = "0.11", package = "gtk4", features = ["v4_14"] }
 hound = "3.5"

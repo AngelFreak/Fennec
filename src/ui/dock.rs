@@ -161,6 +161,11 @@ impl Dock {
         }
     }
 
+    /// Whether the status shows a problem the user should still see.
+    pub fn status_is_error(&self) -> bool {
+        self.status.has_css_class("error")
+    }
+
     pub fn status_text(&self) -> String {
         self.status.text().to_string()
     }

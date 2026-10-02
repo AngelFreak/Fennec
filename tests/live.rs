@@ -281,3 +281,33 @@ fn previews_use_the_fast_encoder_and_finals_the_full_one() {
     assert_eq!(calls.iter().filter(|o| !o.fast).count(), finals);
     assert_eq!(finals, 1);
 }
+
+#[test]
+fn clipped_input_warns_once_rather_than_every_chunk() {
+    let clipped: Vec<f32> = (0..3 * SR)
+        .map(|i| if (i / 20) % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let events = run(
+        PcmSource::new(clipped),
+        Box::new(EnergyVad::default()),
+        Box::new(Scripted(vec![])),
+        LiveConfig {
+            show_preview: false,
+            ..Default::default()
+        },
+    );
+    assert_eq!(events.iter().filter(|e| **e == LiveEvent::Clipping).count(), 1);
+}
+
+#[test]
+fn a_normal_level_never_warns() {
+    let mut audio = tone(2.0);
+    audio.extend(silence(1.0));
+    let events = run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(Scripted(vec!["Hej."])),
+        LiveConfig::default(),
+    );
+    assert!(!events.contains(&LiveEvent::Clipping));
+}

@@ -13,6 +13,7 @@ mod engine;
 mod export_page;
 mod files;
 mod inspector;
+mod mic_test;
 pub mod project;
 mod settings_ai;
 mod settings_page;
@@ -91,7 +92,7 @@ impl Deps {
             }),
             audio: Arc::new(|s| {
                 let device = (!s.microphone.is_empty()).then_some(s.microphone.as_str());
-                MicSource::open(device)
+                MicSource::open(device, s.input_gain_db)
                     .map(|m| Box::new(m) as Box<dyn AudioSource>)
                     .map_err(|e| e.to_string())
             }),

@@ -496,6 +496,9 @@ fn main() {
     // --- AI: off by default, then every action through the real window
     ai_checks(&tmp.path().join("c"));
 
+    // --- microphone: level test, input volume, clipping warning
+    audio_checks(&tmp.path().join("d"));
+
     let failures = unsafe { FAILURES };
     if failures > 0 {
         println!("\n{failures} UI check(s) failed");
@@ -747,4 +750,76 @@ fn ai_checks(root: &std::path::Path) {
         "a local-only project refuses the cloud provider",
         blocked && cloud.count() == 2,
     );
+}
+
+fn clipped(secs: usize) -> Vec<f32> {
+    (0..secs * 16_000)
+        .map(|i| if (i / 20) % 2 == 0 { 1.0 } else { -1.0 })
+        .collect()
+}
+
+fn audio_checks(root: &std::path::Path) {
+    let mut d = deps(root, vec!["Hej."], true);
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let flag = std::sync::Arc::clone(&flag);
+        d.audio = Arc::new(move |_| {
+            let pcm = if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                clipped(3)
+            } else {
+                tones(3)
+            };
+            Ok(Box::new(PcmSource::new(pcm)) as Box<dyn AudioSource>)
+        });
+    }
+    let w = ui::build_window(d);
+    w.window.present();
+    w.sidebar.go(ui::Nav::Settings);
+    w.settings.show_section("dictation");
+
+    w.settings.mic_test.run();
+    let judged = pump_until(Duration::from_secs(10), || {
+        w.settings.mic_test.verdict().is_some()
+    });
+    check(
+        "the microphone test judges a normal level as good",
+        judged && w.settings.mic_test.verdict() == Some(fennec::audio::level::Verdict::Good),
+    );
+    check(
+        "the test recording can be played back",
+        w.settings.mic_test.play.is_sensitive(),
+    );
+    screenshot(&w.window, "settings-microphone");
+
+    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    w.settings.mic_test.run();
+    pump_until(Duration::from_secs(10), || {
+        w.settings.mic_test.verdict() == Some(fennec::audio::level::Verdict::TooLoud)
+    });
+    check(
+        "the microphone test flags clipping",
+        w.settings.mic_test.verdict() == Some(fennec::audio::level::Verdict::TooLoud)
+            && w.settings
+                .mic_test
+                .verdict
+                .text()
+                .contains("Lower the input volume"),
+    );
+
+    if let Some(gain) = w.settings.input_gain.borrow().as_ref() {
+        gain.set_value(-6.0);
+    }
+    let saved = std::fs::read_to_string(root.join("config/settings.toml")).unwrap_or_default();
+    check(
+        "the input volume is saved",
+        saved.contains("input_gain_db = -6.0"),
+    );
+
+    w.sidebar.go(ui::Nav::Dictate);
+    w.dictation.start_recording();
+    let warned = pump_until(Duration::from_secs(10), || {
+        w.dictation.dock.status_text().contains("too loud and clips")
+    });
+    check("dictating with a clipping microphone warns in the dock", warned);
+    pump_until(Duration::from_secs(10), || !w.dictation.is_recording());
 }

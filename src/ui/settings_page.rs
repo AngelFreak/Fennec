@@ -11,6 +11,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use super::engine::EngineHolder;
+use super::mic_test::MicTest;
 use super::settings_ai::AiSettingsUi;
 use super::{Deps, Handler, label};
 use crate::audio::capture::input_devices;
@@ -36,6 +37,8 @@ pub struct SettingsPage {
     speed_label: gtk::Label,
     message: gtk::Label,
     pub ai: Rc<AiSettingsUi>,
+    pub mic_test: Rc<MicTest>,
+    pub input_gain: RefCell<Option<gtk::Scale>>,
     on_model_changed: Handler<()>,
 }
 
@@ -58,9 +61,12 @@ impl SettingsPage {
         message.set_wrap(true);
 
         let ai = AiSettingsUi::new(deps.clone());
+        let mic_test = MicTest::new(deps.clone());
         let page = Rc::new(Self {
             root: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             ai,
+            mic_test,
+            input_gain: RefCell::default(),
             deps,
             engine,
             stack,
@@ -477,6 +483,24 @@ impl SettingsPage {
                 .unwrap_or(0),
         );
         b.append(&field("Microphone", &mic));
+
+        let gain = gtk::Scale::with_range(gtk::Orientation::Horizontal, -20.0, 20.0, 1.0);
+        gain.set_value(f64::from(s.input_gain_db));
+        gain.set_draw_value(true);
+        gain.set_value_pos(gtk::PositionType::Right);
+        gain.set_format_value_func(|_, v| format!("{v:+.0} dB"));
+        gain.add_mark(0.0, gtk::PositionType::Bottom, None);
+        gain.update_property(&[gtk::accessible::Property::Label("Input volume, decibels")]);
+        b.append(&field("Input volume (added to the system level)", &gain));
+        *self.input_gain.borrow_mut() = Some(gain.clone());
+        let weak = Rc::downgrade(self);
+        gain.connect_value_changed(move |sc| {
+            if let Some(p) = weak.upgrade() {
+                p.deps.settings.borrow_mut().input_gain_db = sc.value().round() as f32;
+                p.save();
+            }
+        });
+        b.append(&self.mic_test.root);
         let weak = Rc::downgrade(self);
         mic.connect_selected_notify(move |dd| {
             let Some(p) = weak.upgrade() else { return };

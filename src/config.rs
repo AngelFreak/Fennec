@@ -81,6 +81,8 @@ pub struct Settings {
     pub backend: Backend,
     /// cpal device id; empty means the default microphone.
     pub microphone: String,
+    /// Extra amplification of the microphone, in dB (-20 to +20).
+    pub input_gain_db: f32,
     pub pause_ms: u32,
     pub show_preview: bool,
     pub keep_dictation_audio: bool,
@@ -98,6 +100,7 @@ impl Default for Settings {
             model: "edda-v0.1-q5_0.bin".into(),
             backend: Backend::Auto,
             microphone: String::new(),
+            input_gain_db: 0.0,
             pause_ms: 600,
             show_preview: true,
             keep_dictation_audio: true,

@@ -2,6 +2,7 @@
 
 pub mod capture;
 pub mod decode;
+pub mod level;
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +47,26 @@ pub fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, AudioError> {
     Ok(downmix(&interleaved, spec.channels as usize))
 }
 
+/// Writes 16 kHz mono samples as a 16-bit WAV file.
+pub fn write_wav_16k_mono(path: &Path, samples: &[f32]) -> Result<(), AudioError> {
+    let wav_err = |source| AudioError::Wav {
+        path: path.to_path_buf(),
+        source,
+    };
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec).map_err(wav_err)?;
+    for s in samples {
+        w.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .map_err(wav_err)?;
+    }
+    w.finalize().map_err(wav_err)
+}
+
 fn downmix(interleaved: &[f32], channels: usize) -> Vec<f32> {
     if channels <= 1 {
         return interleaved.to_vec();
@@ -72,6 +93,16 @@ mod tests {
             w.write_sample(*s).unwrap();
         }
         w.finalize().unwrap();
+    }
+
+    #[test]
+    fn written_wavs_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.wav");
+        write_wav_16k_mono(&p, &[0.0, 0.5, -0.5, 2.0]).unwrap();
+        let back = read_wav_16k_mono(&p).unwrap();
+        assert_eq!(back.len(), 4);
+        assert!((back[1] - 0.5).abs() < 1e-3 && (back[3] - 1.0).abs() < 1e-3);
     }
 
     #[test]

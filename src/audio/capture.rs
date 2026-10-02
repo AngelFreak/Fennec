@@ -74,9 +74,28 @@ pub struct InputDevice {
     pub is_default: bool,
 }
 
-/// Microphones the default audio host offers (PipeWire through ALSA).
+/// The sound server (PipeWire or PulseAudio, through the PulseAudio
+/// protocol) when one runs, else raw ALSA. Raw ALSA reads the hardware with
+/// its capture boost and ignores the system input volume, which clipped
+/// speech badly (RMS 0.38 against 0.03 through the sound server).
+fn audio_host() -> cpal::Host {
+    match cpal::host_from_id(cpal::HostId::PulseAudio) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("no sound server ({e}); reading the microphone through ALSA");
+            cpal::default_host()
+        }
+    }
+}
+
+/// Monitor sources record what the speakers play, not a microphone.
+fn is_monitor(id: &str) -> bool {
+    id.ends_with(".monitor")
+}
+
+/// Microphones the sound server offers.
 pub fn input_devices() -> Vec<InputDevice> {
-    let host = cpal::default_host();
+    let host = audio_host();
     let default_id = host
         .default_input_device()
         .and_then(|d| d.id().ok())
@@ -87,6 +106,9 @@ pub fn input_devices() -> Vec<InputDevice> {
     devices
         .filter_map(|d| {
             let id = d.id().ok()?.to_string();
+            if is_monitor(&id) {
+                return None;
+            }
             let name = d
                 .description()
                 .map(|desc| desc.name().to_string())
@@ -108,8 +130,9 @@ pub struct MicSource {
 }
 
 impl MicSource {
-    /// Opens `device_id`, or the default microphone when `None`.
-    pub fn open(device_id: Option<&str>) -> Result<Self, CaptureError> {
+    /// Opens `device_id`, or the default microphone when `None`, amplified
+    /// by `gain_db` on top of the system input volume.
+    pub fn open(device_id: Option<&str>, gain_db: f32) -> Result<Self, CaptureError> {
         let (tx, rx) = bounded(64);
         let (ready_tx, ready_rx) = bounded(1);
         let stop = Arc::new(AtomicBool::new(false));
@@ -117,7 +140,7 @@ impl MicSource {
         let wanted = device_id.map(str::to_string);
         std::thread::Builder::new()
             .name("fennec-mic".into())
-            .spawn(move || mic_thread(wanted, tx, ready_tx, stop_thread))
+            .spawn(move || mic_thread(wanted, db_to_gain(gain_db), tx, ready_tx, stop_thread))
             .map_err(|e| CaptureError::Open(e.to_string()))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => Ok(Self { rx, stop }),
@@ -147,12 +170,13 @@ impl Drop for MicSource {
 
 fn mic_thread(
     wanted: Option<String>,
+    gain: f32,
     tx: Sender<Result<Vec<f32>, CaptureError>>,
     ready: Sender<Result<(), CaptureError>>,
     stop: Arc<AtomicBool>,
 ) {
     let opened = (|| -> Result<cpal::Stream, CaptureError> {
-        let host = cpal::default_host();
+        let host = audio_host();
         let device = match &wanted {
             Some(id) => host
                 .input_devices()
@@ -169,9 +193,11 @@ fn mic_thread(
         let mut resampler = StreamResampler::new(rate).map_err(CaptureError::Open)?;
         let data_tx = tx.clone();
         let err_tx = tx.clone();
-        let mut send = move |mono: Vec<f32>| {
+        let mut settle = Settle::default();
+        let mut send = move |mut mono: Vec<f32>| {
+            apply_gain(&mut mono, gain);
             let out = resampler.push(&mono);
-            if !out.is_empty() {
+            if !out.is_empty() && settle.pass(&out) {
                 // A full channel means the consumer is gone or stalled; drop audio rather than block the callback.
                 let _ = data_tx.try_send(Ok(out));
             }
@@ -215,6 +241,52 @@ fn mic_thread(
         Err(e) => {
             let _ = ready.send(Err(e));
         }
+    }
+}
+
+/// Holds microphone audio back until the input settles. This laptop's
+/// microphone (like many) starts pinned near -1 for half a second and
+/// drifts back to zero over the next; that read as clipping and as speech.
+/// The gate opens on the first 100 ms that averages near zero without
+/// clipping, or after 1.5 s at the latest.
+#[derive(Debug, Default)]
+pub struct Settle {
+    held: usize,
+    open: bool,
+}
+
+impl Settle {
+    const MAX_HELD: usize = SAMPLE_RATE as usize * 3 / 2;
+
+    /// Whether `block` (16 kHz mono) should be used.
+    pub fn pass(&mut self, block: &[f32]) -> bool {
+        if self.open {
+            return true;
+        }
+        let n = block.len().max(1) as f32;
+        let mean = block.iter().sum::<f32>() / n;
+        let peak = block.iter().fold(0f32, |a, s| a.max(s.abs()));
+        self.held += block.len();
+        self.open = (mean.abs() < 0.02 && peak < 0.98) || self.held >= Self::MAX_HELD;
+        if self.open {
+            tracing::debug!(held_ms = self.held / 16, "microphone settled");
+        }
+        self.open
+    }
+}
+
+/// Linear factor for a gain in decibels.
+pub fn db_to_gain(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+/// Amplifies in place, holding samples to [-1, 1].
+pub fn apply_gain(samples: &mut [f32], gain: f32) {
+    if gain == 1.0 {
+        return;
+    }
+    for s in samples {
+        *s = (*s * gain).clamp(-1.0, 1.0);
     }
 }
 
@@ -304,6 +376,42 @@ mod tests {
         let out: Vec<f32> = tone.chunks(480).flat_map(|c| r.push(c)).collect();
         // Within one FFT block of a second's worth.
         assert!((15_000..=16_000).contains(&out.len()), "{} samples", out.len());
+    }
+
+    #[test]
+    fn audio_is_held_back_until_the_microphone_settles() {
+        let mut gate = Settle::default();
+        let pinned = vec![-0.95f32; 1600];
+        let drifting = vec![-0.15f32; 1600];
+        let speech: Vec<f32> = (0..1600).map(|i| (i as f32 * 0.3).sin() * 0.4).collect();
+        assert!(!gate.pass(&pinned));
+        assert!(!gate.pass(&drifting));
+        assert!(gate.pass(&speech));
+        // Once settled it stays open, even for loud or offset audio.
+        assert!(gate.pass(&pinned));
+    }
+
+    #[test]
+    fn a_microphone_that_never_settles_opens_after_a_second_and_a_half() {
+        let mut gate = Settle::default();
+        let pinned = vec![-0.95f32; 1600];
+        let opened = (0..20).position(|_| gate.pass(&pinned)).unwrap();
+        assert_eq!(opened, 14, "the block that completes 1.5 s");
+    }
+
+    #[test]
+    fn gain_in_decibels_scales_and_holds_the_range() {
+        assert!((db_to_gain(6.0) - 1.995).abs() < 0.01);
+        assert!((db_to_gain(-20.0) - 0.1).abs() < 1e-6);
+        let mut s = vec![0.1, -0.6, 0.9];
+        apply_gain(&mut s, 2.0);
+        assert_eq!(s, vec![0.2, -1.0, 1.0]);
+    }
+
+    #[test]
+    fn monitor_sources_are_not_microphones() {
+        assert!(is_monitor("alsa_output.pci-0000_c1_00.6.analog-stereo.monitor"));
+        assert!(!is_monitor("alsa_input.pci-0000_c1_00.6.analog-stereo"));
     }
 
     #[test]

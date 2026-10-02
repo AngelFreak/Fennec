@@ -639,6 +639,7 @@ impl DictationPage {
     fn handle(self: &Rc<Self>, ev: LiveEvent) {
         match ev {
             LiveEvent::Level(l) => self.dock.push_level(l),
+            LiveEvent::Clipping => self.dock.set_status(CLIPPING, true),
             LiveEvent::SpeechStarted => {}
             LiveEvent::Preview(t) => self.editor.set_preview(Some(&t)),
             LiveEvent::Final {
@@ -675,7 +676,8 @@ impl DictationPage {
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 self.editor.set_preview(None);
                 self.dock.set_state(DockState::Idle);
-                if !self.dock.status_text().starts_with("Microphone") {
+                // Problems (no microphone, clipping) stay visible after stopping.
+                if !self.dock.status_is_error() {
                     self.dock
                         .set_status("Press the button or Ctrl+Space to continue.", false);
                 }
@@ -922,6 +924,8 @@ impl DictationPage {
         ok
     }
 }
+
+pub const CLIPPING: &str = "The microphone is too loud and clips, so words get distorted. Lower the input volume in Settings → Dictation.";
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
