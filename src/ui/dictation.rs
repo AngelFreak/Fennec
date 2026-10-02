@@ -11,6 +11,7 @@ use gtk::prelude::*;
 
 use super::dock::{Dock, DockState};
 use super::editor::Editor;
+use super::engine::EngineHolder;
 use super::inspector::Inspector;
 use super::{Deps, label};
 use crate::live::{LiveConfig, LiveEvent, LiveSession};
@@ -24,7 +25,6 @@ use crate::worker::EngineWorker;
 struct State {
     doc: Option<DocumentId>,
     session: Option<LiveSession>,
-    worker: Option<Arc<EngineWorker>>,
     started: Option<Instant>,
     save_timer: Option<glib::SourceId>,
     tick: Option<glib::SourceId>,
@@ -41,6 +41,7 @@ pub struct DictationPage {
     tags: gtk::Box,
     store: Rc<Store>,
     deps: Deps,
+    engine: Rc<EngineHolder>,
     state: RefCell<State>,
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
@@ -48,7 +49,7 @@ pub struct DictationPage {
 }
 
 impl DictationPage {
-    pub fn new(store: Rc<Store>, deps: Deps) -> Rc<Self> {
+    pub fn new(store: Rc<Store>, deps: Deps, engine: Rc<EngineHolder>) -> Rc<Self> {
         let editor = Editor::new();
         let dock = Dock::new();
         let inspector = Inspector::new();
@@ -99,6 +100,7 @@ impl DictationPage {
             tags,
             store,
             deps,
+            engine,
             state: RefCell::default(),
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
@@ -369,33 +371,15 @@ impl DictationPage {
                 .set_status(&format!("Could not create a document: {e}"), true);
             return;
         }
-        let worker = self.state.borrow().worker.clone();
-        match worker {
-            Some(w) => self.begin_session(w),
-            None => self.load_engine_then_start(),
+        if !self.engine.is_loaded() {
+            self.dock.set_state(DockState::Loading);
+            self.dock.set_status("Loading the speech model…", false);
         }
-    }
-
-    fn load_engine_then_start(self: &Rc<Self>) {
-        self.dock.set_state(DockState::Loading);
-        self.dock.set_status("Loading the speech model…", false);
-        let (tx, rx) = async_channel::bounded(1);
-        let factory = Arc::clone(&self.deps.engine);
-        let settings = self.deps.settings.clone();
-        let paths = self.deps.paths.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send_blocking(factory(&settings, &paths));
-        });
         let weak = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            let Ok(result) = rx.recv().await else { return };
+        self.engine.with_worker(move |result| {
             let Some(page) = weak.upgrade() else { return };
             match result {
-                Ok(engine) => {
-                    let worker = Arc::new(EngineWorker::spawn(engine));
-                    page.state.borrow_mut().worker = Some(Arc::clone(&worker));
-                    page.begin_session(worker);
-                }
+                Ok(worker) => page.begin_session(worker),
                 Err(e) => {
                     page.dock.set_state(DockState::Idle);
                     page.dock.set_status(

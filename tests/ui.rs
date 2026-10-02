@@ -14,6 +14,7 @@ use fennec::engine::{EngineError, Segment, TranscribeOptions, Transcriber};
 use fennec::store::{Paragraph, Store};
 use fennec::ui::{self, Deps};
 use fennec::utterance::{EnergyVad, FrameVad};
+use fennec::vad::{SpeechDetector, WholeAudio};
 use gtk::glib;
 use gtk::prelude::*;
 
@@ -43,7 +44,11 @@ fn pump_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
 struct Scripted(Vec<&'static str>);
 impl Transcriber for Scripted {
     fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        let text = if self.0.is_empty() { "" } else { self.0.remove(0) };
+        let text = if self.0.is_empty() {
+            "Mere tekst."
+        } else {
+            self.0.remove(0)
+        };
         Ok(vec![Segment {
             start_ms: 0,
             end_ms: 1,
@@ -80,6 +85,7 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
         }),
         audio: Arc::new(|_| Ok(Box::new(PcmSource::new(tones(3))) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
+        file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
     }
 }
 
@@ -258,6 +264,84 @@ fn main() {
         !e.plain_text().contains("foreløbig"),
     );
     e.set_preview(None);
+
+    // --- file import through the real ingest thread and the shared engine
+    let wav = tmp.path().join("interview.wav");
+    {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wr = hound::WavWriter::create(&wav, spec).unwrap();
+        for s in tones(2) {
+            wr.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        wr.finalize().unwrap();
+    }
+    w.sidebar.go(fennec::ui::Nav::Files);
+    check("Files opens the import screen", w.visible_page() == "files");
+    w.files.add_paths(std::slice::from_ref(&wav));
+    let done = pump_until(Duration::from_secs(15), || {
+        w.files.statuses().iter().all(|(_, st)| st == "Done")
+    });
+    check("an imported file is transcribed", done);
+    if !done {
+        println!("     statuses: {:?}", w.files.statuses());
+    }
+    let shown = w.files.shown_texts();
+    check(
+        "its transcript is shown",
+        !shown.is_empty() && shown.iter().all(|t| !t.trim().is_empty()),
+    );
+    let file_docs = store
+        .documents(&Default::default())
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.title == "interview")
+        .count();
+    check("the file became its own document", file_docs == 1);
+    screenshot(&w.window, "files");
+
+    // --- export: blocked while required fields are empty, then writes a DOCX
+    let export_dir = tmp.path().join("exports");
+    w.export.set_folder(export_dir.clone());
+    w.dictation.inspector.entry("sagsnr").unwrap().set_text("");
+    w.export_current();
+    check("Export opens its screen", w.visible_page() == "export");
+    check(
+        "missing required fields are named",
+        w.export.warning_text().is_some_and(|t| t.contains("Sagsnr.")),
+    );
+    w.export.set_format(fennec::export::Format::Pdf);
+    w.export.refresh();
+    check("the preview renders a page", w.export.preview_is_page());
+    screenshot(&w.window, "export");
+    w.sidebar.go(fennec::ui::Nav::Dictate);
+    w.dictation
+        .inspector
+        .entry("sagsnr")
+        .unwrap()
+        .set_text("2026-0412");
+    w.dictation
+        .inspector
+        .entry("udarbejdet_af")
+        .unwrap()
+        .set_text("Ane");
+    w.export_current();
+    w.export.set_format(fennec::export::Format::Docx);
+    check(
+        "filling the fields clears the warning",
+        w.export.warning_text().is_none(),
+    );
+    let written = w.export.export_now();
+    check(
+        "export writes the DOCX named after case number and title",
+        written.as_ref().is_some_and(|p| {
+            p.exists() && p.file_name().unwrap().to_string_lossy().starts_with("2026-0412_")
+        }),
+    );
 
     // --- a missing model explains itself instead of failing silently
     let root_b = tmp.path().join("b");

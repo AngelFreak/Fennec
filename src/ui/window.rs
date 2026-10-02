@@ -6,6 +6,9 @@ use adw::prelude::*;
 use gtk::gio;
 
 use super::dictation::DictationPage;
+use super::engine::EngineHolder;
+use super::export_page::{ExportPage, Target};
+use super::files::FilesPage;
 use super::sidebar::{Nav, Sidebar};
 use super::{Deps, icon_button, label};
 use crate::store::{DocumentFilter, Store};
@@ -14,6 +17,8 @@ pub struct MainWindow {
     pub window: adw::ApplicationWindow,
     pub stack: gtk::Stack,
     pub dictation: Rc<DictationPage>,
+    pub files: Rc<FilesPage>,
+    pub export: Rc<ExportPage>,
     pub sidebar: Rc<Sidebar>,
     pub store: Rc<Store>,
     crumb_project: gtk::Label,
@@ -82,18 +87,26 @@ impl MainWindow {
         );
         new_doc.set_valign(gtk::Align::Center);
         header.append(&new_doc);
+        let export_button = gtk::Button::with_label("Export");
+        export_button.add_css_class("fx-primary");
+        export_button.set_valign(gtk::Align::Center);
+        header.append(&export_button);
         // The window-manager controls stay available.
         header.append(&gtk::WindowControls::new(gtk::PackType::End));
         let handle = gtk::WindowHandle::builder().child(&header).build();
 
         let sidebar = Sidebar::new(Rc::clone(&store));
-        let dictation = DictationPage::new(Rc::clone(&store), deps.clone());
+        let engine = EngineHolder::new(deps.clone());
+        let dictation = DictationPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
+        let files = FilesPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
+        let export = ExportPage::new(Rc::clone(&store), deps.clone());
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         stack.add_named(&dictation.root, Some("dictate"));
+        stack.add_named(&files.root, Some("files"));
+        stack.add_named(&export.root, Some("export"));
         for (name, title) in [
-            ("files", "Files"),
             ("templates", "Templates"),
             ("project", "Project"),
             ("settings", "Settings"),
@@ -120,20 +133,37 @@ impl MainWindow {
             window,
             stack,
             dictation,
+            files,
+            export,
             sidebar,
             store,
             crumb_project,
             crumb_title,
             saved,
         });
-        win.wire(&model_chip, &new_doc);
+        win.wire(&model_chip, &new_doc, &export_button);
         if show {
             win.open_initial_document();
         }
         win
     }
 
-    fn wire(self: &Rc<Self>, model_chip: &gtk::Button, new_doc: &gtk::Button) {
+    fn wire(self: &Rc<Self>, model_chip: &gtk::Button, new_doc: &gtk::Button, export_button: &gtk::Button) {
+        let weak = Rc::downgrade(self);
+        export_button.connect_clicked(move |_| {
+            if let Some(w) = weak.upgrade() {
+                w.export_current();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.files.connect_open_in_editor(move |doc| {
+            if let Some(w) = weak.upgrade() {
+                match w.dictation.open_document(doc) {
+                    Ok(()) => w.sidebar.go(Nav::Dictate),
+                    Err(e) => w.saved.set_text(&e),
+                }
+            }
+        });
         let weak = Rc::downgrade(self);
         self.sidebar.connect_nav(move |nav| {
             if let Some(w) = weak.upgrade() {
@@ -198,6 +228,16 @@ impl MainWindow {
     pub fn install_accels(&self, app: &adw::Application) {
         app.set_accels_for_action("win.toggle-dictation", &["<Control>space"]);
         app.set_accels_for_action("win.new-document", &["<Control>n"]);
+    }
+
+    /// Opens the Export screen for the document in the editor.
+    pub fn export_current(&self) {
+        self.dictation.save_now();
+        if let Some(doc) = self.dictation.document() {
+            self.export.show(Target::Document(doc));
+            self.sidebar.set_active(&Nav::Dictate);
+            self.stack.set_visible_child_name("export");
+        }
     }
 
     fn new_document(self: &Rc<Self>) {

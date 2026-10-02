@@ -11,6 +11,7 @@ use crate::store::{DocumentId, Store, StoreError};
 use crate::template::Template;
 use crate::text::{clock, danish_date};
 
+pub use pdf::preview as preview_first_page;
 pub use txt::render_txt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +115,18 @@ impl Report {
         Ok(Report::with_sections(template, None, false, vec![section]))
     }
 
+    /// Like [`Report::for_document`] but without the required-field check,
+    /// for previews while the user is still filling in fields.
+    pub fn draft_for_document(
+        store: &Store,
+        id: DocumentId,
+        template: &Template,
+        opts: ExportOptions,
+    ) -> Result<Report, ExportError> {
+        let section = build_section(store, id, template, opts)?;
+        Ok(Report::with_sections(template, None, false, vec![section]))
+    }
+
     /// Several documents as one report, oldest first.
     pub fn for_documents(
         store: &Store,
@@ -203,6 +216,33 @@ fn build_section(
     })
 }
 
+/// A file name from the title (and case number, if any), safe on any file
+/// system: Danish letters are spelled out (æ→ae, ø→oe, å→aa).
+pub fn file_stem(title: &str, case_number: Option<&str>) -> String {
+    let mut base = String::new();
+    if let Some(c) = case_number.map(str::trim).filter(|c| !c.is_empty()) {
+        base.push_str(c);
+        base.push('_');
+    }
+    base.push_str(title);
+    let mut out = String::new();
+    for c in base.to_lowercase().chars() {
+        match c {
+            'æ' => out.push_str("ae"),
+            'ø' => out.push_str("oe"),
+            'å' => out.push_str("aa"),
+            c if c.is_ascii_alphanumeric() || c == '-' => out.push(c),
+            _ => {
+                if !out.ends_with('_') && !out.is_empty() {
+                    out.push('_');
+                }
+            }
+        }
+    }
+    let out = out.trim_matches('_').chars().take(80).collect::<String>();
+    if out.is_empty() { "fennec".into() } else { out }
+}
+
 /// Writes `report` to `path` in `format`. The file is written to a temporary
 /// name first so a failed export never leaves a half-written file behind.
 pub fn write(report: &Report, format: Format, path: &Path) -> Result<(), ExportError> {
@@ -228,5 +268,20 @@ pub fn write(report: &Report, format: Format, path: &Path) -> Result<(), ExportE
             let _ = std::fs::remove_file(&tmp);
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_stem;
+
+    #[test]
+    fn file_stems_spell_out_danish_letters_and_drop_punctuation() {
+        assert_eq!(
+            file_stem("Besigtigelse Nørregade 14", Some("2026-0412")),
+            "2026-0412_besigtigelse_noerregade_14"
+        );
+        assert_eq!(file_stem("Møde: Å/Æ?", None), "moede_aa_ae");
+        assert_eq!(file_stem("!!!", None), "fennec");
     }
 }

@@ -57,6 +57,20 @@ impl SpeechDetector for SileroVad {
     }
 }
 
+/// Treats all audio as speech, so it is cut into fixed chunks. Used when the
+/// Silero model is missing.
+pub struct WholeAudio;
+
+impl SpeechDetector for WholeAudio {
+    fn speech(&mut self, pcm: &[f32]) -> Result<Vec<Range<usize>>, VadError> {
+        Ok(if pcm.is_empty() {
+            Vec::new()
+        } else {
+            vec![0..pcm.len()]
+        })
+    }
+}
+
 /// Packs speech ranges into chunks for the engine: each chunk is at most
 /// `max_len` samples, and ranges closer than `join_gap` samples share a chunk.
 /// Speech longer than `max_len` is split into `max_len` pieces.

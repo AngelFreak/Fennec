@@ -112,7 +112,9 @@ pub fn ingest_file(
         let mut t = opts.transcribe.clone();
         t.initial_prompt = prompt(&opts.vocabulary, &context);
         let offset = samples_to_ms(chunk.start);
-        for seg in models.engine.transcribe(&pcm[chunk.clone()], &t)? {
+        let segments = models.engine.transcribe(&pcm[chunk.clone()], &t)?;
+        // Engines may return empty segments for silence; they are not paragraphs.
+        for seg in segments.into_iter().filter(|s| !s.text.trim().is_empty()) {
             context.push(' ');
             context.push_str(&seg.text);
             if let Some(done) = builder.push(&seg, offset) {

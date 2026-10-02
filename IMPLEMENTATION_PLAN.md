@@ -44,7 +44,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: file queue + player/timeline, export dialog with preview, template editor, project view (docs/filter/search).
 **Success Criteria**: every mockup screen except AI reachable and working.
 **Tests**: UI smoke per screen; integration: import file via UI action → paragraphs shown.
-**Status**: Not Started
+**Status**: In Progress — Files (queue, live transcript, playback via GStreamer) and Export (formats, template, options, rendered first-page preview, required-field gate) done and UI-tested; Templates editor and Project view next.
 
 ## Stage 7: Models and compute
 **Goal**: model catalog, download + convert + checksum, backend selection (auto/CUDA/Vulkan/CPU) with fallback, speed test; Settings speech/dictation/storage sections.

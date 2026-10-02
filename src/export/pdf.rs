@@ -14,8 +14,8 @@ const MARGIN: f64 = 64.0;
 const FOOTER_SPACE: f64 = 36.0;
 const LABEL_W: f64 = 140.0;
 
-pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
-    let logo = match &report.logo {
+fn load_logo(report: &Report) -> Result<Option<cairo::ImageSurface>, ExportError> {
+    Ok(match &report.logo {
         Some(p) => {
             let mut f = std::fs::File::open(p).map_err(|source| ExportError::Io {
                 path: p.clone(),
@@ -27,7 +27,32 @@ pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
             )
         }
         None => None,
-    };
+    })
+}
+
+/// The first page as an image `width_px` wide, white background, for previews.
+pub fn preview(report: &Report, width_px: i32) -> Result<cairo::ImageSurface, ExportError> {
+    let logo = load_logo(report)?;
+    let scale = f64::from(width_px) / PAGE_W;
+    let height_px = (PAGE_H * scale).round() as i32;
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width_px, height_px).map_err(pdf_err)?;
+    {
+        let cr = Context::new(&surface).map_err(pdf_err)?;
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.paint().map_err(pdf_err)?;
+        cr.scale(scale, scale);
+        match render(report, &cr, logo.as_ref(), None, true) {
+            Ok(_) => {}
+            Err(ExportError::Pdf(m)) if m == PREVIEW_DONE => {}
+            Err(e) => return Err(e),
+        }
+    }
+    surface.flush();
+    Ok(surface)
+}
+
+pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
+    let logo = load_logo(report)?;
     let pages = {
         let surface = PdfSurface::for_stream(PAGE_W, PAGE_H, std::io::sink()).map_err(pdf_err)?;
         render(
@@ -35,6 +60,7 @@ pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
             &Context::new(&surface).map_err(pdf_err)?,
             logo.as_ref(),
             None,
+            false,
         )?
     };
     let surface = PdfSurface::new(PAGE_W, PAGE_H, path).map_err(pdf_err)?;
@@ -43,6 +69,7 @@ pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
         &Context::new(&surface).map_err(pdf_err)?,
         logo.as_ref(),
         Some(pages),
+        false,
     )?;
     surface.finish();
     Ok(())
@@ -58,7 +85,12 @@ struct Pager<'a> {
     y: f64,
     page: usize,
     total: Option<usize>,
+    /// Preview renders only the first page.
+    first_page_only: bool,
 }
+
+/// Internal signal that a first-page preview is complete.
+const PREVIEW_DONE: &str = "\u{0}preview-done";
 
 impl Pager<'_> {
     fn bottom(&self) -> f64 {
@@ -67,6 +99,9 @@ impl Pager<'_> {
 
     fn new_page(&mut self) -> Result<(), ExportError> {
         self.footer()?;
+        if self.first_page_only {
+            return Err(ExportError::Pdf(PREVIEW_DONE.into()));
+        }
         self.cr.show_page().map_err(pdf_err)?;
         self.page += 1;
         self.y = MARGIN;
@@ -130,11 +165,13 @@ fn render(
     cr: &Context,
     logo: Option<&cairo::ImageSurface>,
     total: Option<usize>,
+    first_page_only: bool,
 ) -> Result<usize, ExportError> {
     let width = PAGE_W - 2.0 * MARGIN;
     let body = font(&report.body_font, report.body_size_pt, false);
     let bold = |size: f64| font(&report.body_font, size, true);
     let mut p = Pager {
+        first_page_only,
         cr,
         report,
         y: MARGIN,
@@ -221,7 +258,9 @@ fn render(
         }
     }
     p.footer()?;
-    cr.show_page().map_err(pdf_err)?;
+    if !first_page_only {
+        cr.show_page().map_err(pdf_err)?;
+    }
     Ok(p.page)
 }
 

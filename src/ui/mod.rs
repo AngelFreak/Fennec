@@ -6,8 +6,11 @@ mod app;
 mod dictation;
 mod dock;
 pub mod editor;
+mod engine;
+mod export_page;
+mod files;
 mod inspector;
-mod sidebar;
+pub mod sidebar;
 mod window;
 
 use std::cell::RefCell;
@@ -18,12 +21,16 @@ use gtk::prelude::*;
 
 pub use app::application;
 pub use dictation::DictationPage;
+pub use export_page::ExportPage;
+pub use files::FilesPage;
+pub use sidebar::Nav;
 pub use window::MainWindow;
 
 use crate::audio::capture::{AudioSource, MicSource};
 use crate::config::{Backend, Paths, Settings};
 use crate::engine::{Transcriber, WhisperEngine};
 use crate::utterance::{EnergyVad, FrameVad, SileroFrameVad};
+use crate::vad::{SileroVad, SpeechDetector, WholeAudio};
 
 /// A replaceable callback slot on a widget controller.
 pub(crate) type Handler<A> = RefCell<Option<Rc<dyn Fn(A)>>>;
@@ -31,6 +38,7 @@ pub(crate) type TextHandler = RefCell<Option<Rc<dyn Fn(&str)>>>;
 
 pub type EngineFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn Transcriber>, String> + Send + Sync>;
 pub type AudioFactory = Arc<dyn Fn(&Settings) -> Result<Box<dyn AudioSource>, String> + Send + Sync>;
+pub type FileVadFactory = Arc<dyn Fn(&Settings, &Paths) -> Box<dyn SpeechDetector> + Send + Sync>;
 pub type VadFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn FrameVad>, String> + Send + Sync>;
 
 #[derive(Clone)]
@@ -40,6 +48,8 @@ pub struct Deps {
     pub engine: EngineFactory,
     pub audio: AudioFactory,
     pub vad: VadFactory,
+    /// Voice detection for whole files (import).
+    pub file_vad: FileVadFactory,
 }
 
 impl Deps {
@@ -59,6 +69,13 @@ impl Deps {
                 MicSource::open(device)
                     .map(|m| Box::new(m) as Box<dyn AudioSource>)
                     .map_err(|e| e.to_string())
+            }),
+            file_vad: Arc::new(|s, p| match SileroVad::load(&s.vad_path(p), 2) {
+                Ok(v) => Box::new(v) as Box<dyn SpeechDetector>,
+                Err(e) => {
+                    tracing::warn!("{e}; files will be cut into fixed chunks");
+                    Box::new(WholeAudio)
+                }
             }),
             vad: Arc::new(|s, p| match SileroFrameVad::load(&s.vad_path(p)) {
                 Ok(v) => Ok(Box::new(v) as Box<dyn FrameVad>),
