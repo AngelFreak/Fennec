@@ -3,6 +3,7 @@
 // Byte-span lists (low-confidence words) often hold a single range on purpose.
 #![allow(clippy::single_range_in_vec_init)]
 
+pub mod ai;
 pub mod audio;
 pub mod commands;
 pub mod config;

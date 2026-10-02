@@ -29,6 +29,11 @@ fn danish_date_of<Tz: TimeZone>(dt: &DateTime<Tz>) -> String {
     format!("{}. {} {}", dt.day(), MONTHS[dt.month0() as usize], dt.year())
 }
 
+/// "2. oktober 2026" for a calendar date.
+pub fn danish_day(d: chrono::NaiveDate) -> String {
+    format!("{}. {} {}", d.day(), MONTHS[d.month0() as usize], d.year())
+}
+
 /// Today's date in Danish, for `{today}`.
 pub fn danish_today() -> String {
     danish_date_of(&Local::now())

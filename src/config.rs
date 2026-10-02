@@ -89,6 +89,7 @@ pub struct Settings {
     pub user_name: String,
     pub default_template: String,
     pub commands: CommandTable,
+    pub ai: crate::ai::AiSettings,
 }
 
 impl Default for Settings {
@@ -104,6 +105,7 @@ impl Default for Settings {
             user_name: String::new(),
             default_template: "notat".into(),
             commands: CommandTable::default(),
+            ai: crate::ai::AiSettings::default(),
         }
     }
 }

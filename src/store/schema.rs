@@ -82,6 +82,15 @@ const MIGRATIONS: &[&str] = &[
         created_at   INTEGER NOT NULL
     );
     "#,
+    // 2: confirmations to send text to a cloud AI provider
+    r#"
+    CREATE TABLE cloud_consents (
+        scope       TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at  INTEGER NOT NULL,
+        PRIMARY KEY (scope, provider_id)
+    );
+    "#,
 ];
 
 pub(super) fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

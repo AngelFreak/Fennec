@@ -766,6 +766,25 @@ impl Store {
         )?;
         Ok(())
     }
+
+    // ---- cloud consents ----
+
+    /// `scope` names what may be sent, e.g. `document:12` or `project:3`.
+    pub fn has_cloud_consent(&self, scope: &str, provider_id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM cloud_consents WHERE scope = ?1 AND provider_id = ?2)",
+            params![scope, provider_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn add_cloud_consent(&self, scope: &str, provider_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO cloud_consents (scope, provider_id, created_at) VALUES (?1, ?2, ?3)",
+            params![scope, provider_id, now_ms()],
+        )?;
+        Ok(())
+    }
 }
 
 fn insert_paragraph(conn: &Connection, doc: DocumentId, ord: i64, p: &Paragraph) -> Result<ParagraphId> {

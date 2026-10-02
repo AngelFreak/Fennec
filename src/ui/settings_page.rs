@@ -288,7 +288,11 @@ impl SettingsPage {
         }
         button.set_sensitive(false);
         let cancel = Arc::new(AtomicBool::new(false));
-        *self.installing.borrow_mut() = Some(Install { _cancel: Arc::clone(&cancel), bar: progress, status });
+        *self.installing.borrow_mut() = Some(Install {
+            _cancel: Arc::clone(&cancel),
+            bar: progress,
+            status,
+        });
         let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
         let paths = self.deps.paths.clone();
         std::thread::spawn(move || {

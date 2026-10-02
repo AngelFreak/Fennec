@@ -320,3 +320,19 @@ fn syncing_paragraphs_keeps_ids_and_search_in_step() {
     assert!(s.search("en", ProjectFilter::All).unwrap().is_empty());
     assert_eq!(s.search("et", ProjectFilter::All).unwrap().len(), 1);
 }
+
+#[test]
+fn cloud_consents_are_remembered_per_scope_and_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("f.db");
+    {
+        let store = Store::open(&db).unwrap();
+        assert!(!store.has_cloud_consent("document:1", "claude").unwrap());
+        store.add_cloud_consent("document:1", "claude").unwrap();
+        store.add_cloud_consent("document:1", "claude").unwrap();
+    }
+    let store = Store::open(&db).unwrap();
+    assert!(store.has_cloud_consent("document:1", "claude").unwrap());
+    assert!(!store.has_cloud_consent("document:1", "chatgpt").unwrap());
+    assert!(!store.has_cloud_consent("document:2", "claude").unwrap());
+}
