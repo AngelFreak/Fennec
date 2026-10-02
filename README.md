@@ -35,6 +35,12 @@ make install FEATURES=vulkan # AMD/Intel GPUs; needs glslc and libvulkan-dev
 make install FEATURES=cuda   # NVIDIA; needs the CUDA toolkit
 ```
 
+Without root, `glslc` can be unpacked from Ubuntu's packages:
+`apt-get download glslc libshaderc1`, `dpkg -x` each into a folder, then put
+its `usr/bin` on `PATH` and its `usr/lib/x86_64-linux-gnu` on
+`LD_LIBRARY_PATH`. On a Radeon 760M the Vulkan build runs about 2.4× faster
+than the CPU build.
+
 Settings → Speech model shows which backends this build and computer can
 use. If the GPU fails to start, Fennec falls back to the CPU.
 

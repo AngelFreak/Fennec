@@ -50,7 +50,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: model catalog, download + convert + checksum, backend selection (auto/CUDA/Vulkan/CPU) with fallback, speed test; Settings speech/dictation/storage sections.
 **Success Criteria**: switch model/backend from Settings; Vulkan build works on this laptop.
 **Tests**: catalog/path logic; fallback chain with a failing backend stub.
-**Status**: Complete except the Vulkan build — catalog (Edda, Hviske v3, Røst v3), resumable downloads, embedded converter, custom models, backend options with reasons, GPU→CPU fallback, speed test, Dictation and Storage settings, all saved to settings.toml. Vulkan needs `glslc` (not installed here, no sudo); build with `--features vulkan` once it is.
+**Status**: Complete — Vulkan build verified on the Radeon 760M (RADV): model loads on Vulkan0, tiny model RTF 0.038 vs 0.090 on CPU; glslc unpacked from Ubuntu's packages without root. catalog (Edda, Hviske v3, Røst v3), resumable downloads, embedded converter, custom models, backend options with reasons, GPU→CPU fallback, speed test, Dictation and Storage settings, all saved to settings.toml.
 
 ## Stage 7b (optional, last): Hviske v6 sidecar engine
 **Goal**: second `Transcriber` running syvai/hviske-v6 (Whisper encoder + Qwen3 decoder, custom transformers code) in a Python helper process; selectable in Settings and in fennec-bench.
