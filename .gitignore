@@ -3,3 +3,5 @@
 /models
 /tests/fixtures/models/
 *.swp
+/.claude/worktrees
+__pycache__/
