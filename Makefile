@@ -19,12 +19,16 @@ install:
 	install -Dm644 $(APP_ID).desktop.tmp $(PREFIX)/share/applications/$(APP_ID).desktop
 	rm -f $(APP_ID).desktop.tmp
 	install -Dm644 data/icons/hicolor/scalable/apps/$(APP_ID).svg $(PREFIX)/$(ICON)
+	# The document serif (Source Serif 4, OFL); Ubuntu does not package it.
+	install -Dm644 -t $(PREFIX)/share/fonts/fennec data/fonts/*.ttf data/fonts/LICENSE-SourceSerif4.md
+	-fc-cache -f $(PREFIX)/share/fonts 2>/dev/null
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null
 	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null
 
 uninstall:
 	rm -f $(PREFIX)/bin/fennec $(PREFIX)/bin/fennec-bench
 	rm -f $(PREFIX)/share/applications/$(APP_ID).desktop $(PREFIX)/$(ICON)
+	rm -rf $(PREFIX)/share/fonts/fennec
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null
 
 # An installable package: sudo apt install ./target/debian/fennec_*.deb

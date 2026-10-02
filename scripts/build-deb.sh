@@ -23,6 +23,9 @@ install -Dm755 target/release/fennec-bench "$root/usr/bin/fennec-bench"
 install -Dm644 "data/$app_id.desktop" "$root/usr/share/applications/$app_id.desktop"
 install -Dm644 "data/icons/hicolor/scalable/apps/$app_id.svg" \
     "$root/usr/share/icons/hicolor/scalable/apps/$app_id.svg"
+# The document serif (Source Serif 4, OFL); Ubuntu does not package it.
+install -Dm644 -t "$root/usr/share/fonts/truetype/fennec" data/fonts/*.ttf
+install -Dm644 data/fonts/LICENSE-SourceSerif4.md "$root/usr/share/doc/fennec/LICENSE.source-serif-4"
 # The interface icons are Lucide's (ISC), built into the binary.
 install -Dm644 data/icons/ui/LICENSE "$root/usr/share/doc/fennec/LICENSE.lucide-icons"
 

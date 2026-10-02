@@ -83,3 +83,24 @@ fn the_package_brings_the_mockup_fonts_and_the_icon_licence() {
         "the Lucide licence is not shipped"
     );
 }
+
+#[test]
+fn both_installs_ship_the_document_serif() {
+    let make = std::fs::read_to_string("Makefile").unwrap();
+    let deb = std::fs::read_to_string("scripts/build-deb.sh").unwrap();
+    for f in [
+        "SourceSerif4Variable-Roman.ttf",
+        "SourceSerif4Variable-Italic.ttf",
+    ] {
+        assert!(
+            std::path::Path::new("data/fonts").join(f).exists(),
+            "{f} is missing"
+        );
+        assert!(make.contains("data/fonts"), "make install leaves out the fonts");
+        assert!(deb.contains("data/fonts"), "the package leaves out the fonts");
+    }
+    assert!(
+        deb.contains("LICENSE-SourceSerif4.md"),
+        "the font licence is not shipped"
+    );
+}
