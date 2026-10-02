@@ -9,11 +9,14 @@ use std::time::Instant;
 use gtk::glib;
 use gtk::prelude::*;
 
+use super::ai_panels::{ActionsPanel, SummaryPanel};
+use super::cleanup_page::CleanupPage;
 use super::dock::{Dock, DockState};
 use super::editor::Editor;
 use super::engine::EngineHolder;
 use super::inspector::Inspector;
 use super::{Deps, label};
+use crate::ai::service::Scope;
 use crate::live::{LiveConfig, LiveEvent, LiveSession};
 use crate::store::{DocumentId, NewDocument, Store};
 use crate::template::{PlaceholderContext, Template, install_defaults, load_dir};
@@ -36,6 +39,13 @@ pub struct DictationPage {
     pub editor: Rc<Editor>,
     pub dock: Dock,
     pub inspector: Rc<Inspector>,
+    pub summary: Rc<SummaryPanel>,
+    pub actions: Rc<ActionsPanel>,
+    pub cleanup: Rc<CleanupPage>,
+    /// Fields / Summary / Actions in the right-hand column.
+    pub side: gtk::Stack,
+    side_switcher: gtk::StackSwitcher,
+    pub ai_menu: gtk::MenuButton,
     pub title: gtk::Entry,
     project_chip: gtk::Label,
     project_menu: gtk::MenuButton,
@@ -48,6 +58,8 @@ pub struct DictationPage {
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
     on_document_changed: super::Handler<()>,
+    /// Asks the window to show a screen ("cleanup" or "dictate").
+    on_navigate: super::Handler<&'static str>,
 }
 
 impl DictationPage {
@@ -55,6 +67,9 @@ impl DictationPage {
         let editor = Editor::new();
         let dock = Dock::new();
         let inspector = Inspector::new();
+        let summary = SummaryPanel::new(Rc::clone(&store), "Summarize this document");
+        let actions = ActionsPanel::new(Rc::clone(&store), Some("Find action items"));
+        let cleanup = CleanupPage::new();
 
         let title = gtk::Entry::builder()
             .css_classes(["fx-doc-title"])
@@ -83,6 +98,15 @@ impl DictationPage {
         chips.append(&project_menu);
         chips.append(&tags);
         chips.append(&add_tag);
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        chips.append(&spacer);
+        let ai_menu = gtk::MenuButton::builder()
+            .label("AI")
+            .tooltip_text("AI actions")
+            .build();
+        ai_menu.add_css_class("fx-secondary");
+        chips.append(&ai_menu);
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 18);
         column.set_margin_top(28);
@@ -105,15 +129,33 @@ impl DictationPage {
         main.append(&scroller);
         main.append(&dock.root);
 
+        let side = gtk::Stack::new();
+        side.set_vexpand(true);
+        side.add_titled(&inspector.root, Some("fields"), "Fields");
+        side.add_titled(&summary.root, Some("summary"), "Summary");
+        side.add_titled(&actions.root, Some("actions"), "Actions");
+        let side_switcher = gtk::StackSwitcher::builder().stack(&side).build();
+        let side_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        side_box.add_css_class("fx-inspector");
+        side_box.set_size_request(300, -1);
+        side_box.append(&side_switcher);
+        side_box.append(&side);
+
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.append(&main);
-        root.append(&inspector.root);
+        root.append(&side_box);
 
         let page = Rc::new(Self {
             root,
             editor,
             dock,
             inspector,
+            summary,
+            actions,
+            cleanup,
+            side,
+            side_switcher,
+            ai_menu,
             title,
             project_chip,
             project_menu,
@@ -126,9 +168,12 @@ impl DictationPage {
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
             on_document_changed: RefCell::default(),
+            on_navigate: RefCell::default(),
         });
         page.editor.paragraph_gap_ms.set(3_000);
         page.wire();
+        page.build_ai_menu();
+        page.refresh_ai();
         page
     }
 
@@ -288,6 +333,7 @@ impl DictationPage {
         }
         self.show_chips();
         self.refresh_review();
+        self.load_ai_results(id);
         // Loading fired change signals; nothing is unsaved.
         if let Some(t) = self.state.borrow_mut().save_timer.take() {
             t.remove();
@@ -548,6 +594,9 @@ impl DictationPage {
             st.recording = true;
             st.started = Some(Instant::now());
         }
+        self.deps
+            .dictation_live
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.dock.set_state(DockState::Recording);
         self.dock
             .set_status("Listening. Text is committed when you pause briefly.", false);
@@ -621,6 +670,9 @@ impl DictationPage {
                     t.remove();
                 }
                 drop(st);
+                self.deps
+                    .dictation_live
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 self.editor.set_preview(None);
                 self.dock.set_state(DockState::Idle);
                 if !self.dock.status_text().starts_with("Microphone") {
@@ -631,4 +683,246 @@ impl DictationPage {
             }
         }
     }
+}
+
+// ---- AI ----
+
+impl DictationPage {
+    pub fn connect_navigate(&self, f: impl Fn(&'static str) + 'static) {
+        *self.on_navigate.borrow_mut() = Some(Rc::new(f));
+    }
+
+    fn navigate(&self, page: &'static str) {
+        if let Some(f) = self.on_navigate.borrow().clone() {
+            f(page);
+        }
+    }
+
+    fn build_ai_menu(self: &Rc<Self>) {
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let pop = gtk::Popover::builder().child(&menu).build();
+        type Action = fn(&Rc<DictationPage>);
+        let items: [(&str, Action); 4] = [
+            ("Summarize", |p| p.ai_summarize()),
+            ("Clean up…", |p| p.ai_cleanup()),
+            ("Find action items", |p| p.ai_action_items()),
+            ("Suggest field values", |p| p.ai_suggest_fields()),
+        ];
+        for (text, action) in items {
+            let b = gtk::Button::with_label(text);
+            b.add_css_class("flat");
+            if let Some(l) = b.child().and_downcast::<gtk::Label>() {
+                l.set_xalign(0.0);
+            }
+            let weak = Rc::downgrade(self);
+            let pop = pop.clone();
+            b.connect_clicked(move |_| {
+                pop.popdown();
+                if let Some(p) = weak.upgrade() {
+                    action(&p);
+                }
+            });
+            menu.append(&b);
+        }
+        self.ai_menu.set_popover(Some(&pop));
+
+        let weak = Rc::downgrade(self);
+        self.summary.run.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.ai_summarize();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.actions.run.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.ai_action_items();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.inspector.suggest.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.ai_suggest_fields();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.cleanup.connect_apply(move |id, from, to| {
+            weak.upgrade().is_some_and(|p| p.replace_paragraph(id, from, to))
+        });
+        let weak = Rc::downgrade(self);
+        self.cleanup.connect_done(move |()| {
+            if let Some(p) = weak.upgrade() {
+                p.navigate("dictate");
+            }
+        });
+    }
+
+    /// Shows or hides AI controls to match Settings.
+    pub fn refresh_ai(&self) {
+        let on = self.deps.settings().ai.enabled;
+        self.ai_menu.set_visible(on);
+        self.side_switcher.set_visible(on);
+        self.inspector.suggest.set_visible(on);
+        if !on {
+            self.side.set_visible_child_name("fields");
+            self.inspector.suggest_status.set_visible(false);
+        }
+    }
+
+    fn load_ai_results(self: &Rc<Self>, doc: DocumentId) {
+        let latest = self
+            .store
+            .summaries_for_document(doc)
+            .ok()
+            .and_then(|s| s.into_iter().next());
+        self.summary.load(latest);
+        self.actions
+            .show(self.store.document_action_items(doc).unwrap_or_default());
+        self.inspector.suggest_status.set_visible(false);
+    }
+
+    /// How the consent dialog names this document.
+    fn what(&self) -> String {
+        format!("“{}”", self.title.text().trim())
+    }
+
+    /// A callback that only runs if `doc` is still the open document.
+    fn for_doc<T: 'static>(
+        self: &Rc<Self>,
+        doc: DocumentId,
+        f: impl Fn(&Rc<Self>, T) + 'static,
+    ) -> Rc<dyn Fn(T)> {
+        let weak = Rc::downgrade(self);
+        Rc::new(move |v| {
+            if let Some(p) = weak.upgrade()
+                && p.document() == Some(doc)
+            {
+                f(&p, v);
+            }
+        })
+    }
+
+    pub fn ai_summarize(self: &Rc<Self>) {
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        self.side.set_visible_child_name("summary");
+        self.summary.begin();
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, delta| {
+                ai.summarize(store, &Scope::Document(doc), cancel, delta)
+            }),
+            {
+                let weak = Rc::downgrade(self);
+                Rc::new(move |d: &str| {
+                    if let Some(p) = weak.upgrade()
+                        && p.document() == Some(doc)
+                    {
+                        p.summary.append(d);
+                    }
+                })
+            },
+            self.for_doc(doc, |p, r| p.summary.finish(r)),
+        );
+    }
+
+    pub fn ai_cleanup(self: &Rc<Self>) {
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        self.cleanup.begin(self.title.text().trim());
+        self.navigate("cleanup");
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, _| ai.cleanup(store, doc, cancel)),
+            Rc::new(|_: &str| {}),
+            self.for_doc(doc, |p, r| p.cleanup.finish(r)),
+        );
+    }
+
+    pub fn ai_action_items(self: &Rc<Self>) {
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        self.side.set_visible_child_name("actions");
+        self.actions.begin();
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, _| ai.action_items(store, doc, cancel)),
+            Rc::new(|_: &str| {}),
+            self.for_doc(doc, |p, r| p.actions.finish(r)),
+        );
+    }
+
+    pub fn ai_suggest_fields(self: &Rc<Self>) {
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        let Some(template) = self.inspector.selected_template() else {
+            return;
+        };
+        self.side.set_visible_child_name("fields");
+        let status = &self.inspector.suggest_status;
+        status.set_visible(true);
+        status.set_text("Reading the text for field values…");
+        self.inspector.suggest.set_sensitive(false);
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, _| ai.suggest_fields(store, doc, &template, cancel)),
+            Rc::new(|_: &str| {}),
+            self.for_doc(
+                doc,
+                |p, r: Result<std::collections::BTreeMap<String, String>, crate::ai::AiError>| {
+                    p.inspector.suggest.set_sensitive(true);
+                    let status = &p.inspector.suggest_status;
+                    match r {
+                        Ok(map) if map.is_empty() => {
+                            status.set_text("The text does not fill any empty field.")
+                        }
+                        Ok(map) => {
+                            p.inspector.show_suggestions(&map);
+                            status.set_text(&format!(
+                                "{} suggested — press Use to accept a value.",
+                                plural(map.len(), "value", "values")
+                            ));
+                        }
+                        Err(e) => status.set_text(&super::ai::error_text(&e)),
+                    }
+                },
+            ),
+        );
+    }
+
+    /// Applies an accepted clean-up to the editor and saves at once, so
+    /// paragraph ids stay aligned with the editor's lines.
+    fn replace_paragraph(&self, id: crate::store::ParagraphId, from: &str, to: &str) -> bool {
+        let Some(doc) = self.document() else {
+            return false;
+        };
+        let Some(index) = self
+            .store
+            .paragraphs(doc)
+            .ok()
+            .and_then(|ps| ps.iter().position(|p| p.id == Some(id)))
+        else {
+            return false;
+        };
+        let ok = self.editor.replace_paragraph(index, from, to);
+        if ok {
+            self.save_now();
+        }
+        ok
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }

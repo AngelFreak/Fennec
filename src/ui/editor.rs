@@ -156,6 +156,39 @@ impl Editor {
             .collect()
     }
 
+    /// Replaces paragraph `index` (as in [`Self::paragraphs`]) with `new`,
+    /// but only if it still reads `expected`. The timestamps stay.
+    pub fn replace_paragraph(&self, index: usize, expected: &str, new: &str) -> bool {
+        let mut n = 0;
+        for line in 0..self.buffer.line_count() {
+            let Some(mut start) = self.buffer.iter_at_line(line) else {
+                continue;
+            };
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            let text = self.text_without_preview(&start, &end);
+            if text.trim().is_empty() {
+                continue;
+            }
+            if n < index {
+                n += 1;
+                continue;
+            }
+            if text.replace(LINE_BREAK, "\n") != expected {
+                return false;
+            }
+            let offset = start.offset();
+            self.buffer.delete(&mut start, &mut end);
+            let mut at = self.buffer.iter_at_offset(offset);
+            self.buffer
+                .insert(&mut at, &new.replace('\n', &LINE_BREAK.to_string()));
+            return true;
+        }
+        false
+    }
+
     pub fn plain_text(&self) -> String {
         self.paragraphs()
             .into_iter()

@@ -1,4 +1,4 @@
-//! Settings: speech model and compute, dictation, storage. Changes apply to
+//! Settings: speech model and compute, dictation, AI, privacy, storage. Changes apply to
 //! the shared settings and are saved to `settings.toml` right away.
 
 use std::cell::RefCell;
@@ -11,6 +11,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use super::engine::EngineHolder;
+use super::settings_ai::AiSettingsUi;
 use super::{Deps, Handler, label};
 use crate::audio::capture::input_devices;
 use crate::models::{self, Progress, Source};
@@ -34,6 +35,7 @@ pub struct SettingsPage {
     backend_box: gtk::Box,
     speed_label: gtk::Label,
     message: gtk::Label,
+    pub ai: Rc<AiSettingsUi>,
     on_model_changed: Handler<()>,
 }
 
@@ -55,8 +57,10 @@ impl SettingsPage {
         let message = label("", &["fx-field-error"]);
         message.set_wrap(true);
 
+        let ai = AiSettingsUi::new(deps.clone());
         let page = Rc::new(Self {
             root: gtk::Box::new(gtk::Orientation::Horizontal, 0),
+            ai,
             deps,
             engine,
             stack,
@@ -75,6 +79,9 @@ impl SettingsPage {
         for (id, title, w) in [
             ("model", "Speech model", model_section),
             ("dictation", "Dictation", dictation_section),
+            ("ai", "AI providers", page.ai.providers_section()),
+            ("ai-defaults", "AI defaults", page.ai.defaults_section()),
+            ("privacy", "Privacy", page.ai.privacy_section()),
             ("storage", "Storage", storage_section),
         ] {
             let scroll = gtk::ScrolledWindow::builder()
@@ -103,6 +110,11 @@ impl SettingsPage {
         page.render_backends();
         page.show_section("model");
         page
+    }
+
+    /// AI settings changed (on/off, providers, default).
+    pub fn connect_ai_changed(&self, f: impl Fn(()) + 'static) {
+        self.ai.connect_changed(f);
     }
 
     pub fn connect_model_changed(&self, f: impl Fn(()) + 'static) {

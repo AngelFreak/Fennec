@@ -1,12 +1,17 @@
 //! The Project view: documents in a project (or with a tag), filtered by tag
-//! and text, with the project's settings and a combined export.
+//! and text, with the project's settings and a combined export. With AI on,
+//! tabs add questions over the documents, a summary and action items.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gtk::prelude::*;
 
-use super::{Handler, label};
+use super::ai_panels::{ActionsPanel, SummaryPanel};
+use super::{Deps, Handler, label};
+use crate::ai::actions::Answer;
+use crate::ai::service::Scope as AiScope;
 use crate::store::{DocumentFilter, DocumentId, DocumentSummary, ProjectFilter, Source, Store};
 use crate::template::{Template, load_dir};
 use crate::text::{danish_date, duration};
@@ -22,6 +27,17 @@ pub enum Scope {
 pub struct ProjectPage {
     pub root: gtk::Box,
     store: Rc<Store>,
+    deps: Deps,
+    /// Documents / Ask / Summary / Actions.
+    pub tabs: gtk::Stack,
+    tab_switcher: gtk::StackSwitcher,
+    pub question: gtk::Entry,
+    pub ask_button: gtk::Button,
+    pub answer: gtk::Label,
+    pub ask_status: gtk::Label,
+    citations: gtk::Box,
+    pub summary: Rc<SummaryPanel>,
+    pub actions: Rc<ActionsPanel>,
     templates_dir: std::path::PathBuf,
     scope: RefCell<Scope>,
     title: gtk::Label,
@@ -46,7 +62,8 @@ pub struct ProjectPage {
 }
 
 impl ProjectPage {
-    pub fn new(store: Rc<Store>, templates_dir: std::path::PathBuf) -> Rc<Self> {
+    pub fn new(store: Rc<Store>, deps: Deps) -> Rc<Self> {
+        let templates_dir = deps.paths.templates();
         let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let title = label("", &["fx-project-title"]);
         let meta_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -76,12 +93,62 @@ impl ProjectPage {
         list.add_css_class("fx-doc-list");
         let scroller = gtk::ScrolledWindow::builder().child(&list).vexpand(true).build();
 
+        let documents = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        documents.append(&filters);
+        documents.append(&scroller);
+
+        let ask = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let question = gtk::Entry::builder()
+            .placeholder_text("Ask about these documents, e.g. Hvad blev prisen?")
+            .hexpand(true)
+            .build();
+        question.update_property(&[gtk::accessible::Property::Label("Question")]);
+        let ask_button = gtk::Button::with_label("Ask");
+        ask_button.add_css_class("fx-primary");
+        ask_row.append(&question);
+        ask_row.append(&ask_button);
+        let ask_status = label(
+            "Answers come only from these documents and point to the paragraphs they use.",
+            &["fx-field-note"],
+        );
+        ask_status.set_wrap(true);
+        let answer = label("", &["fx-answer"]);
+        answer.set_wrap(true);
+        answer.set_selectable(true);
+        answer.set_valign(gtk::Align::Start);
+        let citations = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let answer_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        answer_box.append(&answer);
+        answer_box.append(&citations);
+        let answer_scroll = gtk::ScrolledWindow::builder()
+            .child(&answer_box)
+            .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build();
+        ask.append(&ask_row);
+        ask.append(&ask_status);
+        ask.append(&answer_scroll);
+
+        let summary = SummaryPanel::new(Rc::clone(&store), "Summarize these documents");
+        let actions = ActionsPanel::new(Rc::clone(&store), None);
+        let tabs = gtk::Stack::new();
+        tabs.set_vexpand(true);
+        tabs.add_titled(&documents, Some("documents"), "Documents");
+        tabs.add_titled(&ask, Some("ask"), "Ask");
+        tabs.add_titled(&summary.root, Some("summary"), "Summary");
+        tabs.add_titled(&actions.root, Some("actions"), "Action items");
+        let tab_switcher = gtk::StackSwitcher::builder()
+            .stack(&tabs)
+            .halign(gtk::Align::Start)
+            .build();
+
         let main = gtk::Box::new(gtk::Orientation::Vertical, 18);
         main.add_css_class("fx-project-main");
         main.set_hexpand(true);
         main.append(&head);
-        main.append(&filters);
-        main.append(&scroller);
+        main.append(&tab_switcher);
+        main.append(&tabs);
 
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 16);
         panel.add_css_class("fx-inspector");
@@ -122,6 +189,16 @@ impl ProjectPage {
         let page = Rc::new(Self {
             root,
             store,
+            deps,
+            tabs,
+            tab_switcher,
+            question,
+            ask_button,
+            answer,
+            ask_status,
+            citations,
+            summary,
+            actions,
             templates_dir,
             scope: RefCell::new(Scope::Project(ProjectFilter::All)),
             title,
@@ -169,7 +246,175 @@ impl ProjectPage {
             swatches.append(&b);
         }
         page.wire();
+        page.refresh_ai();
         page
+    }
+
+    /// Shows the AI tabs only when AI is on.
+    pub fn refresh_ai(&self) {
+        let on = self.deps.settings().ai.enabled;
+        self.tab_switcher.set_visible(on);
+        if !on {
+            self.tabs.set_visible_child_name("documents");
+        }
+    }
+
+    fn ai_scope(&self) -> AiScope {
+        match &*self.scope.borrow() {
+            Scope::Project(f) => AiScope::Project(*f),
+            Scope::Tag(t) => AiScope::Tag(t.clone()),
+        }
+    }
+
+    fn what(&self) -> String {
+        format!("the documents in “{}”", self.title.text())
+    }
+
+    /// A callback that only runs if the view still shows `scope`.
+    fn for_scope<T: 'static>(self: &Rc<Self>, f: impl Fn(&Rc<Self>, T) + 'static) -> Rc<dyn Fn(T)> {
+        let weak = Rc::downgrade(self);
+        let scope = self.scope.borrow().clone();
+        Rc::new(move |v| {
+            if let Some(p) = weak.upgrade()
+                && *p.scope.borrow() == scope
+            {
+                f(&p, v);
+            }
+        })
+    }
+
+    pub fn ask(self: &Rc<Self>) {
+        let question = self.question.text().trim().to_string();
+        if question.is_empty() {
+            return;
+        }
+        self.tabs.set_visible_child_name("ask");
+        self.answer.set_text("");
+        while let Some(c) = self.citations.first_child() {
+            self.citations.remove(&c);
+        }
+        self.ask_status.set_text("Reading the documents…");
+        self.ask_button.set_sensitive(false);
+        let scope = self.ai_scope();
+        let job_scope = scope.clone();
+        let weak = Rc::downgrade(self);
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            scope,
+            self.what(),
+            Arc::new(move |ai, store, cancel, delta| ai.ask(store, &job_scope, &question, cancel, delta)),
+            Rc::new(move |d: &str| {
+                if let Some(p) = weak.upgrade() {
+                    p.answer.set_text(&format!("{}{d}", p.answer.text()));
+                }
+            }),
+            self.for_scope(|p, r: Result<Answer, crate::ai::AiError>| {
+                p.ask_button.set_sensitive(true);
+                match r {
+                    Ok(a) => p.show_answer(&a),
+                    Err(e) => {
+                        p.answer.set_text("");
+                        p.ask_status.set_text(&super::ai::error_text(&e));
+                    }
+                }
+            }),
+        );
+    }
+
+    fn show_answer(self: &Rc<Self>, a: &Answer) {
+        self.answer.set_text(&a.text);
+        self.ask_status.set_text(match a.citations.len() {
+            0 => "No sources were cited; check the answer against the documents.",
+            _ => "Sources:",
+        });
+        for c in &a.citations {
+            let Ok(doc) = self.store.document(c.document_id) else {
+                continue;
+            };
+            let n = self
+                .store
+                .paragraphs(c.document_id)
+                .ok()
+                .and_then(|ps| ps.iter().position(|p| p.id == Some(c.paragraph_id)))
+                .map_or(0, |i| i + 1);
+            let b = gtk::Button::with_label(&format!(
+                "[d{}:p{}]  {} · paragraph {n}",
+                c.document_id, c.paragraph_id, doc.title
+            ));
+            b.add_css_class("flat");
+            b.set_halign(gtk::Align::Start);
+            b.set_tooltip_text(Some("Open the document"));
+            let weak = Rc::downgrade(self);
+            let id = c.document_id;
+            b.connect_clicked(move |_| {
+                if let Some(f) = weak.upgrade().and_then(|p| p.on_open.borrow().clone()) {
+                    f(id);
+                }
+            });
+            self.citations.append(&b);
+        }
+    }
+
+    /// Cited sources as shown (tests).
+    pub fn citation_labels(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut child = self.citations.first_child();
+        while let Some(c) = child {
+            if let Some(b) = c.downcast_ref::<gtk::Button>() {
+                out.push(b.label().map(|l| l.to_string()).unwrap_or_default());
+            }
+            child = c.next_sibling();
+        }
+        out
+    }
+
+    pub fn summarize(self: &Rc<Self>) {
+        self.tabs.set_visible_child_name("summary");
+        self.summary.begin();
+        let scope = self.ai_scope();
+        let job_scope = scope.clone();
+        let weak = Rc::downgrade(self);
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            scope,
+            self.what(),
+            Arc::new(move |ai, store, cancel, delta| ai.summarize(store, &job_scope, cancel, delta)),
+            Rc::new(move |d: &str| {
+                if let Some(p) = weak.upgrade() {
+                    p.summary.append(d);
+                }
+            }),
+            self.for_scope(|p, r| p.summary.finish(r)),
+        );
+    }
+
+    fn load_ai_results(self: &Rc<Self>) {
+        let latest = self
+            .project_id()
+            .and_then(|id| self.store.summaries_for_project(id).ok())
+            .and_then(|s| s.into_iter().next());
+        self.summary.load(latest);
+        let ids: Vec<DocumentId> = self
+            .store
+            .documents(&self.base_filter())
+            .unwrap_or_default()
+            .iter()
+            .map(|d| d.id)
+            .collect();
+        let items = self
+            .store
+            .action_items(ProjectFilter::All)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| ids.contains(&a.document_id))
+            .collect();
+        self.actions.show(items);
+        self.answer.set_text("");
+        while let Some(c) = self.citations.first_child() {
+            self.citations.remove(&c);
+        }
     }
 
     fn wire(self: &Rc<Self>) {
@@ -177,6 +422,24 @@ impl ProjectPage {
         self.search.connect_search_changed(move |_| {
             if let Some(p) = weak.upgrade() {
                 p.render_list();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.ask_button.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.ask();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.question.connect_activate(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.ask();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.summary.run.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.summarize();
             }
         });
         let weak = Rc::downgrade(self);
@@ -284,6 +547,7 @@ impl ProjectPage {
             .set_visible(project.as_ref().is_some_and(|p| p.local_only));
         self.loading.set(false);
         self.render_list();
+        self.load_ai_results();
     }
 
     fn save_project(&self, color: Option<&str>) {

@@ -5,6 +5,8 @@
 
 #![allow(clippy::single_range_in_vec_init)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,6 +19,7 @@ use fennec::utterance::{EnergyVad, FrameVad};
 use fennec::vad::{SpeechDetector, WholeAudio};
 use gtk::glib;
 use gtk::prelude::*;
+use support::{MockLlm, Recorded, Reply, Wire};
 
 static mut FAILURES: usize = 0;
 
@@ -86,6 +89,9 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
         audio: Arc::new(|_| Ok(Box::new(PcmSource::new(tones(3))) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
+        secrets: Arc::new(fennec::ai::MemorySecrets::default()),
+        confirm_cloud: std::rc::Rc::new(|_, _, answer| answer(true)),
+        dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -487,10 +493,258 @@ fn main() {
         w2.sidebar.project_names() == ["All documents", "Operation Harbour", "Unsorted"],
     );
 
+    // --- AI: off by default, then every action through the real window
+    ai_checks(&tmp.path().join("c"));
+
     let failures = unsafe { FAILURES };
     if failures > 0 {
         println!("\n{failures} UI check(s) failed");
         std::process::exit(1);
     }
     println!("\nall UI checks passed");
+}
+
+/// Answers like a model would, by recognising each action's instructions.
+fn fake_model(rec: &Recorded) -> Reply {
+    let prompt = rec.prompt_text();
+    if prompt.contains("Ret hvert afsnit") {
+        let paragraphs: Vec<serde_json::Value> = prompt
+            .lines()
+            .filter_map(|l| {
+                let (id, text) = l.strip_prefix("[p")?.split_once("] ")?;
+                Some(serde_json::json!({"id": id.parse::<i64>().ok()?, "text": text.replace("øh ", "")}))
+            })
+            .collect();
+        return Reply::Text(serde_json::json!({ "paragraphs": paragraphs }).to_string());
+    }
+    if prompt.contains("Find konkrete opgaver") {
+        return Reply::Text(
+            r#"{"items": [{"what": "Send tilbud", "who": "Jens", "due": "2026-10-09", "paragraph": null}]}"#
+                .into(),
+        );
+    }
+    if prompt.contains("Udfyld felterne") {
+        let mut out = serde_json::Map::new();
+        let schema = rec.body["response_format"]["json_schema"]["schema"]["properties"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for key in schema.keys() {
+            let v = if key == "emne" {
+                "Tilbud til kunden".into()
+            } else {
+                serde_json::Value::Null
+            };
+            out.insert(key.clone(), v);
+        }
+        return Reply::Text(serde_json::Value::Object(out).to_string());
+    }
+    if prompt.contains("Besvar spørgsmålet") {
+        // The first paragraph line (the instructions contain an example marker).
+        let start = prompt.find("\n[d").map_or(0, |i| i + 1);
+        let marker = &prompt[start..start + prompt[start..].find(']').map_or(0, |e| e + 1)];
+        return Reply::Text(format!(
+            "Jens sender tilbuddet {marker}, og rabatten er 5 % [d999:p1]."
+        ));
+    }
+    Reply::Text("Resumé: Jens sender et tilbud på fredag.".into())
+}
+
+fn ai_checks(root: &std::path::Path) {
+    use fennec::ai::{Locality, Protocol, ProviderConfig};
+    let local = MockLlm::start(Wire::OpenAi, fake_model);
+    let cloud = MockLlm::start(Wire::Anthropic, fake_model);
+    let provider = |id: &str, protocol, url: &str, locality| ProviderConfig {
+        id: id.into(),
+        name: id.into(),
+        protocol,
+        base_url: url.into(),
+        model: "m".into(),
+        locality,
+        context_chars: 60_000,
+    };
+
+    // A document to work on, created before the window opens it.
+    {
+        let store = Store::open(&{
+            std::fs::create_dir_all(root.join("data")).unwrap();
+            root.join("data/fennec.db")
+        })
+        .unwrap();
+        let project = store.create_project("Leverandør", "#1D4ED8").unwrap();
+        let doc = store
+            .create_document(&fennec::store::NewDocument {
+                project_id: Some(project),
+                template_id: Some("notat".into()),
+                ..fennec::store::NewDocument::dictation("Møde om tilbud")
+            })
+            .unwrap();
+        store
+            .replace_paragraphs(
+                doc,
+                &[
+                    Paragraph::new("Jens sender øh tilbuddet på fredag."),
+                    Paragraph::new("Alt andet er på plads."),
+                ],
+            )
+            .unwrap();
+    }
+
+    let mut d = deps(root, vec![], true);
+    {
+        let mut s = d.settings.borrow_mut();
+        s.ai.providers = vec![
+            provider("ollama", Protocol::OpenAi, &local.url, Locality::ThisComputer),
+            provider("claude", Protocol::Anthropic, &cloud.url, Locality::Cloud),
+        ];
+        s.ai.default_provider = "ollama".into();
+    }
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<fennec::ui::CloudSend>::new()));
+    {
+        let asked = asked.clone();
+        d.confirm_cloud = std::rc::Rc::new(move |_, send, answer| {
+            asked.borrow_mut().push(send.clone());
+            answer(true);
+        });
+    }
+    let w = ui::build_window(d);
+    w.window.present();
+    let store = Store::open(&root.join("data/fennec.db")).unwrap();
+    let doc = w.dictation.document().unwrap();
+
+    check(
+        "AI controls are hidden while AI is off",
+        !w.dictation.ai_menu.get_visible(),
+    );
+    w.dictation.ai_summarize();
+    pump_until(Duration::from_millis(500), || false);
+    check(
+        "with AI off, nothing is sent",
+        local.count() == 0 && cloud.count() == 0 && w.dictation.summary.status.text().contains("turned off"),
+    );
+
+    // Turning AI on in Settings shows the controls and saves the choice.
+    w.sidebar.go(ui::Nav::Settings);
+    w.settings.show_section("ai");
+    w.settings.ai.enabled.set_active(true);
+    check(
+        "turning AI on shows the AI menu",
+        w.dictation.ai_menu.get_visible(),
+    );
+    let saved = std::fs::read_to_string(root.join("config/settings.toml")).unwrap_or_default();
+    check("the AI switch is saved", saved.contains("enabled = true"));
+    screenshot(&w.window, "settings-ai");
+    w.sidebar.go(ui::Nav::Dictate);
+
+    // Summary streams into the panel and is stored.
+    w.dictation.ai_summarize();
+    let summarized = pump_until(Duration::from_secs(5), || {
+        w.dictation.summary.summary_text().starts_with("Resumé")
+            && w.dictation.summary.badge.text().contains("ollama")
+    });
+    check("a summary appears with its provider", summarized);
+    check(
+        "the summary is stored",
+        store.summaries_for_document(doc).map(|s| s.len()).unwrap_or(0) == 1,
+    );
+    screenshot(&w.window, "summary");
+
+    // Clean-up: review, accept, undo.
+    w.dictation.ai_cleanup();
+    check("clean-up opens its review screen", w.visible_page() == "cleanup");
+    let proposed = pump_until(Duration::from_secs(5), || w.dictation.cleanup.states().len() == 1);
+    check("clean-up proposes the changed paragraph only", proposed);
+    screenshot(&w.window, "cleanup");
+    w.dictation.cleanup.accept_row(0);
+    let first = |w: &ui::MainWindow| w.dictation.editor.paragraphs()[0].text.clone();
+    check(
+        "accepting changes the editor",
+        first(&w) == "Jens sender tilbuddet på fredag.",
+    );
+    check(
+        "the accepted text is saved",
+        store.paragraphs(doc).unwrap()[0].text == "Jens sender tilbuddet på fredag.",
+    );
+    w.dictation.cleanup.undo_row(0);
+    check(
+        "undo restores the original",
+        first(&w) == "Jens sender øh tilbuddet på fredag.",
+    );
+    w.dictation.cleanup.done.emit_clicked();
+    check("Back returns to the document", w.visible_page() == "dictate");
+
+    // Action items.
+    w.dictation.ai_action_items();
+    let found = pump_until(Duration::from_secs(5), || {
+        w.dictation.actions.items() == ["Send tilbud"]
+    });
+    check(
+        "action items are listed and stored",
+        found && store.document_action_items(doc).unwrap().len() == 1,
+    );
+
+    // Field suggestions stay suggestions until accepted.
+    w.dictation.ai_suggest_fields();
+    let suggested = pump_until(Duration::from_secs(5), || {
+        w.dictation.inspector.suggestion("emne").as_deref() == Some("Tilbud til kunden")
+    });
+    let emne = w.dictation.inspector.entry("emne").unwrap();
+    check(
+        "a field value is suggested, not filled in",
+        suggested && emne.text().is_empty(),
+    );
+    if !suggested {
+        println!("     status: {}", w.dictation.inspector.suggest_status.text());
+    }
+    w.dictation.inspector.use_suggestion("emne");
+    check("Use fills the field", emne.text() == "Tilbud til kunden");
+
+    // Ask the project, with citations checked.
+    let project = store.projects().unwrap()[0].id;
+    w.sidebar
+        .go(ui::Nav::Project(fennec::store::ProjectFilter::Project(project)));
+    w.project.question.set_text("Hvem sender tilbuddet?");
+    w.project.ask();
+    let answered = pump_until(Duration::from_secs(5), || !w.project.citation_labels().is_empty());
+    check("Ask answers with a source", answered);
+    if !answered {
+        println!(
+            "     status: {} answer: {}",
+            w.project.ask_status.text(),
+            w.project.answer.text()
+        );
+    }
+    check(
+        "unknown citations are dropped",
+        !w.project.answer.text().contains("d999") && w.project.citation_labels().len() == 1,
+    );
+    screenshot(&w.window, "ask");
+    check("no request went to the cloud", cloud.count() == 0);
+
+    // A cloud provider asks first, once per document.
+    w.settings.ai.default_choice.set_selected(1);
+    pump_until(Duration::from_millis(100), || false);
+    w.sidebar.go(ui::Nav::Dictate);
+    w.dictation.ai_summarize();
+    let sent = pump_until(Duration::from_secs(5), || {
+        cloud.count() == 1 && w.dictation.summary.badge.text().contains("claude")
+    });
+    check(
+        "the first cloud send asks, naming where it goes",
+        sent && asked.borrow().len() == 1 && asked.borrow()[0].host.starts_with("127.0.0.1"),
+    );
+    w.dictation.ai_summarize();
+    pump_until(Duration::from_secs(5), || cloud.count() == 2);
+    check("the next send does not ask again", asked.borrow().len() == 1);
+
+    // Local-only projects never reach the cloud.
+    store.set_project_local_only(project, true).unwrap();
+    w.dictation.ai_summarize();
+    let blocked = pump_until(Duration::from_secs(5), || {
+        w.dictation.summary.status.text().contains("local only")
+    });
+    check(
+        "a local-only project refuses the cloud provider",
+        blocked && cloud.count() == 2,
+    );
 }

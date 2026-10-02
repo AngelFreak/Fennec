@@ -9,11 +9,23 @@ use gtk::prelude::*;
 use super::label;
 use crate::template::{FieldKind, Template};
 
+struct FieldRow {
+    key: String,
+    entry: gtk::Entry,
+    note: gtk::Label,
+    required: bool,
+    /// Shown when the AI has a suggestion for this empty field.
+    use_button: gtk::Button,
+}
+
 pub struct Inspector {
     pub root: gtk::Box,
     pub template_choice: gtk::DropDown,
+    /// "Suggest values" (visible when AI is on).
+    pub suggest: gtk::Button,
+    pub suggest_status: gtk::Label,
     fields_box: gtk::Box,
-    entries: RefCell<Vec<(String, gtk::Entry, gtk::Label, bool)>>,
+    entries: RefCell<Vec<FieldRow>>,
     review_box: gtk::FlowBox,
     review_count: gtk::Label,
     pub stats: gtk::Label,
@@ -25,8 +37,6 @@ pub struct Inspector {
 impl Inspector {
     pub fn new() -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
-        root.add_css_class("fx-inspector");
-        root.set_size_request(300, -1);
 
         root.append(&label("REPORT FIELDS", &["fx-section-title"]));
         let tpl_label = label("Template", &["fx-field-label"]);
@@ -36,6 +46,14 @@ impl Inspector {
         tpl_box.append(&tpl_label);
         tpl_box.append(&template_choice);
         root.append(&tpl_box);
+        let suggest = gtk::Button::with_label("Suggest values with AI");
+        suggest.add_css_class("fx-secondary");
+        suggest.set_visible(false);
+        root.append(&suggest);
+        let suggest_status = label("", &["fx-field-note"]);
+        suggest_status.set_wrap(true);
+        suggest_status.set_visible(false);
+        root.append(&suggest_status);
 
         let fields_box = gtk::Box::new(gtk::Orientation::Vertical, 14);
         root.append(&fields_box);
@@ -60,6 +78,8 @@ impl Inspector {
         Rc::new(Self {
             root,
             template_choice,
+            suggest,
+            suggest_status,
             fields_box,
             entries: RefCell::default(),
             review_box,
@@ -115,11 +135,31 @@ impl Inspector {
             entry.add_css_class("fx-field");
             entry.set_text(values.get(&f.key).map(String::as_str).unwrap_or(""));
             entry.update_property(&[gtk::accessible::Property::Label(&f.label)]);
-            b.append(&entry);
+            let use_button = gtk::Button::with_label("Use");
+            use_button.add_css_class("fx-secondary");
+            use_button.set_tooltip_text(Some("Use the suggested value"));
+            use_button.set_visible(false);
+            let entry_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            entry.set_hexpand(true);
+            entry_row.append(&entry);
+            entry_row.append(&use_button);
+            b.append(&entry_row);
+            {
+                let entry = entry.clone();
+                use_button.connect_clicked(move |b| {
+                    if let Some(text) = entry.placeholder_text() {
+                        entry.set_text(&text);
+                    }
+                    b.set_visible(false);
+                });
+            }
             let note = label("Required before export", &["fx-field-error"]);
             b.append(&note);
             let me = Rc::downgrade(self);
-            entry.connect_changed(move |_| {
+            entry.connect_changed(move |e| {
+                if !e.text().is_empty() {
+                    clear_suggestion(e);
+                }
                 if let Some(me) = me.upgrade() {
                     me.refresh_required();
                     if let Some(f) = me.on_change.borrow().clone() {
@@ -128,20 +168,29 @@ impl Inspector {
                 }
             });
             self.fields_box.append(&b);
-            entries.push((f.key.clone(), entry, note, f.required));
+            entries.push(FieldRow {
+                key: f.key.clone(),
+                entry,
+                note,
+                required: f.required,
+                use_button,
+            });
         }
         *self.entries.borrow_mut() = entries;
         self.refresh_required();
     }
 
     fn refresh_required(&self) {
-        for (_, entry, note, required) in self.entries.borrow().iter() {
-            let missing = *required && entry.text().trim().is_empty();
-            note.set_visible(missing);
+        for row in self.entries.borrow().iter() {
+            let missing = row.required && row.entry.text().trim().is_empty();
+            row.note.set_visible(missing);
             if missing {
-                entry.add_css_class("required-empty");
+                row.entry.add_css_class("required-empty");
             } else {
-                entry.remove_css_class("required-empty");
+                row.entry.remove_css_class("required-empty");
+            }
+            if !row.entry.text().is_empty() {
+                row.use_button.set_visible(false);
             }
         }
     }
@@ -150,7 +199,7 @@ impl Inspector {
         self.entries
             .borrow()
             .iter()
-            .map(|(k, e, _, _)| (k.clone(), e.text().to_string()))
+            .map(|r| (r.key.clone(), r.entry.text().to_string()))
             .collect()
     }
 
@@ -159,8 +208,45 @@ impl Inspector {
         self.entries
             .borrow()
             .iter()
-            .find(|(k, ..)| k == key)
-            .map(|(_, e, ..)| e.clone())
+            .find(|r| r.key == key)
+            .map(|r| r.entry.clone())
+    }
+
+    /// Shows AI suggestions as greyed placeholder values in empty fields.
+    /// Nothing is filled in until the user presses Use.
+    pub fn show_suggestions(&self, suggestions: &BTreeMap<String, String>) {
+        for row in self.entries.borrow().iter() {
+            match suggestions.get(&row.key) {
+                Some(v) if row.entry.text().is_empty() => {
+                    row.entry.set_placeholder_text(Some(v));
+                    row.entry.add_css_class("fx-ghost");
+                    row.use_button.set_visible(true);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The pending suggestion for `key` (tests).
+    pub fn suggestion(&self, key: &str) -> Option<String> {
+        self.entries
+            .borrow()
+            .iter()
+            .find(|r| r.key == key && r.use_button.get_visible())
+            .and_then(|r| r.entry.placeholder_text().map(|s| s.to_string()))
+    }
+
+    /// Accepts the suggestion for `key`, as the Use button does.
+    pub fn use_suggestion(&self, key: &str) {
+        let button = self
+            .entries
+            .borrow()
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.use_button.clone());
+        if let Some(b) = button {
+            b.emit_clicked();
+        }
     }
 
     pub fn set_unsure(self: &Rc<Self>, words: &[String]) {
@@ -184,5 +270,12 @@ impl Inspector {
             });
             self.review_box.insert(&b, -1);
         }
+    }
+}
+
+fn clear_suggestion(entry: &gtk::Entry) {
+    if entry.has_css_class("fx-ghost") {
+        entry.set_placeholder_text(None);
+        entry.remove_css_class("fx-ghost");
     }
 }

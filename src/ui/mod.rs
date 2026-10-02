@@ -2,7 +2,10 @@
 //! speech engine, the microphone, voice detection) comes in through
 //! [`Deps`], so tests can run the real window with fakes.
 
+mod ai;
+mod ai_panels;
 mod app;
+mod cleanup_page;
 mod dictation;
 mod dock;
 pub mod editor;
@@ -11,6 +14,7 @@ mod export_page;
 mod files;
 mod inspector;
 pub mod project;
+mod settings_ai;
 mod settings_page;
 pub mod sidebar;
 mod templates_page;
@@ -19,9 +23,11 @@ mod window;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use gtk::prelude::*;
 
+pub use ai::CloudSend;
 pub use app::application;
 pub use dictation::DictationPage;
 pub use export_page::ExportPage;
@@ -42,6 +48,8 @@ pub(crate) type TextHandler = RefCell<Option<Rc<dyn Fn(&str)>>>;
 pub type EngineFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn Transcriber>, String> + Send + Sync>;
 pub type AudioFactory = Arc<dyn Fn(&Settings) -> Result<Box<dyn AudioSource>, String> + Send + Sync>;
 pub type FileVadFactory = Arc<dyn Fn(&Settings, &Paths) -> Box<dyn SpeechDetector> + Send + Sync>;
+/// Asks whether text may go to a cloud provider; answers through the callback.
+pub type ConfirmCloud = Rc<dyn Fn(&gtk::Widget, &CloudSend, Box<dyn FnOnce(bool)>)>;
 pub type VadFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn FrameVad>, String> + Send + Sync>;
 
 #[derive(Clone)]
@@ -54,6 +62,11 @@ pub struct Deps {
     pub vad: VadFactory,
     /// Voice detection for whole files (import).
     pub file_vad: FileVadFactory,
+    /// Where AI provider API keys live.
+    pub secrets: Arc<dyn crate::ai::SecretStore>,
+    pub confirm_cloud: ConfirmCloud,
+    /// True while dictation runs (local AI models wait for it).
+    pub dictation_live: Arc<AtomicBool>,
 }
 
 impl Deps {
@@ -97,6 +110,9 @@ impl Deps {
                     Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)
                 }
             }),
+            secrets: Arc::new(crate::ai::Keyring),
+            confirm_cloud: Rc::new(ai::confirm_with_dialog),
+            dictation_live: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -105,6 +121,12 @@ impl Deps {
     /// A copy of the current settings (for threads and short reads).
     pub fn settings(&self) -> Settings {
         self.settings.borrow().clone()
+    }
+
+    /// The AI service for the current settings.
+    pub fn ai_service(&self) -> crate::ai::AiService {
+        crate::ai::AiService::new(self.settings.borrow().ai.clone(), Arc::clone(&self.secrets))
+            .with_dictation_flag(Arc::clone(&self.dictation_live))
     }
 
     /// Writes the current settings to `settings.toml`.

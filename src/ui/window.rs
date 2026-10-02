@@ -107,7 +107,7 @@ impl MainWindow {
         let dictation = DictationPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let files = FilesPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let export = ExportPage::new(Rc::clone(&store), deps.clone());
-        let project = ProjectPage::new(Rc::clone(&store), deps.paths.templates());
+        let project = ProjectPage::new(Rc::clone(&store), deps.clone());
         let templates = TemplatesPage::new(deps.paths.templates());
         let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine));
 
@@ -119,6 +119,7 @@ impl MainWindow {
         stack.add_named(&project.root, Some("project"));
         stack.add_named(&templates.root, Some("templates"));
         stack.add_named(&settings.root, Some("settings"));
+        stack.add_named(&dictation.cleanup.root, Some("cleanup"));
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         body.set_vexpand(true);
@@ -165,6 +166,20 @@ impl MainWindow {
         self.settings.connect_model_changed(move |()| {
             if let Some(w) = weak.upgrade() {
                 w.model_chip.set_label(&model_label(&w.settings_snapshot()));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.settings.connect_ai_changed(move |()| {
+            if let Some(w) = weak.upgrade() {
+                w.dictation.refresh_ai();
+                w.project.refresh_ai();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.dictation.connect_navigate(move |page| {
+            if let Some(w) = weak.upgrade() {
+                w.sidebar.set_active(&Nav::Dictate);
+                w.stack.set_visible_child_name(page);
             }
         });
         let weak = Rc::downgrade(self);

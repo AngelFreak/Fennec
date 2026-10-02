@@ -52,7 +52,9 @@ pinned at the bottom.
 - **Storage**: SQLite (`rusqlite`, bundled) with FTS5.
 - **Audio**: `cpal` (ALSA → PipeWire) for capture, `symphonia` for decoding,
   `ffmpeg` subprocess fallback for video containers, `rubato` resampling.
-- **AI**: `reqwest` (rustls) + `tokio` on a dedicated runtime thread.
+- **AI**: blocking `reqwest` (rustls) on worker threads, like model
+  downloads; streaming reads server-sent events line by line. (Changed from
+  a tokio runtime in Stage 8: no async code was needed anywhere else.)
 - **Exports**: DOCX written directly as OOXML (zip + XML); PDF via a
   layout-capable crate (decided in Stage 5).
 
@@ -93,8 +95,8 @@ src/
 **Threads.** GTK main thread never blocks. One **engine worker** thread owns
 the loaded model and takes jobs from a priority channel (live final >
 file chunk > live partial; partials are dropped when busy, never queued). An
-**audio** thread feeds a ring buffer. A **tokio** runtime thread runs AI
-requests. Results reach the UI as `Event`s over `async_channel`, consumed via
+**audio** thread feeds a ring buffer. Each AI request runs on its own
+worker thread with its own store connection. Results reach the UI as `Event`s over `async_channel`, consumed via
 `glib::spawn_future_local`.
 
 ## Data model (SQLite at `~/.local/share/fennec/fennec.db`)

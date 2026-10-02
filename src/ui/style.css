@@ -243,3 +243,13 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
 .fx-model-card.active { border: 1.5px solid @fx_accent; background-color: alpha(@fx_accent, 0.05); }
 .fx-storage-row { min-height: 52px; border-bottom: 1px solid @fx_border; }
 .fx-vocab { border: 1px solid @fx_border; border-radius: 8px; padding: 8px; }
+
+/* AI */
+.fx-ai-badge { font-size: 11px; color: @fx_muted; padding: 2px 8px; border-radius: 999px; background-color: @fx_chip; }
+.fx-summary-text { font-size: 14px; background-color: @fx_surface; border: 1px solid @fx_border; border-radius: 8px; color: @fx_text; }
+entry.fx-ghost { font-style: italic; }
+.fx-action-item { padding: 8px 4px; border-bottom: 1px solid @fx_border; }
+.fx-action-what { color: @fx_text; font-size: 13px; }
+.fx-cleanup-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
+.fx-diff { font-size: 15px; background-color: transparent; color: @fx_text; }
+.fx-answer { font-size: 15px; color: @fx_text; }

@@ -778,6 +778,11 @@ impl Store {
         )?)
     }
 
+    /// Forgets every confirmation; the next cloud send asks again.
+    pub fn clear_cloud_consents(&self) -> Result<usize> {
+        Ok(self.conn.execute("DELETE FROM cloud_consents", [])?)
+    }
+
     pub fn add_cloud_consent(&self, scope: &str, provider_id: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO cloud_consents (scope, provider_id, created_at) VALUES (?1, ?2, ?3)",

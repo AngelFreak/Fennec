@@ -62,7 +62,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: Anthropic + OpenAI-compatible providers, keyring, privacy gate, summary/clean-up/action items/ask/fields, Settings AI sections, UI (AI menu, tabs, diff view, Ask tab).
 **Success Criteria**: each action works against mock servers and a real provider when configured.
 **Tests**: mock-server integration per protocol and action; AI-off makes zero requests; local-only rejects cloud; citation validation.
-**Status**: Not Started
+**Status**: Complete. `tests/ai.rs` (16 tests, mock Anthropic and OpenAI servers) covers every action, consent, local-only, AI-off, schema fallback, JSON retry, refusals, map-reduce and the dictation queue; `tests/ui.rs` drives each action through the real window. Not yet tried against a real Claude/ChatGPT key.
 
 ## Stage 9: Packaging and docs
 **Goal**: Makefile install, .desktop, icon, cargo-deb, README.

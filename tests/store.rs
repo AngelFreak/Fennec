@@ -335,4 +335,6 @@ fn cloud_consents_are_remembered_per_scope_and_provider() {
     assert!(store.has_cloud_consent("document:1", "claude").unwrap());
     assert!(!store.has_cloud_consent("document:1", "chatgpt").unwrap());
     assert!(!store.has_cloud_consent("document:2", "claude").unwrap());
+    assert_eq!(store.clear_cloud_consents().unwrap(), 1);
+    assert!(!store.has_cloud_consent("document:1", "claude").unwrap());
 }
