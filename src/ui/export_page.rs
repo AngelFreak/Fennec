@@ -10,7 +10,7 @@ use gtk::{gdk, gio, glib};
 
 use super::{Deps, label};
 use crate::export::{
-    ExportError, ExportOptions, Format, Report, file_stem, preview_first_page, render_txt, write,
+    ExportError, ExportOptions, Format, Report, file_stem, page_count, preview_first_page, render_txt, write,
 };
 use crate::store::{DocumentId, Store};
 use crate::template::{Template, install_defaults, load_dir};
@@ -39,12 +39,13 @@ pub struct ExportPage {
     filename: gtk::Entry,
     folder: RefCell<PathBuf>,
     folder_label: gtk::Label,
+    format_hint: gtk::Label,
     warning: gtk::Label,
+    warning_box: gtk::Box,
     export: gtk::Button,
     result: gtk::Label,
     open_result: gtk::Button,
     last_written: RefCell<Option<PathBuf>>,
-    heading: gtk::Label,
     preview_stack: gtk::Stack,
     preview_picture: gtk::Picture,
     preview_text: gtk::TextView,
@@ -63,16 +64,16 @@ impl ExportPage {
     }
 
     pub fn new(store: Rc<Store>, deps: Deps) -> Rc<Self> {
-        let settings = gtk::Box::new(gtk::Orientation::Vertical, 20);
+        let settings = gtk::Box::new(gtk::Orientation::Vertical, 22);
         settings.add_css_class("fx-export-settings");
         settings.set_size_request(380, -1);
-        let heading = label("Export", &["fx-crumb-current"]);
-        settings.append(&heading);
+        settings.set_hexpand(false);
+        settings.update_property(&[gtk::accessible::Property::Label("Export settings")]);
 
-        settings.append(&label("Format", &["fx-field-label"]));
         let formats = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        formats.add_css_class("linked");
+        formats.add_css_class("fx-segmented");
         formats.set_homogeneous(true);
+        formats.update_property(&[gtk::accessible::Property::Label("Format")]);
         let mut format_buttons = Vec::new();
         let mut first: Option<gtk::ToggleButton> = None;
         for (f, name) in [(Format::Txt, "TXT"), (Format::Docx, "DOCX"), (Format::Pdf, "PDF")] {
@@ -85,13 +86,22 @@ impl ExportPage {
             formats.append(&b);
             format_buttons.push((f, b));
         }
-        settings.append(&formats);
+        let format_hint = label("", &["fx-field-note"]);
+        format_hint.set_wrap(true);
+        let format_group = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        format_group.append(&label("Format", &["fx-field-label"]));
+        format_group.append(&formats);
+        format_group.append(&format_hint);
+        settings.append(&format_group);
 
         let template = gtk::DropDown::from_strings(&[]);
         template.update_property(&[gtk::accessible::Property::Label("Template")]);
         settings.append(&field("Template", &template));
 
-        settings.append(&label("Content", &["fx-field-label"]));
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let content_label = label("Content", &["fx-field-label"]);
+        content_label.set_margin_bottom(4);
+        content.append(&content_label);
         let include_fields = gtk::CheckButton::with_label("Report fields at the top");
         include_fields.set_active(true);
         let timestamps = gtk::CheckButton::with_label("Timestamps on each paragraph");
@@ -99,67 +109,95 @@ impl ExportPage {
         let toc = gtk::CheckButton::with_label("Table of contents");
         toc.set_active(true);
         for c in [&include_fields, &timestamps, &highlight, &toc] {
-            settings.append(c);
+            content.append(c);
         }
+        settings.append(&content);
 
         let filename = gtk::Entry::new();
-        filename.add_css_class("fx-field");
+        filename.add_css_class("fx-mono");
         filename.update_property(&[gtk::accessible::Property::Label("File name")]);
-        settings.append(&field("File name", &filename));
+        let name_group = field("File name", &filename);
         let folder_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let folder_label = label("", &["fx-field-note"]);
         folder_label.set_hexpand(true);
         folder_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         let choose_folder = gtk::Button::with_label("Change…");
-        choose_folder.add_css_class("fx-secondary");
+        choose_folder.add_css_class("fx-link");
+        choose_folder.set_tooltip_text(Some("Choose the export folder"));
         folder_row.append(&folder_label);
         folder_row.append(&choose_folder);
-        settings.append(&folder_row);
+        name_group.append(&folder_row);
+        settings.append(&name_group);
 
-        let warning = label("", &["fx-banner"]);
+        let bottom = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        bottom.set_vexpand(true);
+        bottom.set_valign(gtk::Align::End);
+        let warning_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        warning_box.add_css_class("fx-callout");
+        let warning_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        warning_icon.set_pixel_size(16);
+        warning_icon.set_valign(gtk::Align::Start);
+        let warning = label("", &[]);
         warning.set_wrap(true);
-        warning.set_visible(false);
-        warning.set_vexpand(true);
-        warning.set_valign(gtk::Align::End);
-        settings.append(&warning);
+        warning.set_hexpand(true);
+        warning_box.append(&warning_icon);
+        warning_box.append(&warning);
+        warning_box.set_visible(false);
+        bottom.append(&warning_box);
         let export = gtk::Button::with_label("Export");
         export.add_css_class("fx-primary");
-        settings.append(&export);
+        export.add_css_class("large");
+        bottom.append(&export);
         let result_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let result = label("", &["fx-status"]);
+        let result = label("", &["fx-field-note"]);
         result.set_hexpand(true);
         result.set_wrap(true);
         let open_result = gtk::Button::with_label("Open");
-        open_result.add_css_class("fx-secondary");
+        open_result.add_css_class("fx-link");
         open_result.set_visible(false);
         result_row.append(&result);
         result_row.append(&open_result);
-        settings.append(&result_row);
+        bottom.append(&result_row);
+        settings.append(&bottom);
 
         let preview_picture = gtk::Picture::builder()
             .can_shrink(true)
-            .content_fit(gtk::ContentFit::Contain)
+            .content_fit(gtk::ContentFit::Fill)
             .build();
         preview_picture.add_css_class("fx-page-preview");
+        let page_frame = gtk::AspectFrame::new(0.5, 0.5, PAGE_RATIO, false);
+        page_frame.set_child(Some(&preview_picture));
+        page_frame.set_vexpand(true);
+        page_frame.set_hexpand(true);
         let preview_text = gtk::TextView::builder()
             .editable(false)
+            .cursor_visible(false)
             .monospace(true)
             .wrap_mode(gtk::WrapMode::WordChar)
+            .top_margin(28)
+            .bottom_margin(28)
+            .left_margin(32)
+            .right_margin(32)
             .build();
-        preview_text.add_css_class("fx-page-preview");
+        preview_text.add_css_class("fx-text-preview");
         let text_scroll = gtk::ScrolledWindow::builder()
             .child(&preview_text)
             .vexpand(true)
+            .halign(gtk::Align::Center)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
+        text_scroll.add_css_class("fx-page-preview");
+        text_scroll.set_size_request(560, -1);
         let preview_stack = gtk::Stack::new();
-        preview_stack.add_named(&preview_picture, Some("page"));
+        preview_stack.add_named(&page_frame, Some("page"));
         preview_stack.add_named(&text_scroll, Some("text"));
         preview_stack.set_vexpand(true);
-        let caption = label("", &["fx-stats"]);
+        let caption = label("", &["fx-field-note"]);
         caption.set_xalign(0.5);
         let preview = gtk::Box::new(gtk::Orientation::Vertical, 12);
         preview.add_css_class("fx-preview-area");
         preview.set_hexpand(true);
+        preview.update_property(&[gtk::accessible::Property::Label("Preview")]);
         preview.append(&preview_stack);
         preview.append(&caption);
 
@@ -185,12 +223,13 @@ impl ExportPage {
             filename,
             folder: RefCell::new(folder),
             folder_label,
+            format_hint,
             warning,
+            warning_box,
             export,
             result,
             open_result,
             last_written: RefCell::default(),
-            heading,
             preview_stack,
             preview_picture,
             preview_text,
@@ -211,6 +250,7 @@ impl ExportPage {
                     && let Some(p) = weak.upgrade()
                 {
                     p.format.set(f);
+                    p.format_hint.set_text(format_hint(f));
                     p.update_filename_extension();
                     p.refresh();
                 }
@@ -275,6 +315,7 @@ impl ExportPage {
 
     pub fn set_format(&self, f: Format) {
         self.format.set(f);
+        self.format_hint.set_text(format_hint(f));
         for (ff, b) in &self.format_buttons {
             if *ff == f {
                 b.set_active(true);
@@ -299,24 +340,15 @@ impl ExportPage {
         self.template
             .set_selected(templates.iter().position(|t| t.id == preferred).unwrap_or(0) as u32);
         *self.templates.borrow_mut() = templates;
-        let (heading, stem, many) = match &target {
+        let (stem, many) = match &target {
             Target::Document(id) => {
                 let doc = self.store.document(*id).ok();
                 let title = doc.as_ref().map(|d| d.title.clone()).unwrap_or_default();
                 let case = doc.as_ref().and_then(|d| d.fields.get("sagsnr").cloned());
-                (
-                    format!("Export · {title}"),
-                    file_stem(&title, case.as_deref()),
-                    false,
-                )
+                (file_stem(&title, case.as_deref()), false)
             }
-            Target::Documents { title, ids } => (
-                format!("Export {} documents · {title}", ids.len()),
-                file_stem(title, None),
-                true,
-            ),
+            Target::Documents { title, .. } => (file_stem(title, None), true),
         };
-        self.heading.set_text(&heading);
         self.toc.set_visible(many);
         self.filename
             .set_text(&format!("{stem}.{}", self.format.get().extension()));
@@ -384,9 +416,8 @@ impl ExportPage {
             Err(ExportError::MissingFields(f)) => f,
             _ => Vec::new(),
         };
-        self.warning.set_visible(!missing.is_empty());
-        self.warning
-            .set_text(&format!("Required fields are empty: {}", missing.join(", ")));
+        self.warning_box.set_visible(!missing.is_empty());
+        self.warning.set_text(&missing_fields_text(&missing));
         self.export.set_sensitive(missing.is_empty());
         self.export.set_label(&format!(
             "Export {}",
@@ -409,7 +440,11 @@ impl ExportPage {
                 Ok(surface) => {
                     self.preview_picture.set_paintable(Some(&texture(surface)));
                     self.preview_stack.set_visible_child_name("page");
-                    self.caption.set_text("Preview · A4 · first page");
+                    let pages = page_count(&report).unwrap_or(1);
+                    self.caption.set_text(&format!(
+                        "Preview · A4 · {pages} {}",
+                        if pages == 1 { "page" } else { "pages" }
+                    ));
                 }
                 Err(e) => self.caption.set_text(&format!("Preview failed: {e}")),
             },
@@ -461,12 +496,39 @@ impl ExportPage {
     }
 
     pub fn warning_text(&self) -> Option<String> {
-        self.warning.is_visible().then(|| self.warning.text().to_string())
+        self.warning_box
+            .is_visible()
+            .then(|| self.warning.text().to_string())
+    }
+
+    pub fn caption_text(&self) -> String {
+        self.caption.text().to_string()
     }
 
     pub fn preview_is_page(&self) -> bool {
         self.preview_stack.visible_child_name().as_deref() == Some("page")
             && self.preview_picture.paintable().is_some()
+    }
+}
+
+/// A4 width over height.
+const PAGE_RATIO: f32 = 210.0 / 297.0;
+
+fn format_hint(f: Format) -> &'static str {
+    match f {
+        Format::Txt => "Plain UTF-8 text. No template layout.",
+        Format::Docx => "Word document. Can be edited further afterwards.",
+        Format::Pdf => "Fixed layout, ready for printing and archiving.",
+    }
+}
+
+/// "Required field “Sagsnr.” is empty." for one, a list for several.
+fn missing_fields_text(missing: &[String]) -> String {
+    let quoted: Vec<String> = missing.iter().map(|f| format!("“{f}”")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [one] => format!("Required field {one} is empty."),
+        [rest @ .., last] => format!("Required fields {} and {last} are empty.", rest.join(", ")),
     }
 }
 
@@ -487,4 +549,22 @@ pub(super) fn texture(surface: cairo::ImageSurface) -> gdk::Texture {
     };
     // Cairo's ARGB32 is premultiplied BGRA in memory on little-endian machines.
     gdk::MemoryTexture::new(w, h, gdk::MemoryFormat::B8g8r8a8Premultiplied, &bytes, stride).upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_fields_are_named_in_a_sentence() {
+        assert_eq!(missing_fields_text(&[]), "");
+        assert_eq!(
+            missing_fields_text(&["Udarbejdet af".into()]),
+            "Required field “Udarbejdet af” is empty."
+        );
+        assert_eq!(
+            missing_fields_text(&["Sagsnr.".into(), "Emne".into(), "Udarbejdet af".into()]),
+            "Required fields “Sagsnr.”, “Emne” and “Udarbejdet af” are empty."
+        );
+    }
 }

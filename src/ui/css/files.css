@@ -1,1 +1,30 @@
 /* files screen */
+.fx-banner-title { font-size: 13px; color: @fx_text; }
+.fx-files-banner .fx-status { font-size: 13px; }
+
+.fx-transcript-list { padding: 20px 28px; }
+.fx-transcript-text { line-height: 1.65; color: @fx_text; }
+.fx-transcript-row.pending { padding-top: 10px; padding-bottom: 10px; }
+.fx-pending-note { padding: 0 12px; }
+.fx-gutter { min-width: 84px; }
+.fx-pending-note .fx-status { font-size: 13px; }
+
+.fx-player { background-color: @fx_surface; }
+.fx-play image { color: @fx_ink_fg; }
+.fx-play:hover { background-color: alpha(@fx_ink, 0.85); }
+.fx-play:disabled { opacity: 0.5; }
+.fx-player-time { font-size: 13px; color: @fx_text_soft; }
+.fx-wave { color: @fx_accent; }
+.fx-wave-transcribed { color: @fx_faint; }
+.fx-wave-pending { color: @fx_border; }
+.fx-secondary.fx-speed { font-family: "IBM Plex Mono", monospace; font-size: 13px; min-height: 40px; }
+
+.fx-drop-icon { color: @fx_muted; }
+.fx-drop-text { font-size: 13px; font-weight: 500; color: @fx_text; }
+.fx-files-aside checkbutton { min-height: 44px; }
+.fx-queue-name { color: @fx_text; }
+.fx-queue-status { font-size: 12px; color: @fx_muted; }
+.fx-queue-status.accent { color: @fx_accent_text; }
+.fx-queue-status.done { color: @fx_text_soft; }
+.fx-queue-status.error { color: @fx_error; }
+.fx-queue-check { color: @fx_text_soft; }

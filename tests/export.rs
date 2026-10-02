@@ -188,6 +188,14 @@ fn long_documents_paginate_and_number_every_page() {
     let pages = text.matches("Side ").count();
     assert!(pages >= 3, "expected several pages, got {pages}");
     assert!(text.contains(&format!("Side {pages} af {pages}")), "{text}");
+    assert_eq!(fennec::export::page_count(&report).unwrap(), pages);
+}
+
+#[test]
+fn a_short_report_counts_one_page() {
+    let (s, doc) = seeded();
+    let report = Report::for_document(&s, doc, &template(), ExportOptions::default()).unwrap();
+    assert_eq!(fennec::export::page_count(&report).unwrap(), 1);
 }
 
 #[test]

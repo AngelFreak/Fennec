@@ -1,1 +1,19 @@
 /* export screen */
+.fx-export-settings { background-color: @fx_surface; }
+.fx-export-settings .fx-callout image { color: @fx_accent_text; }
+.fx-export-settings .fx-link { font-size: 12px; }
+.fx-preview-area .fx-field-note { font-size: 12px; }
+.fx-text-preview,
+.fx-text-preview text {
+  background: none;
+  color: inherit;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+}
+/* Toggle buttons are "button" nodes; mark the chosen format. */
+.fx-export-settings .fx-segmented > button { padding: 0; }
+.fx-export-settings .fx-segmented > button:checked {
+  background-color: @fx_surface;
+  color: @fx_text;
+  box-shadow: 0 1px 2px alpha(black, 0.15);
+}

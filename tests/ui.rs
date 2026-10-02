@@ -308,6 +308,22 @@ fn main() {
         .filter(|d| d.title == "interview")
         .count();
     check("the file became its own document", file_docs == 1);
+    let loaded = pump_until(Duration::from_secs(10), || w.files.playback().is_some());
+    check("the player loads the file's audio", loaded);
+    w.files.seek_timeline(0.5);
+    check(
+        "clicking the timeline seeks",
+        w.files
+            .playback()
+            .is_some_and(|(pos, total)| total > 0 && (pos - total / 2).abs() <= 50),
+    );
+    check("the speed button cycles", w.files.cycle_speed() == "1.25×");
+    check("and wraps around", {
+        for _ in 0..2 {
+            w.files.cycle_speed();
+        }
+        w.files.cycle_speed() == "1.0×"
+    });
     screenshot(&w.window, "files");
 
     // --- export: blocked while required fields are empty, then writes a DOCX
@@ -323,7 +339,18 @@ fn main() {
     w.export.set_format(fennec::export::Format::Pdf);
     w.export.refresh();
     check("the preview renders a page", w.export.preview_is_page());
+    check(
+        "the preview caption counts the pages",
+        w.export.caption_text() == "Preview · A4 · 1 page",
+    );
     screenshot(&w.window, "export");
+    w.export.set_format(fennec::export::Format::Txt);
+    w.export.refresh();
+    check(
+        "TXT previews as plain text",
+        !w.export.preview_is_page() && w.export.caption_text() == "Preview · plain text",
+    );
+    screenshot(&w.window, "export-txt");
     w.sidebar.go(fennec::ui::Nav::Dictate);
     w.dictation
         .inspector

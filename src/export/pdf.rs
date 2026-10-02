@@ -51,6 +51,19 @@ pub fn preview(report: &Report, width_px: i32) -> Result<cairo::ImageSurface, Ex
     Ok(surface)
 }
 
+/// How many A4 pages the report fills.
+pub fn page_count(report: &Report) -> Result<usize, ExportError> {
+    let logo = load_logo(report)?;
+    let surface = PdfSurface::for_stream(PAGE_W, PAGE_H, std::io::sink()).map_err(pdf_err)?;
+    render(
+        report,
+        &Context::new(&surface).map_err(pdf_err)?,
+        logo.as_ref(),
+        None,
+        false,
+    )
+}
+
 pub fn write(report: &Report, path: &Path) -> Result<(), ExportError> {
     let logo = load_logo(report)?;
     let pages = {
