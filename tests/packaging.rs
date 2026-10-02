@@ -69,3 +69,17 @@ fn make_install_points_the_launcher_at_the_installed_binary() {
         "{make}"
     );
 }
+
+#[test]
+fn the_package_brings_the_mockup_fonts_and_the_icon_licence() {
+    let deb = std::fs::read_to_string("scripts/build-deb.sh").unwrap();
+    let recommends = deb
+        .lines()
+        .find(|l| l.starts_with("Recommends:"))
+        .expect("a Recommends line");
+    assert!(recommends.contains("fonts-ibm-plex"), "{recommends}");
+    assert!(
+        deb.contains("data/icons/ui/LICENSE"),
+        "the Lucide licence is not shipped"
+    );
+}

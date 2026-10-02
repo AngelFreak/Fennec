@@ -23,6 +23,8 @@ install -Dm755 target/release/fennec-bench "$root/usr/bin/fennec-bench"
 install -Dm644 "data/$app_id.desktop" "$root/usr/share/applications/$app_id.desktop"
 install -Dm644 "data/icons/hicolor/scalable/apps/$app_id.svg" \
     "$root/usr/share/icons/hicolor/scalable/apps/$app_id.svg"
+# The interface icons are Lucide's (ISC), built into the binary.
+install -Dm644 data/icons/ui/LICENSE "$root/usr/share/doc/fennec/LICENSE.lucide-icons"
 
 # dpkg-shlibdeps wants a debian/control to exist; give it a throwaway one.
 work=$(mktemp -d)
@@ -52,7 +54,7 @@ Architecture: $arch
 Maintainer: $maintainer
 Installed-Size: $(du -sk --exclude=DEBIAN "$root" | cut -f1)
 Depends: $depends
-Recommends: ffmpeg, gstreamer1.0-plugins-good, gnome-keyring
+Recommends: ffmpeg, gstreamer1.0-plugins-good, gnome-keyring, fonts-ibm-plex
 Suggests: python3-venv
 Section: sound
 Priority: optional
