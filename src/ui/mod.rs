@@ -10,7 +10,9 @@ mod engine;
 mod export_page;
 mod files;
 mod inspector;
+pub mod project;
 pub mod sidebar;
+mod templates_page;
 mod window;
 
 use std::cell::RefCell;

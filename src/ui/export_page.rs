@@ -466,7 +466,7 @@ fn field(name: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
 }
 
 /// A cairo ARGB32 image as a GDK texture.
-fn texture(surface: cairo::ImageSurface) -> gdk::Texture {
+pub(super) fn texture(surface: cairo::ImageSurface) -> gdk::Texture {
     let (w, h, stride) = (surface.width(), surface.height(), surface.stride() as usize);
     let mut surface = surface;
     let bytes = {

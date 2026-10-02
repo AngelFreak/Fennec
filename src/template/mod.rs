@@ -215,6 +215,23 @@ impl Template {
     }
 }
 
+/// A field key from its label: "Udarbejdet af" → "udarbejdet_af".
+pub fn key_from_label(label: &str) -> String {
+    let mut out = String::new();
+    for c in label.trim().to_lowercase().chars() {
+        match c {
+            'æ' => out.push_str("ae"),
+            'ø' => out.push_str("oe"),
+            'å' => out.push_str("aa"),
+            c if c.is_ascii_alphanumeric() => out.push(c),
+            _ if !out.ends_with('_') && !out.is_empty() => out.push('_'),
+            _ => {}
+        }
+    }
+    let out = out.trim_end_matches('_').to_string();
+    if out.is_empty() { "felt".into() } else { out }
+}
+
 /// Replaces `{today}`, `{user}`, `{duration}` and `{model}`; other text is kept.
 pub fn expand(text: &str, ctx: &PlaceholderContext) -> String {
     text.replace("{today}", &ctx.today)
@@ -350,6 +367,14 @@ mod tests {
 
     fn parse(text: &str) -> Result<Template, TemplateError> {
         Template::parse("t", text, Path::new("/tpl/t.toml"))
+    }
+
+    #[test]
+    fn keys_come_from_labels() {
+        assert_eq!(key_from_label("Udarbejdet af"), "udarbejdet_af");
+        assert_eq!(key_from_label("Sagsnr."), "sagsnr");
+        assert_eq!(key_from_label("Afhørt"), "afhoert");
+        assert_eq!(key_from_label("!!"), "felt");
     }
 
     #[test]

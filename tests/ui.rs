@@ -343,6 +343,97 @@ fn main() {
         }),
     );
 
+    // --- projects and tags group documents
+    let harbour = store.create_project("Operation Harbour", "#1D4ED8").unwrap();
+    w.sidebar.refresh();
+    w.open_in_editor(doc);
+    w.dictation.move_to_project(Some(harbour));
+    w.dictation.change_tags(|t| t.push("vendor".into()));
+    check(
+        "the document moved to the project",
+        store.document(doc).unwrap().project_id == Some(harbour),
+    );
+    check(
+        "the tag was added",
+        store.document(doc).unwrap().tags == ["vendor"],
+    );
+    check(
+        "the breadcrumb shows the project",
+        w.dictation.project_name() == "Operation Harbour",
+    );
+    w.sidebar
+        .go(fennec::ui::Nav::Project(fennec::store::ProjectFilter::Project(
+            harbour,
+        )));
+    check("a project opens the Project view", w.visible_page() == "project");
+    let title = store.document(doc).unwrap().title;
+    check(
+        "the project lists its documents",
+        w.project.shown_titles() == [title.clone()],
+    );
+    w.project.set_search("regner");
+    check(
+        "search narrows the list",
+        w.project.shown_titles() == [title.clone()],
+    );
+    w.project.set_search("findes ikke");
+    check(
+        "search with no match shows nothing",
+        w.project.shown_titles().is_empty(),
+    );
+    w.project.set_search("");
+    w.project.set_tag_filter(Some("vendor"));
+    check(
+        "the tag filter keeps tagged documents",
+        w.project.shown_titles().len() == 1,
+    );
+    w.project.set_local_only(true);
+    check(
+        "local only is saved",
+        store
+            .projects()
+            .unwrap()
+            .iter()
+            .any(|p| p.id == harbour && p.local_only),
+    );
+    screenshot(&w.window, "project");
+    w.project.press_export();
+    check(
+        "project export opens Export for its documents",
+        w.visible_page() == "export",
+    );
+    w.sidebar.go(fennec::ui::Nav::Tag("vendor".into()));
+    check(
+        "a tag shows documents across projects",
+        w.project.shown_titles() == [title],
+    );
+
+    // --- templates: create, edit and save; invalid templates explain why
+    w.sidebar.go(fennec::ui::Nav::Templates);
+    check(
+        "Templates lists the defaults",
+        w.templates.names() == ["Afhøringsrapport", "Mødereferat", "Notat"],
+    );
+    w.templates.press_new();
+    w.templates.set_name("Besigtigelse");
+    w.templates.add_field("Adresse", true);
+    let saved_tpl = w.templates.save();
+    check(
+        "a new template is saved as TOML",
+        saved_tpl.as_ref().is_ok_and(|p| p.exists()),
+    );
+    check(
+        "it appears in the list",
+        w.templates.names().contains(&"Besigtigelse".to_string()),
+    );
+    check("the template preview renders", w.templates.has_preview());
+    screenshot(&w.window, "templates");
+    w.templates.add_field("Adresse", false);
+    check(
+        "a duplicate field is refused with a reason",
+        w.templates.save().is_err() && w.templates.error_text().contains("twice"),
+    );
+
     // --- a missing model explains itself instead of failing silently
     let root_b = tmp.path().join("b");
     let w2 = ui::build_window(deps(&root_b, vec![], false));

@@ -152,6 +152,11 @@ impl Report {
         ))
     }
 
+    /// A report with the template's layout and the given sections.
+    pub fn from_template(t: &Template, sections: Vec<Section>) -> Report {
+        Report::with_sections(t, None, false, sections)
+    }
+
     fn with_sections(t: &Template, collection: Option<String>, toc: bool, sections: Vec<Section>) -> Report {
         Report {
             heading: t.heading.clone(),

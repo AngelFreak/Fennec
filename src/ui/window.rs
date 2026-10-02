@@ -9,7 +9,9 @@ use super::dictation::DictationPage;
 use super::engine::EngineHolder;
 use super::export_page::{ExportPage, Target};
 use super::files::FilesPage;
+use super::project::{ProjectPage, Scope};
 use super::sidebar::{Nav, Sidebar};
+use super::templates_page::TemplatesPage;
 use super::{Deps, icon_button, label};
 use crate::store::{DocumentFilter, Store};
 
@@ -19,6 +21,8 @@ pub struct MainWindow {
     pub dictation: Rc<DictationPage>,
     pub files: Rc<FilesPage>,
     pub export: Rc<ExportPage>,
+    pub project: Rc<ProjectPage>,
+    pub templates: Rc<TemplatesPage>,
     pub sidebar: Rc<Sidebar>,
     pub store: Rc<Store>,
     crumb_project: gtk::Label,
@@ -100,23 +104,22 @@ impl MainWindow {
         let dictation = DictationPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let files = FilesPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let export = ExportPage::new(Rc::clone(&store), deps.clone());
+        let project = ProjectPage::new(Rc::clone(&store), deps.paths.templates());
+        let templates = TemplatesPage::new(deps.paths.templates());
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         stack.add_named(&dictation.root, Some("dictate"));
         stack.add_named(&files.root, Some("files"));
         stack.add_named(&export.root, Some("export"));
-        for (name, title) in [
-            ("templates", "Templates"),
-            ("project", "Project"),
-            ("settings", "Settings"),
-        ] {
-            let page = adw::StatusPage::builder()
-                .title(title)
-                .description("This screen is being built.")
-                .build();
-            stack.add_named(&page, Some(name));
-        }
+        stack.add_named(&project.root, Some("project"));
+        stack.add_named(&templates.root, Some("templates"));
+        // Settings arrives with the model manager (Stage 7).
+        let settings_page = adw::StatusPage::builder()
+            .title("Settings")
+            .description("This screen is being built.")
+            .build();
+        stack.add_named(&settings_page, Some("settings"));
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         body.set_vexpand(true);
@@ -135,6 +138,8 @@ impl MainWindow {
             dictation,
             files,
             export,
+            project,
+            templates,
             sidebar,
             store,
             crumb_project,
@@ -153,6 +158,25 @@ impl MainWindow {
         export_button.connect_clicked(move |_| {
             if let Some(w) = weak.upgrade() {
                 w.export_current();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.project.connect_open(move |doc| {
+            if let Some(w) = weak.upgrade() {
+                w.open_in_editor(doc);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.project.connect_export(move |(title, ids)| {
+            if let Some(w) = weak.upgrade() {
+                w.export.show(Target::Documents { title, ids });
+                w.stack.set_visible_child_name("export");
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.project.connect_changed(move |()| {
+            if let Some(w) = weak.upgrade() {
+                w.sidebar.refresh();
             }
         });
         let weak = Rc::downgrade(self);
@@ -230,6 +254,17 @@ impl MainWindow {
         app.set_accels_for_action("win.new-document", &["<Control>n"]);
     }
 
+    pub fn open_in_editor(&self, doc: crate::store::DocumentId) {
+        match self.dictation.open_document(doc) {
+            Ok(()) => {
+                self.sidebar.set_active(&Nav::Dictate);
+                self.stack.set_visible_child_name("dictate");
+                self.update_crumbs();
+            }
+            Err(e) => self.saved.set_text(&e),
+        }
+    }
+
     /// Opens the Export screen for the document in the editor.
     pub fn export_current(&self) {
         self.dictation.save_now();
@@ -269,6 +304,12 @@ impl MainWindow {
     }
 
     pub fn show(&self, nav: Nav) {
+        match &nav {
+            Nav::Project(f) => self.project.show(Scope::Project(*f)),
+            Nav::Tag(t) => self.project.show(Scope::Tag(t.clone())),
+            Nav::Templates => self.templates.reload(None),
+            _ => {}
+        }
         let page = match nav {
             Nav::Dictate => "dictate",
             Nav::Files => "files",

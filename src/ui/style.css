@@ -222,3 +222,16 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
 .fx-export-settings { padding: 24px; border-right: 1px solid @fx_border; }
 .fx-preview-area { background-color: @fx_chip; padding: 24px; }
 .fx-page-preview { background-color: white; color: black; box-shadow: 0 8px 24px alpha(black, 0.12); }
+
+/* Project */
+.fx-project-main { padding: 28px 32px; }
+.fx-project-title { font-size: 24px; font-weight: 600; }
+.fx-doc-list { background: none; border: 1px solid @fx_border; border-radius: 10px; }
+.fx-doc-row { min-height: 60px; padding: 0 16px; border-radius: 0; background: none; box-shadow: none; border-bottom: 1px solid @fx_border; }
+.fx-doc-row:hover { background-color: alpha(@fx_text, 0.04); }
+.fx-color-swatch { padding: 6px; border-radius: 8px; }
+
+/* Templates */
+.fx-template-list { background-color: @fx_chrome; border-right: 1px solid @fx_border; padding: 12px; }
+.fx-template-editor { padding: 28px 32px; }
+.fx-field-row { padding: 6px 0; }

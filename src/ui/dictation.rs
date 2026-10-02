@@ -38,6 +38,8 @@ pub struct DictationPage {
     pub inspector: Rc<Inspector>,
     pub title: gtk::Entry,
     project_chip: gtk::Label,
+    project_menu: gtk::MenuButton,
+    tag_entry: gtk::Entry,
     tags: gtk::Box,
     store: Rc<Store>,
     deps: Deps,
@@ -61,9 +63,26 @@ impl DictationPage {
         title.update_property(&[gtk::accessible::Property::Label("Document title")]);
         let chips = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let project_chip = label("Unsorted", &["fx-chip"]);
+        let project_menu = gtk::MenuButton::builder()
+            .child(&project_chip)
+            .tooltip_text("Move to project")
+            .build();
+        project_menu.add_css_class("flat");
+        project_menu.set_popover(Some(&gtk::Popover::new()));
         let tags = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        chips.append(&project_chip);
+        let add_tag = gtk::MenuButton::builder()
+            .label("+ Tag")
+            .tooltip_text("Add a tag")
+            .build();
+        add_tag.add_css_class("fx-tag");
+        let tag_entry = gtk::Entry::builder()
+            .placeholder_text("Tag, e.g. meeting")
+            .build();
+        let tag_pop = gtk::Popover::builder().child(&tag_entry).build();
+        add_tag.set_popover(Some(&tag_pop));
+        chips.append(&project_menu);
         chips.append(&tags);
+        chips.append(&add_tag);
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 18);
         column.set_margin_top(28);
@@ -97,6 +116,8 @@ impl DictationPage {
             inspector,
             title,
             project_chip,
+            project_menu,
+            tag_entry,
             tags,
             store,
             deps,
@@ -112,6 +133,22 @@ impl DictationPage {
     }
 
     fn wire(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.tag_entry.connect_activate(move |e| {
+            let Some(p) = weak.upgrade() else { return };
+            let tag = e.text().trim().to_string();
+            e.set_text("");
+            if let Some(pop) = e
+                .parent()
+                .and_then(|w| w.ancestor(gtk::Popover::static_type()))
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            if !tag.is_empty() {
+                p.change_tags(|tags| tags.push(tag));
+            }
+        });
         let weak = Rc::downgrade(self);
         self.dock.record.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
@@ -269,20 +306,77 @@ impl DictationPage {
         self.inspector.show_fields(&t, &values);
     }
 
-    fn show_chips(&self) {
+    fn show_chips(self: &Rc<Self>) {
         let Some(id) = self.document() else { return };
         let Ok(doc) = self.store.document(id) else { return };
-        let project = doc
+        let projects = self.store.projects().unwrap_or_default();
+        let current = doc
             .project_id
-            .and_then(|p| self.store.projects().ok()?.into_iter().find(|x| x.id == p))
-            .map(|p| p.name)
-            .unwrap_or_else(|| "Unsorted".into());
-        self.project_chip.set_text(&project);
+            .and_then(|p| projects.iter().find(|x| x.id == p))
+            .map(|p| p.name.clone());
+        self.project_chip
+            .set_text(current.as_deref().unwrap_or("Unsorted"));
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let mut choices: Vec<(String, Option<i64>)> = vec![("Unsorted".into(), None)];
+        choices.extend(projects.iter().map(|p| (p.name.clone(), Some(p.id))));
+        for (name, pid) in choices {
+            let b = gtk::Button::with_label(&name);
+            b.add_css_class("flat");
+            let weak = Rc::downgrade(self);
+            b.connect_clicked(move |b| {
+                let Some(p) = weak.upgrade() else { return };
+                if let Some(pop) = b
+                    .ancestor(gtk::Popover::static_type())
+                    .and_downcast::<gtk::Popover>()
+                {
+                    pop.popdown();
+                }
+                p.move_to_project(pid);
+            });
+            menu.append(&b);
+        }
+        if let Some(pop) = self.project_menu.popover() {
+            pop.set_child(Some(&menu));
+        }
         while let Some(c) = self.tags.first_child() {
             self.tags.remove(&c);
         }
         for t in &doc.tags {
-            self.tags.append(&label(&format!("#{t}"), &["fx-tag"]));
+            let b = gtk::Button::with_label(&format!("#{t}"));
+            b.add_css_class("fx-tag");
+            b.set_tooltip_text(Some("Remove tag"));
+            let weak = Rc::downgrade(self);
+            let tag = t.clone();
+            b.connect_clicked(move |_| {
+                if let Some(p) = weak.upgrade() {
+                    p.change_tags(|tags| tags.retain(|x| *x != tag));
+                }
+            });
+            self.tags.append(&b);
+        }
+    }
+
+    pub fn move_to_project(self: &Rc<Self>, project: Option<i64>) {
+        let Some(id) = self.document() else { return };
+        if let Err(e) = self.store.move_document(id, project) {
+            tracing::error!("moving document {id}: {e}");
+        }
+        self.show_chips();
+        if let Some(f) = self.on_document_changed.borrow().clone() {
+            f(());
+        }
+    }
+
+    pub fn change_tags(self: &Rc<Self>, edit: impl FnOnce(&mut Vec<String>)) {
+        let Some(id) = self.document() else { return };
+        let mut tags = self.store.document(id).map(|d| d.tags).unwrap_or_default();
+        edit(&mut tags);
+        if let Err(e) = self.store.set_tags(id, &tags) {
+            tracing::error!("tagging document {id}: {e}");
+        }
+        self.show_chips();
+        if let Some(f) = self.on_document_changed.borrow().clone() {
+            f(());
         }
     }
 
