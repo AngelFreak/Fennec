@@ -27,6 +27,8 @@ struct Install {
 
 pub struct SettingsPage {
     pub root: gtk::Box,
+    /// Buttons for the window header while this screen shows.
+    pub header_actions: gtk::Box,
     deps: Deps,
     engine: Rc<EngineHolder>,
     stack: gtk::Stack,
@@ -64,6 +66,7 @@ impl SettingsPage {
         let mic_test = MicTest::new(deps.clone());
         let page = Rc::new(Self {
             root: gtk::Box::new(gtk::Orientation::Horizontal, 0),
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             ai,
             mic_test,
             input_gain: RefCell::default(),

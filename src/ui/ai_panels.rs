@@ -1,5 +1,6 @@
-//! Panels that show AI results: a summary (streamed, editable, saved) and a
-//! list of action items. Used by the Dictate screen and the Project view.
+//! Views of AI results, laid out as in the design: a summary (streamed,
+//! editable, saved) and a table of action items. Used by the Dictate
+//! screen's tabs and the Project view.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -14,9 +15,15 @@ use crate::store::{ActionItem, Store, Summary};
 
 pub struct SummaryPanel {
     pub root: gtk::Box,
+    /// "Summarise …" (empty state) and "Regenerate" both run this.
     pub run: gtk::Button,
+    regenerate: gtk::Button,
     pub status: gtk::Label,
     pub badge: gtk::Label,
+    meta: gtk::Label,
+    badge_row: gtk::Box,
+    content: gtk::Box,
+    empty: gtk::Box,
     pub text: gtk::TextView,
     pub include: gtk::CheckButton,
     store: Rc<Store>,
@@ -27,40 +34,68 @@ pub struct SummaryPanel {
 
 impl SummaryPanel {
     pub fn new(store: Rc<Store>, run_label: &str) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
+
+        let empty = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        empty.set_halign(gtk::Align::Start);
+        let empty_text = label(
+            "No summary yet. The AI writes one from the text; you can edit it afterwards.",
+            &["fx-body"],
+        );
+        empty_text.set_wrap(true);
         let run = gtk::Button::with_label(run_label);
         run.add_css_class("fx-secondary");
-        let status = label("", &["fx-field-note"]);
-        status.set_wrap(true);
-        let badge = label("", &["fx-ai-badge"]);
-        badge.set_wrap(true);
+        run.set_halign(gtk::Align::Start);
+        empty.append(&empty_text);
+        empty.append(&run);
+
+        let badge_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let badge = label("AI-GENERATED", &["fx-badge", "ai"]);
+        badge.set_valign(gtk::Align::Center);
+        let meta = label("", &["fx-stats"]);
+        meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        badge_row.append(&badge);
+        badge_row.append(&meta);
+
         let text = gtk::TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
             .css_classes(["fx-summary-text"])
-            .vexpand(true)
-            .top_margin(8)
-            .bottom_margin(8)
-            .left_margin(8)
-            .right_margin(8)
+            .pixels_below_lines(10)
             .build();
         text.update_property(&[gtk::accessible::Property::Label("Summary")]);
-        let scroller = gtk::ScrolledWindow::builder()
-            .child(&text)
-            .vexpand(true)
-            .min_content_height(160)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .build();
-        let include = gtk::CheckButton::with_label("Include in export");
-        root.append(&run);
+        let boxed = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        boxed.add_css_class("fx-ai-box");
+        boxed.append(&text);
+
+        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let include = gtk::CheckButton::with_label("Include in export ({summary} slot)");
+        include.set_hexpand(true);
+        let regenerate = gtk::Button::with_label("Regenerate");
+        regenerate.add_css_class("fx-secondary");
+        controls.append(&include);
+        controls.append(&regenerate);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        content.append(&badge_row);
+        content.append(&boxed);
+        content.append(&controls);
+
+        let status = label("", &["fx-field-note"]);
+        status.set_wrap(true);
+
+        root.append(&empty);
+        root.append(&content);
         root.append(&status);
-        root.append(&badge);
-        root.append(&scroller);
-        root.append(&include);
         let panel = Rc::new(Self {
             root,
             run,
+            regenerate,
             status,
             badge,
+            meta,
+            badge_row,
+            content,
+            empty,
             text,
             include,
             store,
@@ -80,29 +115,49 @@ impl SummaryPanel {
                 p.save();
             }
         });
+        let run = panel.run.clone();
+        panel.regenerate.connect_clicked(move |_| run.emit_clicked());
         panel.load(None);
         panel
     }
 
-    /// Shows the newest stored summary, or an empty panel.
+    fn show_content(&self, yes: bool) {
+        self.content.set_visible(yes);
+        self.empty.set_visible(!yes);
+    }
+
+    fn set_meta(&self, provider: &str, model: &str, at_ms: Option<i64>) {
+        let mut parts = vec![if model.is_empty() {
+            provider.to_string()
+        } else {
+            format!("{provider} ({model})")
+        }];
+        if let Some(ms) = at_ms {
+            parts.push(when(ms));
+        }
+        self.meta.set_text(&parts.join(" · "));
+    }
+
+    /// Shows the newest stored summary, or the empty state.
     pub fn load(&self, latest: Option<Summary>) {
         self.loading.set(true);
         match &latest {
             Some(s) => {
                 self.text.buffer().set_text(&s.text);
-                self.badge.set_text(&badge_text(&s.provider, &s.model));
+                self.set_meta(&s.provider, &s.model, Some(s.created_at));
                 self.include.set_active(s.include_in_export);
                 self.status.set_text("");
+                self.show_content(true);
             }
             None => {
                 self.text.buffer().set_text("");
-                self.badge.set_text("");
+                self.meta.set_text("");
                 self.include.set_active(true);
-                self.status.set_text("No summary yet.");
+                self.status.set_text("");
+                self.show_content(false);
             }
         }
         self.current.set(latest.map(|s| s.id));
-        self.badge.set_visible(self.current.get().is_some());
         self.include.set_visible(self.current.get().is_some());
         self.loading.set(false);
     }
@@ -111,8 +166,11 @@ impl SummaryPanel {
         self.loading.set(true);
         self.text.buffer().set_text("");
         self.loading.set(false);
-        self.status.set_text("Writing…");
+        self.show_content(true);
+        self.meta.set_text("Writing…");
+        self.status.set_text("");
         self.run.set_sensitive(false);
+        self.regenerate.set_sensitive(false);
     }
 
     pub fn append(&self, delta: &str) {
@@ -124,23 +182,25 @@ impl SummaryPanel {
 
     pub fn finish(&self, result: Result<Summarized, AiError>) {
         self.run.set_sensitive(true);
+        self.regenerate.set_sensitive(true);
         match result {
             Ok(s) => {
                 self.loading.set(true);
                 self.text.buffer().set_text(&s.text);
                 self.loading.set(false);
                 self.current.set(s.id);
-                self.badge.set_text(&badge_text(&s.provider, &s.model));
-                self.badge.set_visible(true);
+                self.set_meta(&s.provider, &s.model, Some(now_ms()));
                 self.include.set_active(true);
                 self.include.set_visible(s.id.is_some());
                 self.status.set_text("");
+                self.show_content(true);
             }
             Err(e) => {
                 // No partial result: what streamed in is cleared.
                 self.loading.set(true);
                 self.text.buffer().set_text("");
                 self.loading.set(false);
+                self.show_content(self.current.get().is_some());
                 self.status.set_text(&super::ai::error_text(&e));
             }
         }
@@ -149,6 +209,15 @@ impl SummaryPanel {
     pub fn summary_text(&self) -> String {
         let b = self.text.buffer();
         b.text(&b.start_iter(), &b.end_iter(), false).to_string()
+    }
+
+    /// "Claude (claude-opus-5-5) · today 10:52" (tests).
+    pub fn meta_text(&self) -> String {
+        self.meta.text().to_string()
+    }
+
+    pub fn badge_visible(&self) -> bool {
+        self.badge_row.is_visible() && self.content.get_visible()
     }
 
     fn schedule_save(self: &Rc<Self>) {
@@ -189,50 +258,99 @@ impl SummaryPanel {
     }
 }
 
-fn badge_text(provider: &str, model: &str) -> String {
-    if model.is_empty() {
-        format!("AI-generated · {provider}")
+fn now_ms() -> i64 {
+    chrono::Local::now().timestamp_millis()
+}
+
+/// "today 10:52", or a Danish date for older results.
+fn when(ms: i64) -> String {
+    let Some(t) = chrono::DateTime::from_timestamp_millis(ms) else {
+        return String::new();
+    };
+    let t = t.with_timezone(&chrono::Local);
+    if t.date_naive() == chrono::Local::now().date_naive() {
+        format!("today {}", t.format("%H:%M"))
     } else {
-        format!("AI-generated · {provider} · {model}")
+        crate::text::danish_date(ms)
     }
 }
+
+/// Where an action item came from, and what clicking it does.
+pub type SourceFn = Rc<dyn Fn(&ActionItem) -> Option<(String, Rc<dyn Fn()>)>>;
+
+const WHO_WIDTH: i32 = 140;
+const DUE_WIDTH: i32 = 110;
 
 pub struct ActionsPanel {
     pub root: gtk::Box,
     pub run: gtk::Button,
     pub status: gtk::Label,
+    summary: gtk::Label,
+    table: gtk::Box,
     list: gtk::Box,
+    source_title: String,
+    source_width: i32,
+    source: RefCell<Option<SourceFn>>,
     store: Rc<Store>,
     shown: RefCell<Vec<ActionItem>>,
 }
 
 impl ActionsPanel {
-    pub fn new(store: Rc<Store>, run_label: Option<&str>) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    /// `run_label`: the button that asks the AI (none for a roll-up);
+    /// `source_title`: the last column's heading ("Source", "From").
+    pub fn new(store: Rc<Store>, run_label: Option<&str>, source_title: &str, source_width: i32) -> Rc<Self> {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let summary = label("", &["fx-stats"]);
+        summary.set_hexpand(true);
         let run = gtk::Button::with_label(run_label.unwrap_or(""));
         run.add_css_class("fx-secondary");
         run.set_visible(run_label.is_some());
+        top.append(&summary);
+        top.append(&run);
+
+        let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.add_css_class("fx-table");
+        table.set_overflow(gtk::Overflow::Hidden);
+        let head = row_box(&["fx-table-head"]);
+        head.append(&cell(gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(), 28));
+        let what = label("WHAT", &[]);
+        what.set_hexpand(true);
+        head.append(&what);
+        head.append(&cell(label("WHO", &[]).upcast(), WHO_WIDTH));
+        head.append(&cell(label("DUE", &[]).upcast(), DUE_WIDTH));
+        head.append(&cell(
+            label(&source_title.to_uppercase(), &[]).upcast(),
+            source_width,
+        ));
+        table.append(&head);
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        table.append(&list);
+
         let status = label("", &["fx-field-note"]);
         status.set_wrap(true);
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        let scroller = gtk::ScrolledWindow::builder()
-            .child(&list)
-            .vexpand(true)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .build();
-        root.append(&run);
+        root.append(&top);
+        root.append(&table);
         root.append(&status);
-        root.append(&scroller);
         let panel = Rc::new(Self {
             root,
             run,
             status,
+            summary,
+            table,
             list,
+            source_title: source_title.to_string(),
+            source_width,
+            source: RefCell::default(),
             store,
             shown: RefCell::default(),
         });
         panel.show(Vec::new());
         panel
+    }
+
+    pub fn set_source(&self, f: SourceFn) {
+        *self.source.borrow_mut() = Some(f);
     }
 
     pub fn begin(&self) {
@@ -243,7 +361,10 @@ impl ActionsPanel {
     pub fn finish(self: &Rc<Self>, result: Result<Vec<ActionItem>, AiError>) {
         self.run.set_sensitive(true);
         match result {
-            Ok(items) => self.show(items),
+            Ok(items) => {
+                self.status.set_text("");
+                self.show(items);
+            }
             Err(e) => self.status.set_text(&super::ai::error_text(&e)),
         }
     }
@@ -252,33 +373,60 @@ impl ActionsPanel {
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
         }
-        self.status.set_text(match items.len() {
-            0 => "No action items.",
-            _ => "",
+        let open = items.iter().filter(|i| !i.done).count();
+        let done = items.len() - open;
+        self.summary.set_text(&match (items.len(), done) {
+            (0, _) => "No action items yet.".to_string(),
+            (_, 0) => plural(open, "open action item", "open action items"),
+            _ => format!("{open} open, {done} done"),
         });
+        self.table.set_visible(!items.is_empty());
+        let source = self.source.borrow().clone();
         for item in &items {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.add_css_class("fx-action-item");
+            let row = row_box(&["fx-table-row"]);
             let check = gtk::CheckButton::new();
             check.set_active(item.done);
-            check.set_valign(gtk::Align::Start);
-            check.update_property(&[gtk::accessible::Property::Label(&item.what)]);
-            let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            let what = label(&item.what, &["fx-action-what"]);
+            check.update_property(&[gtk::accessible::Property::Label("Done")]);
+            row.append(&cell(check.clone().upcast(), 28));
+            let what = label(&item.what, &[]);
             what.set_wrap(true);
-            text.append(&what);
-            let meta: Vec<String> = [item.who.clone(), item.due.as_deref().map(due_text)]
-                .into_iter()
-                .flatten()
-                .collect();
-            if !meta.is_empty() {
-                text.append(&label(&meta.join(" · "), &["fx-field-note"]));
+            what.set_hexpand(true);
+            if item.done {
+                what.add_css_class("fx-done");
             }
-            row.append(&check);
-            row.append(&text);
+            row.append(&what);
+            let dash = |v: Option<&str>| {
+                let l = label(v.unwrap_or("–"), if v.is_some() { &[] } else { &["fx-stats"] });
+                l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                l
+            };
+            row.append(&cell(dash(item.who.as_deref()).upcast(), WHO_WIDTH));
+            let due = item.due.as_deref().map(due_text);
+            row.append(&cell(dash(due.as_deref()).upcast(), DUE_WIDTH));
+            let src: gtk::Widget = match source.as_ref().and_then(|f| f(item)) {
+                Some((text, go)) => {
+                    let b = gtk::Button::with_label(&text);
+                    b.add_css_class("fx-link");
+                    b.set_halign(gtk::Align::Start);
+                    if let Some(l) = b.child().and_downcast::<gtk::Label>() {
+                        l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        l.add_css_class("fx-mono");
+                    }
+                    b.connect_clicked(move |_| go());
+                    b.upcast()
+                }
+                None => dash(None).upcast(),
+            };
+            row.append(&cell(src, self.source_width));
             let id = item.id;
             let weak = Rc::downgrade(self);
+            let what_label = what.clone();
             check.connect_toggled(move |c| {
+                if c.is_active() {
+                    what_label.add_css_class("fx-done");
+                } else {
+                    what_label.remove_css_class("fx-done");
+                }
                 if let Some(p) = weak.upgrade()
                     && let Err(e) = p.store.set_action_done(id, c.is_active())
                 {
@@ -294,6 +442,33 @@ impl ActionsPanel {
     pub fn items(&self) -> Vec<String> {
         self.shown.borrow().iter().map(|i| i.what.clone()).collect()
     }
+
+    /// The last column's heading (tests).
+    pub fn source_title(&self) -> &str {
+        &self.source_title
+    }
+}
+
+fn row_box(classes: &[&str]) -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    for c in classes {
+        b.add_css_class(c);
+    }
+    b
+}
+
+fn cell(w: gtk::Widget, width: i32) -> gtk::Widget {
+    w.set_size_request(width, -1);
+    w.set_hexpand(false);
+    w.set_valign(gtk::Align::Center);
+    if let Some(l) = w.downcast_ref::<gtk::Label>() {
+        l.set_xalign(0.0);
+    }
+    w
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// "9. oktober 2026" for an ISO date; anything else unchanged.

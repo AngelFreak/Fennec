@@ -26,6 +26,8 @@ pub enum Scope {
 
 pub struct ProjectPage {
     pub root: gtk::Box,
+    /// Buttons for the window header while this screen shows.
+    pub header_actions: gtk::Box,
     store: Rc<Store>,
     deps: Deps,
     /// Documents / Ask / Summary / Actions.
@@ -131,7 +133,7 @@ impl ProjectPage {
         ask.append(&answer_scroll);
 
         let summary = SummaryPanel::new(Rc::clone(&store), "Summarize these documents");
-        let actions = ActionsPanel::new(Rc::clone(&store), None);
+        let actions = ActionsPanel::new(Rc::clone(&store), None, "From", 220);
         let tabs = gtk::Stack::new();
         tabs.set_vexpand(true);
         tabs.add_titled(&documents, Some("documents"), "Documents");
@@ -188,6 +190,7 @@ impl ProjectPage {
 
         let page = Rc::new(Self {
             root,
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             store,
             deps,
             tabs,
@@ -248,6 +251,10 @@ impl ProjectPage {
         page.wire();
         page.refresh_ai();
         page
+    }
+
+    pub fn title_text(&self) -> String {
+        self.title.text().to_string()
     }
 
     /// Shows the AI tabs only when AI is on.

@@ -643,7 +643,7 @@ fn ai_checks(root: &std::path::Path) {
     w.dictation.ai_summarize();
     let summarized = pump_until(Duration::from_secs(5), || {
         w.dictation.summary.summary_text().starts_with("Resumé")
-            && w.dictation.summary.badge.text().contains("ollama")
+            && w.dictation.summary.meta_text().contains("ollama")
     });
     check("a summary appears with its provider", summarized);
     check(
@@ -730,7 +730,7 @@ fn ai_checks(root: &std::path::Path) {
     w.sidebar.go(ui::Nav::Dictate);
     w.dictation.ai_summarize();
     let sent = pump_until(Duration::from_secs(5), || {
-        cloud.count() == 1 && w.dictation.summary.badge.text().contains("claude")
+        cloud.count() == 1 && w.dictation.summary.meta_text().contains("claude")
     });
     check(
         "the first cloud send asks, naming where it goes",

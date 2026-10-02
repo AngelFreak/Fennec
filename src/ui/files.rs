@@ -69,6 +69,9 @@ enum Msg {
 
 pub struct FilesPage {
     pub root: gtk::Box,
+    /// Extra buttons for the window header.
+    pub header_actions: gtk::Box,
+    on_header_changed: super::Handler<()>,
     store: Rc<Store>,
     deps: Deps,
     engine: Rc<EngineHolder>,
@@ -176,6 +179,8 @@ impl FilesPage {
 
         let page = Rc::new(Self {
             root,
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
+            on_header_changed: RefCell::default(),
             store,
             deps,
             engine,
@@ -557,6 +562,44 @@ impl FilesPage {
         }
         self.refresh_rows();
         self.render_transcript();
+        self.header_changed();
+    }
+
+    /// The document of the selected file, for Export.
+    pub fn current_document(&self) -> Option<DocumentId> {
+        self.selected_doc()
+    }
+
+    /// Breadcrumb for the header: project, title and file details.
+    pub fn header_info(&self) -> (Option<String>, String, String) {
+        let Some(doc) = self.selected_doc().and_then(|id| self.store.document(id).ok()) else {
+            return (None, "Files".into(), String::new());
+        };
+        let project = doc
+            .project_id
+            .and_then(|p| self.store.projects().ok()?.into_iter().find(|x| x.id == p))
+            .map(|p| p.name);
+        let file = doc
+            .audio_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (
+            Some(project.unwrap_or_else(|| "Unsorted".into())),
+            doc.title,
+            file,
+        )
+    }
+
+    pub fn connect_header_changed(&self, f: impl Fn() + 'static) {
+        *self.on_header_changed.borrow_mut() = Some(Rc::new(move |()| f()));
+    }
+
+    fn header_changed(&self) {
+        if let Some(f) = self.on_header_changed.borrow().clone() {
+            f(());
+        }
     }
 
     fn selected_doc(&self) -> Option<DocumentId> {

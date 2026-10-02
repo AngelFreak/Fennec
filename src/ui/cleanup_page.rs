@@ -33,6 +33,8 @@ struct Row {
 
 pub struct CleanupPage {
     pub root: gtk::Box,
+    /// Buttons for the window header while this screen shows.
+    pub header_actions: gtk::Box,
     title: gtk::Label,
     pub status: gtk::Label,
     list: gtk::Box,
@@ -78,6 +80,7 @@ impl CleanupPage {
 
         let page = Rc::new(Self {
             root,
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             title,
             status,
             list,

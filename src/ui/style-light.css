@@ -1,15 +1,44 @@
+/* Light tokens, taken from the design mockup. */
 @define-color fx_surface #FFFFFF;
 @define-color fx_chrome #F6F7F9;
 @define-color fx_inspector #FAFAFB;
 @define-color fx_chip #F1F2F5;
 @define-color fx_border #DCE0E6;
+@define-color fx_divider #EEF0F3;
+@define-color fx_dash #B8BFCA;
+@define-color fx_track #E4E7EC;
+@define-color fx_canvas #E9ECF0;
 @define-color fx_text #15171C;
 @define-color fx_text_soft #2A2E37;
 @define-color fx_muted #5A6170;
+@define-color fx_faint #9AA1AE;
 @define-color fx_preview #6B7280;
 @define-color fx_accent #C2410C;
 @define-color fx_accent_hover #9A3412;
 @define-color fx_accent_soft #FDEBDD;
+@define-color fx_accent_tint #FFFBF8;
 @define-color fx_accent_text #9A3412;
 @define-color fx_unsure_border #F4C7A6;
 @define-color fx_error #B42318;
+@define-color fx_ai_bg #E8EEFC;
+@define-color fx_ai_text #1E3A8A;
+@define-color fx_ai_dash #93A8E8;
+@define-color fx_ai_tint #F4F7FE;
+@define-color fx_net_bg #E6F4F1;
+@define-color fx_net_text #0F5A53;
+@define-color fx_ok #0F766E;
+@define-color fx_ink #15171C;
+@define-color fx_ink_fg #FFFFFF;
+
+/* libadwaita's own colours follow the tokens. */
+@define-color accent_bg_color @fx_accent;
+@define-color accent_color @fx_accent_hover;
+@define-color accent_fg_color #FFFFFF;
+@define-color window_bg_color @fx_surface;
+@define-color window_fg_color @fx_text;
+@define-color view_bg_color @fx_surface;
+@define-color view_fg_color @fx_text;
+@define-color popover_bg_color @fx_surface;
+@define-color popover_fg_color @fx_text;
+@define-color dialog_bg_color @fx_surface;
+@define-color card_bg_color @fx_surface;

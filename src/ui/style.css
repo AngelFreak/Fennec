@@ -1,39 +1,250 @@
-/* Fennec: quiet neutral surfaces, one fox-orange accent. Colours come from
-   style-light.css / style-dark.css (@define-color tokens). */
+/* Fennec, after the design mockup: quiet neutral surfaces, one fox-orange
+   accent, IBM Plex Sans for the interface and a serif for documents.
+   Colours are tokens from style-light.css / style-dark.css. */
 
 window.fennec {
   background-color: @fx_surface;
   color: @fx_text;
   font-family: "IBM Plex Sans", Inter, Cantarell, sans-serif;
+  font-size: 13px;
 }
+
+/* ---- Resets: Adwaita's defaults give bold buttons and grey fields. ---- */
+
+window.fennec button { font-weight: 400; }
+window.fennec button label { font-weight: inherit; }
+
+window.fennec entry,
+window.fennec spinbutton,
+window.fennec passwordentry,
+window.fennec searchentry {
+  background-color: @fx_surface;
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  box-shadow: none;
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: @fx_text;
+}
+window.fennec entry:focus-within,
+window.fennec spinbutton:focus-within,
+window.fennec passwordentry:focus-within,
+window.fennec searchentry:focus-within {
+  border-color: @fx_accent;
+  box-shadow: 0 0 0 3px alpha(@fx_accent, 0.18);
+  outline: none;
+}
+window.fennec entry.required-empty { border-color: @fx_accent; }
+window.fennec entry.fx-mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+
+window.fennec dropdown > button,
+window.fennec menubutton.fx-select > button {
+  background-color: @fx_surface;
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  box-shadow: none;
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: @fx_text;
+}
+window.fennec dropdown > button:hover { background-color: @fx_chrome; }
+window.fennec dropdown > button arrow { color: @fx_muted; }
+
+window.fennec checkbutton { font-size: 13px; color: @fx_text_soft; min-height: 40px; }
+window.fennec checkbutton check {
+  min-width: 16px;
+  min-height: 16px;
+  border-radius: 4px;
+  border: 1.5px solid @fx_faint;
+  background-color: @fx_surface;
+  box-shadow: none;
+}
+window.fennec checkbutton check:checked {
+  background-color: @fx_accent;
+  border-color: @fx_accent;
+  color: white;
+}
+
+window.fennec scale trough { background-color: @fx_track; min-height: 4px; border-radius: 2px; }
+window.fennec scale highlight { background-color: @fx_accent; border-radius: 2px; }
+window.fennec scale slider {
+  background-color: @fx_surface;
+  border: 1.5px solid @fx_accent;
+  box-shadow: none;
+  min-width: 16px;
+  min-height: 16px;
+}
+window.fennec scale value { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: @fx_text; }
+
+window.fennec progressbar trough { background-color: @fx_track; min-height: 6px; border-radius: 3px; }
+window.fennec progressbar progress { background-color: @fx_accent; min-height: 6px; border-radius: 3px; }
+window.fennec progressbar.thin trough,
+window.fennec progressbar.thin progress { min-height: 4px; border-radius: 2px; }
+window.fennec progressbar.ink progress { background-color: @fx_ink; }
+
+window.fennec switch { background-color: @fx_track; }
+window.fennec switch:checked { background-color: @fx_accent; }
+
+window.fennec popover > contents {
+  background-color: @fx_surface;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px @fx_border, 0 12px 32px alpha(black, 0.16);
+  padding: 6px;
+}
+
+window.fennec textview.fx-boxed,
+window.fennec textview.fx-boxed text {
+  background-color: @fx_surface;
+  color: @fx_text;
+}
+window.fennec .fx-boxed {
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+window.fennec separator { background-color: @fx_border; min-height: 1px; min-width: 1px; }
+
+/* ---- Buttons ---- */
+
+.fx-primary {
+  background-color: @fx_accent;
+  color: white;
+  font-weight: 600;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: none;
+  box-shadow: none;
+}
+.fx-primary label { font-weight: 600; }
+.fx-primary:hover { background-color: @fx_accent_hover; }
+.fx-primary:disabled { opacity: 0.5; }
+.fx-primary.large { min-height: 44px; font-size: 14px; }
+
+.fx-ink {
+  background-color: @fx_ink;
+  color: @fx_ink_fg;
+  border-radius: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  box-shadow: none;
+  font-size: 12px;
+}
+.fx-ink label { font-weight: 600; }
+.fx-ink:hover { background-color: alpha(@fx_ink, 0.85); }
+.fx-ink.large { min-height: 44px; font-size: 14px; }
+
+.fx-secondary {
+  background-color: @fx_surface;
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  box-shadow: none;
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: @fx_text_soft;
+}
+.fx-secondary:hover { background-color: @fx_chrome; }
+.fx-secondary.small { min-height: 30px; font-size: 12px; padding: 0 10px; }
+
+.fx-icon-button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: @fx_text_soft;
+}
+.fx-icon-button:hover { background-color: alpha(@fx_text, 0.06); }
+
+.fx-menu-item {
+  background: none;
+  box-shadow: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  min-height: 0;
+}
+.fx-menu-item:hover { background-color: @fx_chrome; }
+.fx-menu-title { font-size: 13px; font-weight: 500; color: @fx_text; }
+.fx-menu-note { font-size: 12px; color: @fx_muted; }
+.fx-menu-footer { padding: 6px 12px; font-size: 12px; color: @fx_muted; }
+.fx-link {
+  background: none;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  color: @fx_accent;
+  font-size: 12px;
+}
+.fx-link:hover { color: @fx_accent_hover; }
+
+/* Segmented control (format, compute). */
+.fx-segmented {
+  background-color: @fx_chip;
+  border-radius: 10px;
+  padding: 4px;
+}
+.fx-segmented > button,
+.fx-segmented > togglebutton {
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 7px;
+  min-height: 40px;
+  color: @fx_muted;
+  font-size: 13px;
+}
+.fx-segmented > button label,
+.fx-segmented > togglebutton label { font-weight: 600; }
+.fx-segmented > togglebutton:checked,
+.fx-segmented > button.active {
+  background-color: @fx_surface;
+  color: @fx_text;
+  box-shadow: 0 1px 2px alpha(black, 0.15);
+}
+.fx-segmented > button:disabled { opacity: 0.55; }
+.fx-seg-sub { font-size: 11px; color: @fx_muted; font-weight: 400; }
+
+/* ---- Header ---- */
 
 .fx-header {
   background-color: @fx_chrome;
   border-bottom: 1px solid @fx_border;
   min-height: 52px;
-  padding: 0 8px;
+  padding: 0 12px 0 16px;
 }
-
-.fx-logo {
-  background-color: @fx_accent;
-  color: white;
-  border-radius: 7px;
-  min-width: 26px;
-  min-height: 26px;
-  font-weight: 700;
-}
-
+.fx-header.sub { padding-left: 8px; }
 .fx-app-name { font-weight: 600; font-size: 15px; }
 .fx-crumb { color: @fx_muted; font-size: 14px; }
+.fx-crumb-sep { color: @fx_faint; font-size: 14px; }
 .fx-crumb-current { font-weight: 600; font-size: 14px; }
 .fx-saved { color: @fx_muted; font-size: 12px; }
+.fx-header-chip {
+  background-color: @fx_surface;
+  border: 1px solid @fx_border;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  box-shadow: none;
+  color: @fx_text_soft;
+  font-size: 13px;
+}
+.fx-header-chip:hover { background-color: @fx_surface; border-color: @fx_faint; }
+.fx-header-chip.strong label { font-weight: 600; color: @fx_text; }
+
+/* ---- Sidebar ---- */
 
 .fx-sidebar {
   background-color: @fx_chrome;
   border-right: 1px solid @fx_border;
   padding: 12px;
 }
-
 .fx-nav {
   min-height: 44px;
   padding: 0 12px;
@@ -48,17 +259,17 @@ window.fennec {
   background-color: @fx_surface;
   box-shadow: 0 0 0 1px @fx_border;
   color: @fx_text;
-  font-weight: 600;
 }
+.fx-nav.active label { font-weight: 600; }
 .fx-nav.active image { color: @fx_accent; }
 
 .fx-section-title {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0.7px;
   color: @fx_muted;
-  margin: 20px 12px 4px 12px;
 }
+.fx-sidebar .fx-section-title { margin: 0 0 0 12px; }
 
 .fx-project-row {
   min-height: 40px;
@@ -67,9 +278,11 @@ window.fennec {
   background: none;
   box-shadow: none;
   font-size: 13px;
+  color: @fx_text;
 }
-.fx-project-row.active { background-color: @fx_accent_soft; font-weight: 500; }
-.fx-swatch { min-width: 10px; min-height: 10px; border-radius: 3px; }
+.fx-project-row:hover { background-color: alpha(@fx_text, 0.05); }
+.fx-project-row.active { background-color: @fx_accent_soft; }
+.fx-project-row.active label { font-weight: 500; }
 .fx-count { color: @fx_muted; font-size: 12px; }
 
 .fx-tag {
@@ -77,59 +290,111 @@ window.fennec {
   padding: 0 10px;
   border-radius: 999px;
   background-color: @fx_surface;
+  border: none;
   box-shadow: 0 0 0 1px @fx_border;
   font-size: 12px;
   color: @fx_text_soft;
 }
-
-.fx-primary {
-  background-color: @fx_accent;
-  color: white;
-  font-weight: 600;
-  border-radius: 8px;
-  min-height: 40px;
-  padding: 0 16px;
-}
-.fx-primary:hover { background-color: @fx_accent_hover; }
-.fx-primary:disabled { opacity: 0.5; }
-
-.fx-secondary {
-  background-color: @fx_surface;
-  border: 1px solid @fx_border;
-  border-radius: 8px;
-  min-height: 40px;
+.fx-tag.small { min-height: 24px; padding: 0 8px; }
+.fx-tag.add { box-shadow: none; border: 1px dashed @fx_dash; background: none; color: @fx_muted; }
+.fx-tag.add:hover { color: @fx_text; border-color: @fx_muted; }
+.fx-chip-filter {
+  min-height: 32px;
   padding: 0 12px;
-  font-size: 13px;
-}
-
-/* Editor */
-.fx-editor-scroller { background-color: @fx_surface; }
-textview.fx-editor, textview.fx-editor text {
+  border-radius: 999px;
+  border: 1px solid @fx_border;
   background-color: @fx_surface;
-  color: @fx_text;
-  font-family: "Source Serif 4", "Noto Serif", "DejaVu Serif", serif;
-  font-size: 17px;
-}
-.fx-doc-title {
-  font-family: "Source Serif 4", "Noto Serif", "DejaVu Serif", serif;
-  font-size: 30px;
-  font-weight: 600;
-  background: none;
-  border: none;
   box-shadow: none;
-  padding: 0;
+  font-size: 12px;
+  color: @fx_text_soft;
 }
-.fx-chip {
-  min-height: 28px;
-  padding: 0 10px;
+.fx-chip-filter:checked { background-color: @fx_ink; border-color: @fx_ink; color: @fx_ink_fg; }
+
+/* ---- Small labels and badges ---- */
+
+.fx-field-label { font-size: 12px; font-weight: 500; color: @fx_text_soft; }
+.fx-field-note { font-size: 12px; color: @fx_muted; }
+.fx-field-note.small { font-size: 11px; }
+.fx-field-error { font-size: 11px; color: @fx_accent_text; }
+.fx-stats { color: @fx_muted; font-size: 12px; }
+.fx-mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+.fx-mono.accent { color: @fx_accent_text; }
+.fx-h1 { font-size: 20px; font-weight: 600; }
+.fx-h2 { font-size: 15px; font-weight: 600; }
+.fx-h3 { font-size: 14px; font-weight: 600; }
+.fx-project-title { font-size: 24px; font-weight: 600; }
+.fx-body { font-size: 13px; color: @fx_text_soft; }
+
+.fx-badge {
   border-radius: 6px;
+  padding: 0 8px;
+  min-height: 22px;
+  font-size: 11px;
+  font-weight: 600;
   background-color: @fx_chip;
+  color: @fx_text_soft;
+}
+.fx-badge.ai { background-color: @fx_ai_bg; color: @fx_ai_text; }
+.fx-badge.cloud { background-color: @fx_ai_bg; color: @fx_ai_text; }
+.fx-badge.network { background-color: @fx_net_bg; color: @fx_net_text; }
+.fx-badge.warn { background-color: @fx_accent_soft; color: @fx_accent_text; font-weight: 400; }
+.fx-badge.plain { font-weight: 400; color: @fx_text; }
+.fx-badge.active { background-color: @fx_accent; color: white; border-radius: 999px; }
+.fx-pill {
+  border-radius: 999px;
+  padding: 0 10px;
+  min-height: 28px;
   font-size: 12px;
   font-weight: 500;
 }
+.fx-pill.network { background-color: @fx_net_bg; color: @fx_net_text; }
+.fx-pill.cloud { background-color: @fx_ai_bg; color: @fx_ai_text; }
+.fx-pill.local { background-color: @fx_chip; color: @fx_text_soft; }
+.fx-dot { min-width: 8px; min-height: 8px; border-radius: 999px; }
+.fx-status-line { font-size: 12px; }
+.fx-status-line.ok { color: @fx_ok; }
+.fx-status-line.bad { color: @fx_accent_text; }
+.fx-status-line.idle { color: @fx_muted; }
+
+.fx-callout {
+  border-radius: 8px;
+  padding: 10px 12px;
+  background-color: @fx_accent_soft;
+  color: @fx_accent_text;
+  font-size: 12px;
+}
+.fx-callout.neutral { background-color: @fx_chip; color: @fx_text; font-size: 13px; border-radius: 10px; padding: 12px 14px; }
+
+/* Bordered tables and cards. */
+.fx-table { border: 1px solid @fx_border; border-radius: 10px; background-color: @fx_surface; }
+.fx-table-head {
+  background-color: @fx_chrome;
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 10px 10px 0 0;
+}
+.fx-table-head label { font-size: 11px; font-weight: 600; letter-spacing: 0.4px; color: @fx_muted; }
+.fx-table-row { border-top: 1px solid @fx_divider; padding: 10px 16px; min-height: 28px; }
+.fx-table-row.tall { min-height: 40px; }
+.fx-table-row label { font-size: 13px; }
+.fx-row-button {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  border-top: 1px solid @fx_divider;
+  padding: 10px 16px;
+  min-height: 40px;
+}
+.fx-row-button:hover { background-color: alpha(@fx_text, 0.03); }
+.fx-card { border: 1px solid @fx_border; border-radius: 12px; padding: 16px 18px; background-color: @fx_surface; }
+.fx-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
+
+/* ---- Dictate: document tabs, editor, record dock ---- */
+
 .fx-tabs { border-bottom: 1px solid @fx_border; padding: 0 24px; }
+.fx-tabs.flush { padding: 0; }
 .fx-tab {
-  min-height: 44px;
+  min-height: 42px;
   padding: 0 14px;
   background: none;
   box-shadow: none;
@@ -137,9 +402,43 @@ textview.fx-editor, textview.fx-editor text {
   color: @fx_muted;
   font-size: 13px;
 }
-.fx-tab.active { color: @fx_text; font-weight: 600; box-shadow: inset 0 -2px 0 @fx_accent; }
+.fx-tab:hover { color: @fx_text; }
+.fx-tab.active { color: @fx_text; box-shadow: inset 0 -2px 0 @fx_accent; }
+.fx-tab.active label { font-weight: 600; }
 
-/* Record dock */
+.fx-editor-scroller { background-color: @fx_surface; }
+textview.fx-editor, textview.fx-editor text {
+  background-color: @fx_surface;
+  color: @fx_text;
+  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 17px;
+}
+.fx-doc-title, .fx-doc-title text {
+  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 30px;
+  font-weight: 600;
+}
+window.fennec entry.fx-doc-title {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  min-height: 44px;
+}
+.fx-serif { font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif; font-size: 17px; }
+.fx-serif.small { font-size: 16px; }
+
+.fx-chip {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background-color: @fx_chip;
+  box-shadow: none;
+  font-size: 12px;
+  color: @fx_text;
+}
+.fx-chip label { font-weight: 500; }
+
 .fx-dock { border-top: 1px solid @fx_border; padding: 0 28px; min-height: 96px; background-color: @fx_surface; }
 .fx-record {
   min-width: 60px;
@@ -149,10 +448,11 @@ textview.fx-editor, textview.fx-editor text {
   color: white;
   box-shadow: 0 0 0 6px @fx_accent_soft;
   padding: 0;
+  border: none;
 }
 .fx-record:hover { background-color: @fx_accent_hover; }
 .fx-record:disabled { opacity: 0.6; }
-.fx-rec-state { color: @fx_accent_text; font-size: 12px; font-weight: 600; }
+.fx-rec-state { color: @fx_accent; font-size: 12px; font-weight: 600; }
 .fx-timer { font-family: "IBM Plex Mono", monospace; font-size: 22px; font-weight: 500; }
 .fx-status { color: @fx_muted; font-size: 13px; }
 .fx-status.error { color: @fx_error; }
@@ -164,15 +464,12 @@ textview.fx-editor, textview.fx-editor text {
   border: 1px solid @fx_border;
   border-bottom-width: 2px;
   background-color: @fx_chrome;
+  color: @fx_text_soft;
 }
 
-/* Inspector */
+/* ---- Inspector (right panel) ---- */
+
 .fx-inspector { background-color: @fx_inspector; border-left: 1px solid @fx_border; padding: 20px; }
-.fx-field-label { font-size: 12px; font-weight: 500; color: @fx_text_soft; }
-.fx-field-note { font-size: 11px; color: @fx_muted; }
-.fx-field-error { font-size: 11px; color: @fx_accent_text; }
-entry.fx-field { min-height: 40px; border-radius: 8px; }
-entry.fx-field.required-empty { border: 1px solid @fx_accent; }
 .fx-unsure-word {
   min-height: 32px;
   padding: 0 10px;
@@ -181,18 +478,65 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
   background-color: @fx_accent_soft;
   color: @fx_accent_text;
   font-size: 12px;
+  box-shadow: none;
 }
-.fx-stats { color: @fx_muted; font-size: 12px; }
+.fx-suggestion {
+  border: 1px dashed @fx_ai_dash;
+  background-color: @fx_ai_tint;
+  border-radius: 8px;
+  padding: 10px;
+}
+.fx-suggestion-title { font-size: 11px; font-weight: 600; color: @fx_ai_text; }
 
-.fx-banner { background-color: @fx_accent_soft; color: @fx_accent_text; padding: 8px 16px; font-size: 13px; }
+/* ---- AI ---- */
 
-/* Files */
-.fx-files-banner { background-color: @fx_inspector; border-bottom: 1px solid @fx_border; padding: 14px 28px; }
-.fx-transcript { background: none; margin: 20px 28px; }
-.fx-transcript-row { padding: 10px 12px; border-radius: 8px; }
-.fx-transcript-text {
-  font-family: "Source Serif 4", "Noto Serif", "DejaVu Serif", serif;
+.fx-ai-box { border: 1px solid @fx_border; border-radius: 10px; padding: 20px 24px; }
+textview.fx-summary-text, textview.fx-summary-text text {
+  background-color: transparent;
+  color: @fx_text;
+  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 17px;
+}
+.fx-bubble {
+  background-color: @fx_chip;
+  border-radius: 12px 12px 4px 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.fx-answer { font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif; font-size: 16px; color: @fx_text; }
+.fx-citation {
+  background-color: @fx_chrome;
+  box-shadow: 0 0 0 1px @fx_border;
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: @fx_text_soft;
+}
+.fx-citation .num { font-weight: 600; }
+
+/* Clean-up diff */
+.fx-diff-card { border: 1px solid @fx_border; border-radius: 10px; padding: 16px 18px; }
+textview.fx-diff, textview.fx-diff text {
+  background-color: transparent;
+  color: @fx_text;
+  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
   font-size: 16px;
+}
+.fx-legend-removed { background-color: @fx_accent_soft; color: @fx_accent_text; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+.fx-legend-added { background-color: @fx_ai_bg; color: @fx_ai_text; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+
+/* ---- Files ---- */
+
+.fx-files-banner { background-color: @fx_inspector; border-bottom: 1px solid @fx_border; padding: 14px 28px; }
+.fx-transcript { background: none; }
+.fx-transcript-row { padding: 10px 12px; border-radius: 8px; }
+.fx-transcript-row.current { background-color: @fx_accent_soft; }
+.fx-transcript-row.current .fx-timestamp { color: @fx_accent_text; font-weight: 500; }
+.fx-transcript-text, .fx-transcript-text text {
+  font-family: "Source Serif 4", "IBM Plex Serif", "Noto Serif", serif;
+  font-size: 16px;
+  background: none;
 }
 .fx-timestamp {
   font-family: "IBM Plex Mono", monospace;
@@ -201,15 +545,29 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
   background: none;
   box-shadow: none;
   min-width: 84px;
-  padding: 2px 0;
+  min-height: 28px;
+  padding: 0;
 }
 .fx-timestamp:hover { color: @fx_accent_text; }
+.fx-skeleton { background-color: @fx_divider; border-radius: 4px; min-height: 12px; }
+.fx-player { border-top: 1px solid @fx_border; min-height: 88px; padding: 0 28px; }
+.fx-play {
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 999px;
+  background-color: @fx_ink;
+  color: @fx_ink_fg;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
 .fx-drop-zone {
-  border: 1.5px dashed @fx_border;
+  border: 1.5px dashed @fx_dash;
   border-radius: 10px;
   background-color: @fx_surface;
   padding: 20px 16px;
 }
+.fx-drop-zone.hover { border-color: @fx_accent; background-color: @fx_accent_tint; }
 .fx-queue-item {
   background-color: @fx_surface;
   border-radius: 10px;
@@ -217,39 +575,87 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
   padding: 12px;
 }
 .fx-queue-item.selected { box-shadow: 0 0 0 1px @fx_unsure_border; }
+.fx-queue-name { font-size: 13px; font-weight: 500; }
 
-/* Export */
+/* ---- Export and previews ---- */
+
 .fx-export-settings { padding: 24px; border-right: 1px solid @fx_border; }
-.fx-preview-area { background-color: @fx_chip; padding: 24px; }
-.fx-page-preview { background-color: white; color: black; box-shadow: 0 8px 24px alpha(black, 0.12); }
+.fx-preview-area { background-color: @fx_canvas; padding: 24px; }
+.fx-page-preview { background-color: white; color: black; box-shadow: 0 1px 3px alpha(black, 0.12), 0 8px 24px alpha(black, 0.08); }
 
-/* Project */
+/* ---- Project ---- */
+
 .fx-project-main { padding: 28px 32px; }
-.fx-project-title { font-size: 24px; font-weight: 600; }
-.fx-doc-list { background: none; border: 1px solid @fx_border; border-radius: 10px; }
-.fx-doc-row { min-height: 60px; padding: 0 16px; border-radius: 0; background: none; box-shadow: none; border-bottom: 1px solid @fx_border; }
-.fx-doc-row:hover { background-color: alpha(@fx_text, 0.04); }
-.fx-color-swatch { padding: 6px; border-radius: 8px; }
+.fx-doc-icon { min-width: 28px; min-height: 28px; border-radius: 7px; background-color: @fx_chip; color: @fx_text_soft; }
+.fx-color-swatch { padding: 0; border-radius: 8px; min-width: 32px; min-height: 32px; box-shadow: none; border: none; }
+.fx-color-swatch.selected { box-shadow: 0 0 0 2px @fx_inspector, 0 0 0 4px @fx_text; }
 
-/* Templates */
-.fx-template-list { background-color: @fx_chrome; border-right: 1px solid @fx_border; padding: 12px; }
+/* ---- Templates ---- */
+
+.fx-template-item {
+  background: none;
+  box-shadow: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 0;
+}
+.fx-template-item:hover { background-color: alpha(@fx_text, 0.05); }
+.fx-template-item.active { background-color: @fx_accent_soft; }
 .fx-template-editor { padding: 28px 32px; }
-.fx-field-row { padding: 6px 0; }
+.fx-handle { color: @fx_faint; font-size: 14px; }
+.fx-logo-slot { border: 1px dashed @fx_faint; border-radius: 6px; min-width: 72px; min-height: 40px; font-size: 10px; color: @fx_muted; }
 
-/* Settings */
+/* ---- Settings ---- */
+
 .fx-settings-nav { padding: 20px 12px; border-right: 1px solid @fx_border; }
+.fx-settings-tab {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+  color: @fx_text_soft;
+}
+.fx-settings-tab:hover { background-color: alpha(@fx_text, 0.05); }
+.fx-settings-tab.active { background-color: @fx_accent_soft; color: @fx_text; }
+.fx-settings-tab.active label { font-weight: 600; }
 .fx-settings-section { padding: 28px 36px; }
 .fx-model-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
-.fx-model-card.active { border: 1.5px solid @fx_accent; background-color: alpha(@fx_accent, 0.05); }
-.fx-storage-row { min-height: 52px; border-bottom: 1px solid @fx_border; }
-.fx-vocab { border: 1px solid @fx_border; border-radius: 8px; padding: 8px; }
+.fx-model-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
+.fx-model-name { font-size: 15px; font-weight: 600; }
+.fx-storage-row { min-height: 56px; padding: 0 16px; border-top: 1px solid @fx_divider; }
+.fx-storage-row.first { border-top: none; }
 
-/* AI */
-.fx-ai-badge { font-size: 11px; color: @fx_muted; padding: 2px 8px; border-radius: 999px; background-color: @fx_chip; }
-.fx-summary-text { font-size: 14px; background-color: @fx_surface; border: 1px solid @fx_border; border-radius: 8px; color: @fx_text; }
-entry.fx-ghost { font-style: italic; }
-.fx-action-item { padding: 8px 4px; border-bottom: 1px solid @fx_border; }
-.fx-action-what { color: @fx_text; font-size: 13px; }
-.fx-cleanup-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
-.fx-diff { font-size: 15px; background-color: transparent; color: @fx_text; }
-.fx-answer { font-size: 15px; color: @fx_text; }
+levelbar.fx-meter trough { background-color: @fx_track; border-radius: 3px; min-height: 8px; }
+levelbar.fx-meter block.filled,
+levelbar.fx-meter block.fx-low,
+levelbar.fx-meter block.fx-ok { background-color: @fx_ok; border-radius: 3px; }
+levelbar.fx-meter block.fx-hot { background-color: @fx_accent; border-radius: 3px; }
+levelbar.fx-meter block.empty { background: none; }
+
+.fx-logo { color: @fx_accent; }
+.fx-project-dot { color: @fx_accent; }
+.fx-done { color: @fx_muted; text-decoration-line: line-through; }
+.fx-inspector-scroll { background-color: @fx_inspector; }
+
+/* Menu buttons wrap a real button; style the outside, flatten the inside. */
+menubutton.fx-header-chip, menubutton.fx-chip, menubutton.fx-tag {
+  padding: 0;
+  min-height: 0;
+}
+menubutton.fx-header-chip > button,
+menubutton.fx-chip > button,
+menubutton.fx-tag > button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  min-height: 0;
+  color: inherit;
+  font-size: inherit;
+}
+menubutton.fx-header-chip > button { min-height: 38px; padding: 0 12px; }
+menubutton.fx-chip > button { min-height: 28px; padding: 0 10px; }
+menubutton.fx-tag > button { min-height: 28px; padding: 0 10px; }
+menubutton.fx-header-chip { background-color: @fx_surface; border: 1px solid @fx_border; border-radius: 8px; }
+menubutton.fx-tag arrow, menubutton.fx-chip arrow { min-width: 0; min-height: 0; margin: 0; opacity: 0; -gtk-icon-size: 0; }

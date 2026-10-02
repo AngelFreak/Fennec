@@ -42,10 +42,12 @@ pub struct DictationPage {
     pub summary: Rc<SummaryPanel>,
     pub actions: Rc<ActionsPanel>,
     pub cleanup: Rc<CleanupPage>,
-    /// Fields / Summary / Actions in the right-hand column.
-    pub side: gtk::Stack,
-    side_switcher: gtk::StackSwitcher,
+    /// Transcript / Summary / Actions above the document.
+    pub views: gtk::Stack,
+    tabs: gtk::Box,
+    tab_buttons: Vec<(&'static str, gtk::Button)>,
     pub ai_menu: gtk::MenuButton,
+    ai_footer: gtk::Label,
     pub title: gtk::Entry,
     project_chip: gtk::Label,
     project_menu: gtk::MenuButton,
@@ -68,7 +70,7 @@ impl DictationPage {
         let dock = Dock::new();
         let inspector = Inspector::new();
         let summary = SummaryPanel::new(Rc::clone(&store), "Summarize this document");
-        let actions = ActionsPanel::new(Rc::clone(&store), Some("Find action items"));
+        let actions = ActionsPanel::new(Rc::clone(&store), Some("Find action items"), "Source", 64);
         let cleanup = CleanupPage::new();
 
         let title = gtk::Entry::builder()
@@ -77,19 +79,25 @@ impl DictationPage {
             .build();
         title.update_property(&[gtk::accessible::Property::Label("Document title")]);
         let chips = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let project_chip = label("Unsorted", &["fx-chip"]);
+        let project_chip = label("Unsorted", &[]);
+        let chip_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        chip_box.append(&project_dot());
+        chip_box.append(&project_chip);
         let project_menu = gtk::MenuButton::builder()
-            .child(&project_chip)
+            .child(&chip_box)
             .tooltip_text("Move to project")
+            .always_show_arrow(false)
             .build();
-        project_menu.add_css_class("flat");
+        project_menu.add_css_class("fx-chip");
         project_menu.set_popover(Some(&gtk::Popover::new()));
         let tags = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let add_tag = gtk::MenuButton::builder()
             .label("+ Tag")
             .tooltip_text("Add a tag")
+            .always_show_arrow(false)
             .build();
         add_tag.add_css_class("fx-tag");
+        add_tag.add_css_class("add");
         let tag_entry = gtk::Entry::builder()
             .placeholder_text("Tag, e.g. meeting")
             .build();
@@ -98,15 +106,14 @@ impl DictationPage {
         chips.append(&project_menu);
         chips.append(&tags);
         chips.append(&add_tag);
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        chips.append(&spacer);
         let ai_menu = gtk::MenuButton::builder()
-            .label("AI")
+            .label("AI actions")
             .tooltip_text("AI actions")
+            .valign(gtk::Align::Center)
             .build();
-        ai_menu.add_css_class("fx-secondary");
-        chips.append(&ai_menu);
+        ai_menu.add_css_class("fx-header-chip");
+        ai_menu.add_css_class("strong");
+        let ai_footer = label("", &[]);
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 18);
         column.set_margin_top(28);
@@ -124,26 +131,51 @@ impl DictationPage {
             .css_classes(["fx-editor-scroller"])
             .build();
 
+        let views = gtk::Stack::new();
+        views.set_vexpand(true);
+        views.add_named(&scroller, Some("transcript"));
+        views.add_named(&ai_view(&summary.root), Some("summary"));
+        let actions_view = gtk::Box::new(gtk::Orientation::Vertical, 14);
+        actions_view.append(&actions.root);
+        let actions_note = label(
+            "Open items also appear in the project's Actions tab.",
+            &["fx-stats"],
+        );
+        actions_view.append(&actions_note);
+        views.add_named(&ai_view(&actions_view), Some("actions"));
+
+        let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        tabs.add_css_class("fx-tabs");
+        let mut tab_buttons = Vec::new();
+        for (name, text) in [
+            ("transcript", "Transcript"),
+            ("summary", "Summary"),
+            ("actions", "Actions"),
+        ] {
+            let b = gtk::Button::with_label(text);
+            b.add_css_class("fx-tab");
+            tabs.append(&b);
+            tab_buttons.push((name, b));
+        }
+
         let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
         main.set_hexpand(true);
-        main.append(&scroller);
+        main.append(&tabs);
+        main.append(&views);
         main.append(&dock.root);
 
-        let side = gtk::Stack::new();
-        side.set_vexpand(true);
-        side.add_titled(&inspector.root, Some("fields"), "Fields");
-        side.add_titled(&summary.root, Some("summary"), "Summary");
-        side.add_titled(&actions.root, Some("actions"), "Actions");
-        let side_switcher = gtk::StackSwitcher::builder().stack(&side).build();
-        let side_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
-        side_box.add_css_class("fx-inspector");
-        side_box.set_size_request(300, -1);
-        side_box.append(&side_switcher);
-        side_box.append(&side);
+        inspector.root.add_css_class("fx-inspector");
+        let side = gtk::ScrolledWindow::builder()
+            .child(&inspector.root)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .width_request(300)
+            .hexpand(false)
+            .build();
+        side.add_css_class("fx-inspector-scroll");
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.append(&main);
-        root.append(&side_box);
+        root.append(&side);
 
         let page = Rc::new(Self {
             root,
@@ -153,9 +185,11 @@ impl DictationPage {
             summary,
             actions,
             cleanup,
-            side,
-            side_switcher,
+            views,
+            tabs,
+            tab_buttons,
             ai_menu,
+            ai_footer,
             title,
             project_chip,
             project_menu,
@@ -701,21 +735,38 @@ impl DictationPage {
     }
 
     fn build_ai_menu(self: &Rc<Self>) {
-        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let pop = gtk::Popover::builder().child(&menu).build();
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        menu.set_size_request(300, -1);
+        let pop = gtk::Popover::builder().child(&menu).has_arrow(false).build();
         type Action = fn(&Rc<DictationPage>);
-        let items: [(&str, Action); 4] = [
-            ("Summarize", |p| p.ai_summarize()),
-            ("Clean up…", |p| p.ai_cleanup()),
-            ("Find action items", |p| p.ai_action_items()),
-            ("Suggest field values", |p| p.ai_suggest_fields()),
+        let items: [(&str, &str, Action); 4] = [
+            (
+                "Summarise document",
+                "A short summary, saved with the document",
+                |p| p.ai_summarize(),
+            ),
+            (
+                "Clean up text…",
+                "Remove filler words, fix grammar. Review as a diff.",
+                |p| p.ai_cleanup(),
+            ),
+            (
+                "Extract action items",
+                "What, who and when, linked to the paragraph",
+                |p| p.ai_action_items(),
+            ),
+            ("Suggest field values", "Never overwrites what you typed", |p| {
+                p.ai_suggest_fields()
+            }),
         ];
-        for (text, action) in items {
-            let b = gtk::Button::with_label(text);
-            b.add_css_class("flat");
-            if let Some(l) = b.child().and_downcast::<gtk::Label>() {
-                l.set_xalign(0.0);
-            }
+        for (title, note, action) in items {
+            let b = gtk::Button::new();
+            b.add_css_class("fx-menu-item");
+            let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            col.append(&label(title, &["fx-menu-title"]));
+            col.append(&label(note, &["fx-menu-note"]));
+            b.set_child(Some(&col));
+            b.update_property(&[gtk::accessible::Property::Label(title)]);
             let weak = Rc::downgrade(self);
             let pop = pop.clone();
             b.connect_clicked(move |_| {
@@ -726,7 +777,57 @@ impl DictationPage {
             });
             menu.append(&b);
         }
+        menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        footer.add_css_class("fx-menu-footer");
+        self.ai_footer.add_css_class("fx-stats");
+        self.ai_footer.set_hexpand(true);
+        footer.append(&self.ai_footer);
+        let change = gtk::Button::with_label("Change in Settings");
+        change.add_css_class("fx-link");
+        let weak = Rc::downgrade(self);
+        let pop2 = pop.clone();
+        change.connect_clicked(move |_| {
+            pop2.popdown();
+            if let Some(p) = weak.upgrade() {
+                p.navigate("settings");
+            }
+        });
+        footer.append(&change);
+        menu.append(&footer);
         self.ai_menu.set_popover(Some(&pop));
+
+        for (name, b) in &self.tab_buttons {
+            let weak = Rc::downgrade(self);
+            let name = *name;
+            b.connect_clicked(move |_| {
+                if let Some(p) = weak.upgrade() {
+                    p.show_view(name);
+                }
+            });
+        }
+        self.show_view("transcript");
+
+        // Each action item links to the paragraph it came from (¶n).
+        let weak = Rc::downgrade(self);
+        self.actions.set_source(Rc::new(move |item| {
+            let p = weak.upgrade()?;
+            let doc = p.document()?;
+            let index = p
+                .store
+                .paragraphs(doc)
+                .ok()?
+                .iter()
+                .position(|x| x.id == item.paragraph_id && x.id.is_some())?;
+            let weak = Rc::downgrade(&p);
+            let go: Rc<dyn Fn()> = Rc::new(move || {
+                if let Some(p) = weak.upgrade() {
+                    p.show_view("transcript");
+                    p.editor.go_to_paragraph(index);
+                }
+            });
+            Some((format!("¶{}", index + 1), go))
+        }));
 
         let weak = Rc::downgrade(self);
         self.summary.run.connect_clicked(move |_| {
@@ -760,13 +861,52 @@ impl DictationPage {
 
     /// Shows or hides AI controls to match Settings.
     pub fn refresh_ai(&self) {
-        let on = self.deps.settings().ai.enabled;
+        let ai = self.deps.settings().ai;
+        let on = ai.enabled;
         self.ai_menu.set_visible(on);
-        self.side_switcher.set_visible(on);
+        self.tabs.set_visible(on);
         self.inspector.suggest.set_visible(on);
         if !on {
-            self.side.set_visible_child_name("fields");
+            self.show_view("transcript");
             self.inspector.suggest_status.set_visible(false);
+        }
+        self.ai_footer.set_text(&match ai.active() {
+            Some(p) => format!("{} · {}", p.name, p.locality.label().to_lowercase()),
+            None => "No provider set up".into(),
+        });
+    }
+
+    /// Switches the document view and marks its tab.
+    pub fn show_view(&self, name: &str) {
+        self.views.set_visible_child_name(name);
+        for (n, b) in &self.tab_buttons {
+            if *n == name {
+                b.add_css_class("active");
+            } else {
+                b.remove_css_class("active");
+            }
+        }
+    }
+
+    pub fn visible_view(&self) -> String {
+        self.views
+            .visible_child_name()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    }
+
+    fn update_actions_tab(&self) {
+        let open = self
+            .document()
+            .and_then(|d| self.store.document_action_items(d).ok())
+            .map(|items| items.iter().filter(|i| !i.done).count())
+            .unwrap_or(0);
+        if let Some((_, b)) = self.tab_buttons.iter().find(|(n, _)| *n == "actions") {
+            b.set_label(&if open > 0 {
+                format!("Actions · {open}")
+            } else {
+                "Actions".into()
+            });
         }
     }
 
@@ -779,6 +919,7 @@ impl DictationPage {
         self.summary.load(latest);
         self.actions
             .show(self.store.document_action_items(doc).unwrap_or_default());
+        self.update_actions_tab();
         self.inspector.suggest_status.set_visible(false);
     }
 
@@ -806,7 +947,7 @@ impl DictationPage {
     pub fn ai_summarize(self: &Rc<Self>) {
         self.save_now();
         let Some(doc) = self.document() else { return };
-        self.side.set_visible_child_name("summary");
+        self.show_view("summary");
         self.summary.begin();
         super::ai::run(
             self.root.upcast_ref(),
@@ -849,7 +990,7 @@ impl DictationPage {
     pub fn ai_action_items(self: &Rc<Self>) {
         self.save_now();
         let Some(doc) = self.document() else { return };
-        self.side.set_visible_child_name("actions");
+        self.show_view("actions");
         self.actions.begin();
         super::ai::run(
             self.root.upcast_ref(),
@@ -858,7 +999,10 @@ impl DictationPage {
             self.what(),
             Arc::new(move |ai, store, cancel, _| ai.action_items(store, doc, cancel)),
             Rc::new(|_: &str| {}),
-            self.for_doc(doc, |p, r| p.actions.finish(r)),
+            self.for_doc(doc, |p, r| {
+                p.actions.finish(r);
+                p.update_actions_tab();
+            }),
         );
     }
 
@@ -868,7 +1012,7 @@ impl DictationPage {
         let Some(template) = self.inspector.selected_template() else {
             return;
         };
-        self.side.set_visible_child_name("fields");
+        self.show_view("transcript");
         let status = &self.inspector.suggest_status;
         status.set_visible(true);
         status.set_text("Reading the text for field values…");
@@ -929,4 +1073,37 @@ pub const CLIPPING: &str = "The microphone is too loud and clips, so words get d
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// The project colour dot on the document's project chip.
+fn project_dot() -> gtk::DrawingArea {
+    let dot = gtk::DrawingArea::builder()
+        .content_width(8)
+        .content_height(8)
+        .valign(gtk::Align::Center)
+        .css_classes(["fx-project-dot"])
+        .build();
+    dot.set_draw_func(|a, cr, w, h| {
+        let c = a.color();
+        cr.set_source_rgba(c.red().into(), c.green().into(), c.blue().into(), 1.0);
+        cr.rectangle(0.0, 0.0, w.into(), h.into());
+        let _ = cr.fill();
+    });
+    dot
+}
+
+/// An AI result view: centred like the document, scrolling.
+fn ai_view(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    col.set_margin_top(28);
+    col.set_margin_bottom(24);
+    col.set_margin_start(56);
+    col.set_margin_end(56);
+    col.append(child);
+    let clamp = adw::Clamp::builder().maximum_size(660).child(&col).build();
+    gtk::ScrolledWindow::builder()
+        .child(&clamp)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .build()
 }

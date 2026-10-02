@@ -23,6 +23,8 @@ pub enum Target {
 
 pub struct ExportPage {
     pub root: gtk::Box,
+    /// Buttons for the window header while this screen shows.
+    pub header_actions: gtk::Box,
     store: Rc<Store>,
     deps: Deps,
     target: RefCell<Option<Target>>,
@@ -51,6 +53,15 @@ pub struct ExportPage {
 }
 
 impl ExportPage {
+    /// What is being exported, for the header.
+    pub fn header_subtitle(&self) -> String {
+        match &*self.target.borrow() {
+            Some(Target::Document(id)) => self.store.document(*id).map(|d| d.title).unwrap_or_default(),
+            Some(Target::Documents { title, ids }) => format!("{title} · {} documents", ids.len()),
+            None => String::new(),
+        }
+    }
+
     pub fn new(store: Rc<Store>, deps: Deps) -> Rc<Self> {
         let settings = gtk::Box::new(gtk::Orientation::Vertical, 20);
         settings.add_css_class("fx-export-settings");
@@ -159,6 +170,7 @@ impl ExportPage {
         let folder = deps.paths.exports();
         let page = Rc::new(Self {
             root,
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             store,
             deps,
             target: RefCell::default(),

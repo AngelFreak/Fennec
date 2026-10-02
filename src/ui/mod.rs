@@ -142,7 +142,15 @@ pub fn build_window(deps: Deps) -> Rc<MainWindow> {
     MainWindow::new(deps)
 }
 
-const STYLE: &str = include_str!("style.css");
+const STYLE: &str = concat!(
+    include_str!("style.css"),
+    include_str!("css/files.css"),
+    include_str!("css/export.css"),
+    include_str!("css/project.css"),
+    include_str!("css/cleanup.css"),
+    include_str!("css/templates.css"),
+    include_str!("css/settings.css"),
+);
 const STYLE_LIGHT: &str = include_str!("style-light.css");
 const STYLE_DARK: &str = include_str!("style-dark.css");
 

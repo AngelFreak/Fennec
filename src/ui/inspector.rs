@@ -14,8 +14,10 @@ struct FieldRow {
     entry: gtk::Entry,
     note: gtk::Label,
     required: bool,
-    /// Shown when the AI has a suggestion for this empty field.
-    use_button: gtk::Button,
+    /// "Suggested by AI" card under the entry, with Accept / Dismiss.
+    card: gtk::Box,
+    card_value: gtk::Label,
+    accept: gtk::Button,
 }
 
 pub struct Inspector {
@@ -135,31 +137,43 @@ impl Inspector {
             entry.add_css_class("fx-field");
             entry.set_text(values.get(&f.key).map(String::as_str).unwrap_or(""));
             entry.update_property(&[gtk::accessible::Property::Label(&f.label)]);
-            let use_button = gtk::Button::with_label("Use");
-            use_button.add_css_class("fx-secondary");
-            use_button.set_tooltip_text(Some("Use the suggested value"));
-            use_button.set_visible(false);
-            let entry_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            entry.set_hexpand(true);
-            entry_row.append(&entry);
-            entry_row.append(&use_button);
-            b.append(&entry_row);
+            entry.set_placeholder_text(Some("Not filled in"));
+            b.append(&entry);
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            card.add_css_class("fx-suggestion");
+            card.set_visible(false);
+            card.append(&label("SUGGESTED BY AI", &["fx-suggestion-title"]));
+            let card_value = label("", &["fx-body"]);
+            card_value.set_wrap(true);
+            card_value.set_selectable(true);
+            card.append(&card_value);
+            let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let accept = gtk::Button::with_label("Accept");
+            accept.add_css_class("fx-ink");
+            let dismiss = gtk::Button::with_label("Dismiss");
+            dismiss.add_css_class("fx-secondary");
+            dismiss.add_css_class("small");
+            buttons.append(&accept);
+            buttons.append(&dismiss);
+            card.append(&buttons);
+            b.append(&card);
             {
                 let entry = entry.clone();
-                use_button.connect_clicked(move |b| {
-                    if let Some(text) = entry.placeholder_text() {
-                        entry.set_text(&text);
-                    }
-                    b.set_visible(false);
+                let value = card_value.clone();
+                let card = card.clone();
+                accept.connect_clicked(move |_| {
+                    entry.set_text(&value.text());
+                    card.set_visible(false);
                 });
+            }
+            {
+                let card = card.clone();
+                dismiss.connect_clicked(move |_| card.set_visible(false));
             }
             let note = label("Required before export", &["fx-field-error"]);
             b.append(&note);
             let me = Rc::downgrade(self);
-            entry.connect_changed(move |e| {
-                if !e.text().is_empty() {
-                    clear_suggestion(e);
-                }
+            entry.connect_changed(move |_| {
                 if let Some(me) = me.upgrade() {
                     me.refresh_required();
                     if let Some(f) = me.on_change.borrow().clone() {
@@ -173,7 +187,9 @@ impl Inspector {
                 entry,
                 note,
                 required: f.required,
-                use_button,
+                card,
+                card_value,
+                accept,
             });
         }
         *self.entries.borrow_mut() = entries;
@@ -189,8 +205,9 @@ impl Inspector {
             } else {
                 row.entry.remove_css_class("required-empty");
             }
+            // A value the user typed makes the suggestion moot.
             if !row.entry.text().is_empty() {
-                row.use_button.set_visible(false);
+                row.card.set_visible(false);
             }
         }
     }
@@ -212,15 +229,14 @@ impl Inspector {
             .map(|r| r.entry.clone())
     }
 
-    /// Shows AI suggestions as greyed placeholder values in empty fields.
-    /// Nothing is filled in until the user presses Use.
+    /// Shows AI suggestions as cards under empty fields. Nothing is
+    /// filled in until the user presses Accept.
     pub fn show_suggestions(&self, suggestions: &BTreeMap<String, String>) {
         for row in self.entries.borrow().iter() {
             match suggestions.get(&row.key) {
                 Some(v) if row.entry.text().is_empty() => {
-                    row.entry.set_placeholder_text(Some(v));
-                    row.entry.add_css_class("fx-ghost");
-                    row.use_button.set_visible(true);
+                    row.card_value.set_text(v);
+                    row.card.set_visible(true);
                 }
                 _ => {}
             }
@@ -232,18 +248,18 @@ impl Inspector {
         self.entries
             .borrow()
             .iter()
-            .find(|r| r.key == key && r.use_button.get_visible())
-            .and_then(|r| r.entry.placeholder_text().map(|s| s.to_string()))
+            .find(|r| r.key == key && r.card.get_visible())
+            .map(|r| r.card_value.text().to_string())
     }
 
-    /// Accepts the suggestion for `key`, as the Use button does.
+    /// Accepts the suggestion for `key`, as its Accept button does.
     pub fn use_suggestion(&self, key: &str) {
         let button = self
             .entries
             .borrow()
             .iter()
             .find(|r| r.key == key)
-            .map(|r| r.use_button.clone());
+            .map(|r| r.accept.clone());
         if let Some(b) = button {
             b.emit_clicked();
         }
@@ -270,12 +286,5 @@ impl Inspector {
             });
             self.review_box.insert(&b, -1);
         }
-    }
-}
-
-fn clear_suggestion(entry: &gtk::Entry) {
-    if entry.has_css_class("fx-ghost") {
-        entry.set_placeholder_text(None);
-        entry.remove_css_class("fx-ghost");
     }
 }

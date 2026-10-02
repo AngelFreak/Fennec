@@ -189,6 +189,30 @@ impl Editor {
         false
     }
 
+    /// Puts the cursor at the start of paragraph `index` and scrolls to it.
+    pub fn go_to_paragraph(&self, index: usize) {
+        let mut n = 0;
+        for line in 0..self.buffer.line_count() {
+            let Some(start) = self.buffer.iter_at_line(line) else {
+                continue;
+            };
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            if self.text_without_preview(&start, &end).trim().is_empty() {
+                continue;
+            }
+            if n == index {
+                self.buffer.place_cursor(&start);
+                self.view.scroll_to_iter(&mut start.clone(), 0.1, true, 0.0, 0.3);
+                self.view.grab_focus();
+                return;
+            }
+            n += 1;
+        }
+    }
+
     pub fn plain_text(&self) -> String {
         self.paragraphs()
             .into_iter()

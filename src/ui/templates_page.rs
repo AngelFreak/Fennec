@@ -29,6 +29,8 @@ struct FieldRow {
 
 pub struct TemplatesPage {
     pub root: gtk::Box,
+    /// Buttons for the window header while this screen shows.
+    pub header_actions: gtk::Box,
     dir: PathBuf,
     list: gtk::ListBox,
     current: RefCell<Option<Template>>,
@@ -146,6 +148,7 @@ impl TemplatesPage {
 
         let page = Rc::new(Self {
             root,
+            header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             dir,
             list,
             current: RefCell::default(),
