@@ -16,6 +16,7 @@ fn main() -> gtk::glib::ExitCode {
             tracing::error!("{e}; using default settings for this session");
             Settings::default()
         });
+        fennec::store::retention::apply_in_background(&paths, &settings);
         Deps::real(paths, settings)
     });
     app.run()

@@ -8,7 +8,11 @@ pub enum PrivacyError {
     LocalOnly { provider: String },
     /// The user has not yet agreed to send this document to `provider`.
     #[error("sending to {provider} needs your confirmation")]
-    NeedsConsent { provider: String },
+    NeedsConsent {
+        provider: String,
+        /// The provider's `id`, which the confirmation is recorded for.
+        provider_id: String,
+    },
 }
 
 /// May text from a document (or project) go to `provider`?
@@ -27,6 +31,7 @@ pub fn check(provider: &ProviderConfig, local_only: bool, consented: bool) -> Re
     if !consented {
         return Err(PrivacyError::NeedsConsent {
             provider: provider.name.clone(),
+            provider_id: provider.id.clone(),
         });
     }
     Ok(())

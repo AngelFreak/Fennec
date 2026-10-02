@@ -55,7 +55,7 @@ impl MicTest {
         row.append(&play);
         let verdict = label(
             "Speak normally for five seconds to check the level.",
-            &["fx-field-note"],
+            &["fx-status-line", "idle"],
         );
         verdict.set_wrap(true);
         root.append(&row);
@@ -94,7 +94,7 @@ impl MicTest {
     pub fn run(self: &Rc<Self>) {
         self.button.set_sensitive(false);
         self.play.set_sensitive(false);
-        self.verdict.remove_css_class("fx-field-error");
+        self.set_state("idle");
         self.verdict.set_text("Listening… speak normally.");
         let settings = self.deps.settings();
         let audio = std::sync::Arc::clone(&self.deps.audio);
@@ -143,20 +143,26 @@ impl MicTest {
             Ok((blocks, path)) => {
                 let v = assess(&blocks);
                 self.verdict.set_text(v.message());
-                if v != Verdict::Good {
-                    self.verdict.add_css_class("fx-field-error");
-                }
+                self.set_state(if v == Verdict::Good { "ok" } else { "bad" });
                 *self.last.borrow_mut() = Some(v);
                 *self.recording.borrow_mut() = Some(path);
                 self.play.set_sensitive(true);
             }
             Err(e) => {
-                self.verdict.add_css_class("fx-field-error");
+                self.set_state("bad");
                 self.verdict
                     .set_text(&format!("The microphone could not be opened: {e}"));
                 *self.last.borrow_mut() = None;
             }
         }
+    }
+
+    /// The verdict line's colour: `ok`, `bad` or `idle`.
+    fn set_state(&self, state: &str) {
+        for c in ["ok", "bad", "idle"] {
+            self.verdict.remove_css_class(c);
+        }
+        self.verdict.add_css_class(state);
     }
 
     fn play_back(&self) {

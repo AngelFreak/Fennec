@@ -92,13 +92,16 @@ pub fn run<T: Send + 'static>(
         while let Ok(msg) = rx.recv().await {
             match msg {
                 Msg::Delta(d) => on_delta(&d),
-                Msg::Done(Err(AiError::Privacy(PrivacyError::NeedsConsent { provider }))) => {
+                Msg::Done(Err(AiError::Privacy(PrivacyError::NeedsConsent {
+                    provider,
+                    provider_id,
+                }))) => {
                     ask_consent(
                         &parent,
                         &deps,
                         scope.clone(),
                         what.clone(),
-                        provider,
+                        (provider, provider_id),
                         job.clone(),
                         on_delta.clone(),
                         on_done.clone(),
@@ -121,15 +124,16 @@ fn ask_consent<T: Send + 'static>(
     deps: &Deps,
     scope: Scope,
     what: String,
-    provider: String,
+    (provider, provider_id): (String, String),
     job: Job<T>,
     on_delta: Rc<dyn Fn(&str)>,
     on_done: Rc<dyn Fn(Result<T, AiError>)>,
 ) {
+    // The job's own provider, which need not be the default one.
     let host = deps
         .settings()
         .ai
-        .active()
+        .provider(&provider_id)
         .map(|p| host_of(&p.base_url))
         .unwrap_or_default();
     let send = CloudSend {
@@ -149,7 +153,7 @@ fn ask_consent<T: Send + 'static>(
             }
             let recorded = Store::open(&deps2.paths.database())
                 .map_err(AiError::from)
-                .and_then(|store| deps2.ai_service().consent(&store, &scope));
+                .and_then(|store| deps2.ai_service().consent_to(&store, &scope, &provider_id));
             match recorded {
                 Ok(()) => {
                     run(&parent2, &deps2, scope, what, job, on_delta, on_done);

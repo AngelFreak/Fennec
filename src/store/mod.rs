@@ -1,5 +1,6 @@
 //! Documents, projects, tags and everything attached to them, in SQLite.
 
+pub mod retention;
 mod schema;
 
 use std::collections::BTreeMap;
@@ -404,6 +405,15 @@ impl Store {
             params![id, path.map(|p| p.to_string_lossy().into_owned())],
         )?;
         Ok(())
+    }
+
+    /// Every document that has an audio file, with its path.
+    pub fn documents_with_audio(&self) -> Result<Vec<(DocumentId, PathBuf)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, audio_path FROM documents WHERE audio_path IS NOT NULL ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, PathBuf::from(r.get::<_, String>(1)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn delete_document(&self, id: DocumentId) -> Result<()> {

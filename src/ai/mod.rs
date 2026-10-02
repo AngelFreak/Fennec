@@ -14,6 +14,7 @@ pub mod privacy;
 pub mod service;
 mod sse;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -167,6 +168,57 @@ pub fn presets() -> Vec<Preset> {
     ]
 }
 
+/// The kinds of AI work; each can use its own provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AiJob {
+    Summaries,
+    Cleanup,
+    ActionItems,
+    Ask,
+    FillFields,
+}
+
+impl AiJob {
+    pub const ALL: [AiJob; 5] = [
+        AiJob::Summaries,
+        AiJob::Cleanup,
+        AiJob::ActionItems,
+        AiJob::Ask,
+        AiJob::FillFields,
+    ];
+
+    /// Key in `settings.toml` (`[ai.jobs]`).
+    pub fn key(self) -> &'static str {
+        match self {
+            AiJob::Summaries => "summaries",
+            AiJob::Cleanup => "cleanup",
+            AiJob::ActionItems => "action-items",
+            AiJob::Ask => "ask",
+            AiJob::FillFields => "fill-fields",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AiJob::Summaries => "Summaries",
+            AiJob::Cleanup => "Clean up text",
+            AiJob::ActionItems => "Action items",
+            AiJob::Ask => "Ask the project",
+            AiJob::FillFields => "Fill template fields",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            AiJob::Summaries => "Document and project summaries",
+            AiJob::Cleanup => "Grammar and filler words, shown as a diff",
+            AiJob::ActionItems => "What, who, when",
+            AiJob::Ask => "Questions answered with citations",
+            AiJob::FillFields => "Suggestions you accept one by one",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiSettings {
@@ -177,6 +229,9 @@ pub struct AiSettings {
     pub default_provider: String,
     /// Language the model should answer in.
     pub language: String,
+    /// Provider per job ([`AiJob::key`] → provider `id`). A job that is not
+    /// listed, or whose provider is gone, uses the default provider.
+    pub jobs: BTreeMap<String, String>,
 }
 
 impl Default for AiSettings {
@@ -186,6 +241,7 @@ impl Default for AiSettings {
             providers: Vec::new(),
             default_provider: String::new(),
             language: "dansk".into(),
+            jobs: BTreeMap::new(),
         }
     }
 }
@@ -198,6 +254,14 @@ impl AiSettings {
     pub fn active(&self) -> Option<&ProviderConfig> {
         self.provider(&self.default_provider)
             .or_else(|| self.providers.first())
+    }
+
+    /// The provider that runs `job`: its own choice, else the default.
+    pub fn for_job(&self, job: AiJob) -> Option<&ProviderConfig> {
+        self.jobs
+            .get(job.key())
+            .and_then(|id| self.provider(id))
+            .or_else(|| self.active())
     }
 
     /// A fresh id for a provider made from `base`, not clashing with existing ones.
@@ -368,6 +432,33 @@ mod tests {
         assert!(s.active().is_none());
         s.providers.push(presets().remove(2).config);
         assert_eq!(s.active().unwrap().id, "ollama");
+    }
+
+    #[test]
+    fn a_job_uses_its_own_provider_else_the_default() {
+        let mut s = AiSettings::default();
+        s.providers.push(presets().remove(0).config);
+        s.providers.push(presets().remove(2).config);
+        s.default_provider = "claude".into();
+        s.jobs.insert(AiJob::Cleanup.key().into(), "ollama".into());
+        s.jobs.insert(AiJob::Ask.key().into(), "gone".into());
+        assert_eq!(s.for_job(AiJob::Cleanup).unwrap().id, "ollama");
+        assert_eq!(s.for_job(AiJob::Summaries).unwrap().id, "claude");
+        assert_eq!(
+            s.for_job(AiJob::Ask).unwrap().id,
+            "claude",
+            "a removed provider falls back to the default"
+        );
+    }
+
+    #[test]
+    fn job_choices_survive_a_round_trip_and_old_files_have_none() {
+        let mut s = AiSettings::default();
+        s.jobs.insert(AiJob::ActionItems.key().into(), "x".into());
+        let text = toml::to_string(&s).unwrap();
+        assert_eq!(toml::from_str::<AiSettings>(&text).unwrap(), s);
+        let old: AiSettings = toml::from_str("enabled = true\n").unwrap();
+        assert!(old.jobs.is_empty());
     }
 
     #[test]

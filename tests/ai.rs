@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fennec::ai::service::Scope;
 use fennec::ai::{
-    AiError, AiService, AiSettings, Cancel, Locality, MemorySecrets, Protocol, ProviderConfig, connect,
-    privacy::PrivacyError,
+    AiError, AiJob, AiService, AiSettings, Cancel, Locality, MemorySecrets, Protocol, ProviderConfig,
+    connect, privacy::PrivacyError,
 };
 use fennec::store::{NewDocument, Paragraph, ProjectFilter, Store};
 use fennec::template::Template;
@@ -564,4 +564,158 @@ fn local_model_jobs_wait_while_dictation_runs() {
     live.store(false, Ordering::Relaxed);
     assert!(job.join().unwrap().is_ok());
     assert_eq!(mock.count(), 1);
+}
+
+/// One mock server per job, plus one for the default provider.
+struct JobMocks {
+    default: MockLlm,
+    summaries: MockLlm,
+    cleanup: MockLlm,
+    items: MockLlm,
+    ask: MockLlm,
+    fields: MockLlm,
+}
+
+fn job_mocks() -> JobMocks {
+    JobMocks {
+        default: MockLlm::start(Wire::OpenAi, |_| Reply::Text("fra standard".into())),
+        summaries: MockLlm::start(Wire::OpenAi, |_| Reply::Text("Resumé.".into())),
+        cleanup: MockLlm::start(Wire::OpenAi, |rec| {
+            let paragraphs: Vec<_> = tagged(rec)
+                .into_iter()
+                .map(|(id, text)| json!({"id": id, "text": text.replace("øh ", "")}))
+                .collect();
+            Reply::Text(json!({ "paragraphs": paragraphs }).to_string())
+        }),
+        items: MockLlm::start(Wire::OpenAi, |_| {
+            Reply::Text(
+                json!({"items": [{"what": "Send tilbud", "who": null, "due": null, "paragraph": null}]})
+                    .to_string(),
+            )
+        }),
+        ask: MockLlm::start(Wire::OpenAi, |_| Reply::Text("Jens.".into())),
+        fields: MockLlm::start(Wire::Anthropic, |_| {
+            Reply::Text(json!({"emne": "Tilbud"}).to_string())
+        }),
+    }
+}
+
+fn job_service(m: &JobMocks) -> AiService {
+    let mut settings = AiSettings {
+        enabled: true,
+        default_provider: "default".into(),
+        providers: vec![
+            provider(
+                "default",
+                Protocol::OpenAi,
+                &m.default.url,
+                Locality::ThisComputer,
+            ),
+            provider("sum", Protocol::OpenAi, &m.summaries.url, Locality::ThisComputer),
+            provider("clean", Protocol::OpenAi, &m.cleanup.url, Locality::Network),
+            provider("items", Protocol::OpenAi, &m.items.url, Locality::ThisComputer),
+            provider("ask", Protocol::OpenAi, &m.ask.url, Locality::Network),
+            provider("fields", Protocol::Anthropic, &m.fields.url, Locality::Cloud),
+        ],
+        ..Default::default()
+    };
+    for (job, id) in [
+        (AiJob::Summaries, "sum"),
+        (AiJob::Cleanup, "clean"),
+        (AiJob::ActionItems, "items"),
+        (AiJob::Ask, "ask"),
+        (AiJob::FillFields, "fields"),
+    ] {
+        settings.jobs.insert(job.key().into(), id.into());
+    }
+    AiService::new(settings, Arc::new(MemorySecrets::with("fields", "k")))
+}
+
+fn one_field_template() -> Template {
+    Template::parse(
+        "t",
+        "name = \"T\"\nheading = \"T\"\n[[fields]]\nkey = \"emne\"\nlabel = \"Emne\"\n",
+        std::path::Path::new("t.toml"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn each_action_goes_to_the_provider_set_for_its_job() {
+    let m = job_mocks();
+    let ai = job_service(&m);
+    let (store, doc) = store_with_doc(&["Jens sender øh tilbuddet."]);
+    let scope = Scope::Document(doc);
+    let c = Cancel::default();
+
+    let s = ai.summarize(&store, &scope, &c, &mut |_| {}).unwrap();
+    assert_eq!((s.text.as_str(), s.provider.as_str()), ("Resumé.", "sum"));
+    assert_eq!(m.summaries.count(), 1);
+
+    assert_eq!(ai.cleanup(&store, doc, &c).unwrap().len(), 1);
+    assert_eq!(m.cleanup.count(), 1);
+
+    assert_eq!(ai.action_items(&store, doc, &c).unwrap()[0].what, "Send tilbud");
+    assert_eq!(m.items.count(), 1);
+
+    ai.ask(&store, &scope, "Hvem sender tilbuddet?", &c, &mut |_| {})
+        .unwrap();
+    assert_eq!(m.ask.count(), 1);
+
+    // The fields job runs on a cloud provider: it asks first, naming that provider.
+    let err = ai
+        .suggest_fields(&store, doc, &one_field_template(), &c)
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            AiError::Privacy(PrivacyError::NeedsConsent { provider_id, .. }) if provider_id == "fields"
+        ),
+        "{err:?}"
+    );
+    assert_eq!(m.fields.count(), 0, "nothing is sent before consent");
+    ai.consent_to(&store, &scope, "fields").unwrap();
+    let s = ai.suggest_fields(&store, doc, &one_field_template(), &c).unwrap();
+    assert_eq!(s.get("emne").map(String::as_str), Some("Tilbud"));
+    assert_eq!(m.fields.count(), 1);
+
+    assert_eq!(m.default.count(), 0, "the default provider was never used");
+}
+
+#[test]
+fn a_job_on_a_cloud_provider_still_respects_local_only_projects() {
+    let m = job_mocks();
+    let ai = job_service(&m);
+    let (store, doc) = store_with_doc(&["Fortroligt."]);
+    let project = store.create_project("Drift", "#888").unwrap();
+    store.move_document(doc, Some(project)).unwrap();
+    store.set_project_local_only(project, true).unwrap();
+    ai.consent_to(&store, &Scope::Document(doc), "fields").unwrap();
+
+    let err = ai
+        .suggest_fields(&store, doc, &one_field_template(), &Cancel::default())
+        .unwrap_err();
+    assert!(
+        matches!(err, AiError::Privacy(PrivacyError::LocalOnly { .. })),
+        "{err:?}"
+    );
+    // Jobs on local and network providers keep working in the same project.
+    ai.summarize(&store, &Scope::Document(doc), &Cancel::default(), &mut |_| {})
+        .unwrap();
+    assert_eq!(m.fields.count(), 0);
+    assert_eq!(m.summaries.count(), 1);
+}
+
+#[test]
+fn a_job_without_a_choice_uses_the_default_provider() {
+    let m = job_mocks();
+    let mut settings = job_service(&m).settings().clone();
+    settings.jobs.remove(AiJob::Summaries.key());
+    let ai = AiService::new(settings, Arc::new(MemorySecrets::default()));
+    let (store, doc) = store_with_doc(&["Hej."]);
+    let s = ai
+        .summarize(&store, &Scope::Document(doc), &Cancel::default(), &mut |_| {})
+        .unwrap();
+    assert_eq!(s.provider, "default");
+    assert_eq!((m.default.count(), m.summaries.count()), (1, 0));
 }
