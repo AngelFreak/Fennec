@@ -65,7 +65,7 @@ commit. Integration tests drive the real wiring.
 **Status**: Complete. `tests/ai.rs` (16 tests, mock Anthropic and OpenAI servers) covers every action, consent, local-only, AI-off, schema fallback, JSON retry, refusals, map-reduce and the dictation queue; `tests/ui.rs` drives each action through the real window. Not yet tried against a real Claude/ChatGPT key.
 
 ## Stage 9: Packaging and docs
-**Goal**: Makefile install, .desktop, icon, cargo-deb, README.
+**Goal**: Makefile install, .desktop, icon, .deb, README.
 **Success Criteria**: `make install` gives a launchable app.
 **Tests**: release build; desktop file validates.
-**Status**: Not Started
+**Status**: Complete. `make install` (checked into a scratch prefix; the installed binary starts cleanly), `make deb` via `scripts/build-deb.sh` like MultiSignal (dpkg-shlibdeps, not cargo-deb), `tests/packaging.rs` (desktop entry validates and matches `APP_ID`, icon present, both installers ship every file). The voice detector now downloads with the first model.

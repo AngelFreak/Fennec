@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#C2410C"/>
+  <!-- ears -->
+  <path d="M26 22 L58 58 L34 74 Z" fill="#FFF7ED"/>
+  <path d="M102 22 L70 58 L94 74 Z" fill="#FFF7ED"/>
+  <path d="M32 34 L50 56 L38 64 Z" fill="#FDBA74"/>
+  <path d="M96 34 L78 56 L90 64 Z" fill="#FDBA74"/>
+  <!-- face -->
+  <path d="M32 64 Q64 48 96 64 L72 101 Q64 110 56 101 Z" fill="#FFF7ED"/>
+  <circle cx="51" cy="74" r="4" fill="#431407"/>
+  <circle cx="77" cy="74" r="4" fill="#431407"/>
+  <circle cx="64" cy="99" r="5" fill="#431407"/>
+</svg>

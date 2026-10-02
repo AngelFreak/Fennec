@@ -130,6 +130,20 @@ pub enum Progress {
     Line(String),
 }
 
+/// The Silero voice detector used for dictation and file import.
+pub const VAD_REPO: &str = "ggml-org/whisper-vad";
+pub const VAD_FILE: &str = "ggml-silero-v6.2.0.bin";
+
+/// Downloads the voice detector if it is missing (about 1 MB). Without it
+/// Fennec still works, with a cruder loudness detector.
+pub fn ensure_vad(paths: &Paths, cancel: &AtomicBool, progress: impl FnMut(Progress)) -> Result<(), String> {
+    let dest = paths.models().join(VAD_FILE);
+    if dest.exists() {
+        return Ok(());
+    }
+    download(&hf_url(VAD_REPO, VAD_FILE), &dest, cancel, progress)
+}
+
 /// Downloads `url` to `dest`, resuming a previous `.part` file. `cancel`
 /// stops it, leaving the partial file for next time.
 pub fn download(
@@ -352,6 +366,26 @@ mod tests {
             c[0].file_name,
             crate::config::Settings::default().model,
             "the default setting names Edda"
+        );
+    }
+
+    #[test]
+    fn an_installed_vad_is_not_downloaded_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.models()).unwrap();
+        std::fs::write(paths.models().join(VAD_FILE), b"x").unwrap();
+        let mut calls = 0;
+        ensure_vad(&paths, &AtomicBool::new(false), |_| calls += 1).unwrap();
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn the_vad_lives_where_settings_look_for_it() {
+        let paths = Paths::under(Path::new("/r"));
+        assert_eq!(
+            crate::config::Settings::default().vad_path(&paths),
+            paths.models().join(VAD_FILE)
         );
     }
 

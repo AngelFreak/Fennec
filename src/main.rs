@@ -10,7 +10,7 @@ fn main() -> gtk::glib::ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("fennec=info,whisper_rs=warn")),
         )
         .init();
-    let app = application("io.github.fennec.Fennec", || {
+    let app = application(fennec::APP_ID, || {
         let paths = Paths::user();
         let settings = Settings::load(&paths.settings_file()).unwrap_or_else(|e| {
             tracing::error!("{e}; using default settings for this session");

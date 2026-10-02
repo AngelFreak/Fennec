@@ -3,6 +3,9 @@
 // Byte-span lists (low-confidence words) often hold a single range on purpose.
 #![allow(clippy::single_range_in_vec_init)]
 
+/// Application id: names the desktop file, the icon and the Wayland app id.
+pub const APP_ID: &str = "io.github.fennec.Fennec";
+
 pub mod ai;
 pub mod audio;
 pub mod commands;

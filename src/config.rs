@@ -153,7 +153,7 @@ impl Settings {
     }
 
     pub fn vad_path(&self, paths: &Paths) -> PathBuf {
-        paths.models().join("ggml-silero-v6.2.0.bin")
+        paths.models().join(crate::models::VAD_FILE)
     }
 }
 

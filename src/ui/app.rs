@@ -10,8 +10,10 @@ use super::{Deps, MainWindow, build_window, load_css};
 
 pub fn application(app_id: &str, deps: impl Fn() -> Deps + 'static) -> adw::Application {
     let app = adw::Application::builder().application_id(app_id).build();
-    app.connect_startup(|app| {
+    let icon = app_id.to_string();
+    app.connect_startup(move |app| {
         load_css();
+        gtk::Window::set_default_icon_name(&icon);
         let quit = gio::SimpleAction::new("quit", None);
         let a = app.clone();
         quit.connect_activate(move |_, _| a.quit());

@@ -311,6 +311,10 @@ impl SettingsPage {
             let send = |p| {
                 let _ = tx.send_blocking(Ok(p));
             };
+            // The voice detector comes with the first model.
+            if let Err(e) = models::ensure_vad(&paths, &cancel, send) {
+                tracing::warn!("could not fetch the voice detector: {e}");
+            }
             let result = match &m.source {
                 Source::Ggml { repo, file } => models::download(
                     &models::hf_url(repo, file),
