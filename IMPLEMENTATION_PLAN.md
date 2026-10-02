@@ -56,7 +56,7 @@ commit. Integration tests drive the real wiring.
 **Goal**: second `Transcriber` running syvai/hviske-v6 (Whisper encoder + Qwen3 decoder, custom transformers code) in a Python helper process; selectable in Settings and in fennec-bench.
 **Success Criteria**: v6 transcribes file chunks and dictation utterances through the same pipeline; timestamps come from VAD chunks; no low-confidence spans.
 **Tests**: protocol unit tests with a fake helper script; integration run against the real model behind `#[ignore]` (needs the 2.8 GB download).
-**Status**: Deferred — leaderboard (RyeAI, same harness for all) puts Edda first among open models (9.21 mean WER vs 10.36 for v6); do after Stage 9.
+**Status**: Complete except the real-model run. `SidecarEngine` + `scripts/hviske_sidecar.py` (JSON lines + raw f32); a model folder with `processing_whisper_qwen.py` loads through it everywhere (`engine::load_engine`: app, speed test, fennec-bench). Catalog entry downloads the repo into `models/hviske-v6/`. `tests/sidecar.rs` runs the bundled helper against a stand-in model module through file ingest, live dictation and the app's engine factory; `real_hviske_v6_transcribes_danish` is `#[ignore]` until the 2.8 GB download is done.
 
 ## Stage 8: AI providers and actions
 **Goal**: Anthropic + OpenAI-compatible providers, keyring, privacy gate, summary/clean-up/action items/ask/fields, Settings AI sections, UI (AI menu, tabs, diff view, Ask tab).

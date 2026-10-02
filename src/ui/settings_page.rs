@@ -266,6 +266,8 @@ impl SettingsPage {
             "Use"
         } else if matches!(entry.as_ref().map(|e| &e.source), Some(Source::Convert { .. })) {
             "Download & convert"
+        } else if matches!(entry.as_ref().map(|e| &e.source), Some(Source::Snapshot { .. })) {
+            "Download (2.8 GB)"
         } else {
             "Download"
         });
@@ -319,6 +321,13 @@ impl SettingsPage {
                 Source::Ggml { repo, file } => models::download(
                     &models::hf_url(repo, file),
                     &models::path_of(&m, &paths),
+                    &cancel,
+                    send,
+                ),
+                Source::Snapshot { repo } => models::fetch_snapshot(
+                    repo,
+                    &models::path_of(&m, &paths),
+                    &models::python(),
                     &cancel,
                     send,
                 ),

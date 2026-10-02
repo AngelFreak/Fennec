@@ -37,7 +37,7 @@ pub use window::MainWindow;
 
 use crate::audio::capture::{AudioSource, MicSource};
 use crate::config::{Paths, Settings};
-use crate::engine::{Transcriber, WhisperEngine};
+use crate::engine::Transcriber;
 use crate::utterance::{EnergyVad, FrameVad, SileroFrameVad};
 use crate::vad::{SileroVad, SpeechDetector, WholeAudio};
 
@@ -78,16 +78,15 @@ impl Deps {
             engine: Arc::new(|s, p| {
                 let path = s.model_path(p);
                 let gpu = crate::models::wants_gpu(s.backend);
-                let loaded = WhisperEngine::load(&path, gpu).or_else(|e| {
-                    if !gpu {
-                        return Err(e);
-                    }
-                    // A GPU that fails to start must not stop dictation.
-                    tracing::warn!("GPU backend failed ({e}); falling back to CPU");
-                    WhisperEngine::load(&path, false)
-                });
-                loaded
-                    .map(|e| Box::new(e) as Box<dyn Transcriber>)
+                crate::engine::load_engine(&path, gpu)
+                    .or_else(|e| {
+                        if !gpu || crate::engine::sidecar::is_sidecar_model(&path) {
+                            return Err(e);
+                        }
+                        // A GPU that fails to start must not stop dictation.
+                        tracing::warn!("GPU backend failed ({e}); falling back to CPU");
+                        crate::engine::load_engine(&path, false)
+                    })
                     .map_err(|e| e.to_string())
             }),
             audio: Arc::new(|s| {

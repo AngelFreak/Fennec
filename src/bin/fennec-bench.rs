@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use fennec::audio::read_wav_16k_mono;
-use fennec::engine::{SAMPLE_RATE, TranscribeOptions, Transcriber, WhisperEngine, default_threads};
+use fennec::engine::{SAMPLE_RATE, TranscribeOptions, default_threads, load_engine};
 use fennec::eval::{ErrorCount, char_errors, word_errors};
 
 struct Args {
@@ -94,7 +94,7 @@ fn run_accuracy_in_parallel(args: &Args, clips: &[Clip]) -> Result<Vec<Accuracy>
             .iter()
             .map(|model| {
                 scope.spawn(move || -> Result<Accuracy> {
-                    let mut engine = WhisperEngine::load(model, args.gpu)?;
+                    let mut engine = load_engine(model, args.gpu)?;
                     let opts = TranscribeOptions {
                         threads: threads_each,
                         ..Default::default()
@@ -138,7 +138,7 @@ fn run_speed_sequentially(args: &Args, clips: &[Clip]) -> Result<Vec<(f64, f64)>
         .map(|model| {
             eprintln!("[{}] timing {} clips alone", file_name(model), sample.len());
             let t = Instant::now();
-            let mut engine = WhisperEngine::load(model, args.gpu)?;
+            let mut engine = load_engine(model, args.gpu)?;
             let load = t.elapsed().as_secs_f64();
             let t = Instant::now();
             for clip in sample {

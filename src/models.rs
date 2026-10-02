@@ -16,6 +16,8 @@ pub enum Source {
     Ggml { repo: &'static str, file: &'static str },
     /// A Hugging Face checkpoint converted locally (needs Python with torch).
     Convert { repo: &'static str, quant: &'static str },
+    /// A whole Hugging Face repository, run by the Python helper.
+    Snapshot { repo: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +82,21 @@ pub fn catalog() -> Vec<CatalogModel> {
                 file: "roest-v3-q8_0.bin",
             },
         },
+        CatalogModel {
+            id: "hviske-v6",
+            name: "Hviske v6",
+            publisher: "syv.ai",
+            description: "Whisper encoder with a Qwen3 decoder, 1.2B parameters. Strong on read speech; runs in a \
+                          Python helper (needs torch and transformers), slower than the others on a CPU.",
+            license: "CC BY-NC 4.0",
+            non_commercial: true,
+            size: "full precision · 2.8 GB",
+            mean_wer: Some("10.2%"),
+            file_name: "hviske-v6",
+            source: Source::Snapshot {
+                repo: "syvai/hviske-v6",
+            },
+        },
     ]
 }
 
@@ -88,7 +105,66 @@ pub fn path_of(model: &CatalogModel, paths: &Paths) -> PathBuf {
 }
 
 pub fn is_installed(model: &CatalogModel, paths: &Paths) -> bool {
-    path_of(model, paths).is_file()
+    let path = path_of(model, paths);
+    match model.source {
+        Source::Snapshot { .. } => path.join("model.safetensors").is_file(),
+        _ => path.is_file(),
+    }
+}
+
+/// Downloads a whole model repository into `dest` with Python's
+/// `huggingface_hub` (resumable; progress comes back as lines).
+pub fn fetch_snapshot(
+    repo: &str,
+    dest: &Path,
+    python: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> Result<(), String> {
+    let code = "import sys\nfrom huggingface_hub import snapshot_download\n\
+                print('Downloading', sys.argv[1], flush=True)\n\
+                snapshot_download(sys.argv[1], local_dir=sys.argv[2])\nprint('done', flush=True)";
+    let mut child = Command::new(python)
+        .args(["-u", "-c", code, repo])
+        .arg(dest)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run {python}: {e}"))?;
+    // huggingface_hub reports progress on stderr.
+    let stderr = child.stderr.take().expect("piped");
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let reader = std::thread::spawn(move || {
+        let mut tail = Vec::new();
+        let mut buf = Vec::new();
+        let mut r = std::io::BufReader::new(stderr);
+        while r.read_until(b'\r', &mut buf).map(|n| n > 0).unwrap_or(false) {
+            let line = String::from_utf8_lossy(&buf).trim().to_string();
+            buf.clear();
+            if !line.is_empty() {
+                tail.push(line.clone());
+                let _ = tx.send(line);
+            }
+        }
+        tail.into_iter().rev().take(3).collect::<Vec<_>>()
+    });
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            return Err("cancelled".into());
+        }
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(line) => progress(Progress::Line(line)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let tail = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(tail.into_iter().rev().collect::<Vec<_>>().join(" "));
+    }
+    Ok(())
 }
 
 /// GGML files in the models directory that are not in the catalog (and not the VAD).
@@ -367,6 +443,19 @@ mod tests {
             crate::config::Settings::default().model,
             "the default setting names Edda"
         );
+    }
+
+    #[test]
+    fn hviske_v6_counts_as_installed_only_with_its_weights() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let v6 = catalog().into_iter().find(|m| m.id == "hviske-v6").unwrap();
+        assert!(matches!(v6.source, Source::Snapshot { .. }));
+        let folder = path_of(&v6, &paths);
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(!is_installed(&v6, &paths), "a half-finished download");
+        std::fs::write(folder.join("model.safetensors"), b"x").unwrap();
+        assert!(is_installed(&v6, &paths));
     }
 
     #[test]

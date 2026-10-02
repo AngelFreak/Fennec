@@ -56,6 +56,7 @@ Open **Settings → Speech model** and install a model. The voice detector
 | **Edda v0.1** (default) | Alexandra Institute | Apache 2.0 | ~550 MB (q5_0) | 9.2 % |
 | Hviske v3 conversation | syv.ai | OpenRAIL, non-commercial | ~1.1 GB (q5_0) | – |
 | Røst v3 Whisper 1.5B | CoRal project | OpenRAIL | 1.7 GB (q8_0) | 13.7 % |
+| Hviske v6 | syv.ai | CC BY-NC 4.0 | 2.8 GB | 10.2 % |
 
 \* From the [Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard).
 
@@ -66,6 +67,11 @@ only as Hugging Face checkpoints, so Fennec converts them, which needs:
 - A [whisper.cpp](https://github.com/ggml-org/whisper.cpp) checkout (set
   `WHISPER_CPP`; the default is `~/dev/whisper.cpp`) with `whisper-quantize`
   built in `build-fennec/`.
+
+Hviske v6 is not a Whisper model that whisper.cpp can run (it pairs a Whisper
+encoder with a Qwen3 decoder). Fennec runs it in a small Python helper, which
+needs Python with `torch` and `transformers`. It is slower than the others on
+a CPU and gives no word confidences.
 
 You can also add any whisper.cpp GGML file with **Add custom GGML model…**.
 **Run speed test** measures how long a sentence takes on your machine.
@@ -125,5 +131,5 @@ fennec-bench --manifest ~/.cache/fennec/fleurs-da/manifest.tsv --limit 200 \
   (MIT) through [whisper-rs](https://github.com/tazz4843/whisper-rs).
 - The speed-test clip and test fixture come from
   [FLEURS](https://huggingface.co/datasets/google/fleurs) (Google, CC BY 4.0).
-- The models are by their publishers under the licences above. Hviske's
-  licence does not allow commercial use.
+- The models are by their publishers under the licences above. The Hviske v3
+  and Hviske v6 licences do not allow commercial use.

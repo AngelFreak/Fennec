@@ -1,7 +1,9 @@
 //! Speech-to-text engines. The rest of the app only sees [`Transcriber`].
 
+pub mod sidecar;
 mod whisper;
 
+pub use sidecar::SidecarEngine;
 pub use whisper::WhisperEngine;
 
 use std::path::PathBuf;
@@ -64,6 +66,15 @@ pub enum EngineError {
     WorkerStopped,
     #[error("{0}")]
     Other(String),
+}
+
+/// Loads the engine a model path needs: a hviske-style model directory
+/// runs in the Python helper, anything else is a whisper.cpp GGML file.
+pub fn load_engine(path: &std::path::Path, gpu: bool) -> Result<Box<dyn Transcriber>, EngineError> {
+    if sidecar::is_sidecar_model(path) {
+        return Ok(Box::new(SidecarEngine::hviske(&crate::models::python(), path)?));
+    }
+    Ok(Box::new(WhisperEngine::load(path, gpu)?))
 }
 
 pub trait Transcriber: Send {

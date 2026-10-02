@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).resolve().parent.parent / "tests/fixtures/models"
 
 def edda():       return snapshot_download("danish-foundation-models/edda-v0.1")
 def hviske():     return snapshot_download("syvai/hviske-v3-conversation")
-def hviske6():    return snapshot_download("syvai/hviske-v6")
+def hviske6():    return snapshot_download("syvai/hviske-v6", local_dir=str(MODELS / "hviske-v6"))  # run by the Python helper
 def roest():
     p = hf_hub_download("alfanova/roest-v3-whisper-ggml", "roest-v3-q8_0.bin")
     shutil.copy(p, MODELS / "roest-v3-q8_0.bin"); return str(MODELS / "roest-v3-q8_0.bin")
