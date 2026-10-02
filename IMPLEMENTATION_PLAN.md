@@ -8,13 +8,13 @@ commit. Integration tests drive the real wiring.
 **Goal**: Cargo project, whisper-rs transcribing Danish audio on CPU; Edda converted to GGML; VAD source decided.
 **Success Criteria**: `fennec-bench <wav>` prints Danish text + timing; tiny test model downloads for tests; decision notes in `docs/plans/stage0-notes.md`.
 **Tests**: engine transcribes a known WAV with the tiny model (non-empty text, segments ordered).
-**Status**: Not Started
+**Status**: In Progress — engine, bench tool, WER/CER and conversion scripts written; waiting on FLEURS + model downloads for the integration test and benchmark. VAD: whisper-rs 0.16 exposes Silero VAD (`WhisperVadContext`).
 
 ## Stage 1: Store and domain
 **Goal**: SQLite schema + migrations; projects, documents, tags, paragraphs, FTS search, summaries, action items.
 **Success Criteria**: CRUD + tag filter + FTS search through the public API.
 **Tests**: per-query unit tests; migration from empty DB; FTS finds Danish text with æøå.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Templates and export
 **Goal**: TOML templates (fields, heading, footer, logo, font, `{summary}` slot); TXT, DOCX, PDF writers; combined project export.

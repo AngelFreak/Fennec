@@ -1,0 +1,212 @@
+//! Compares Whisper models on a Danish test set.
+//!
+//! ```text
+//! fennec-bench --manifest set.tsv [--limit N] [--speed N] [--gpu] model.bin...
+//! ```
+//!
+//! The manifest has one `wav_path<TAB>reference` per line. Accuracy (WER/CER)
+//! runs all models at the same time, splitting the CPU between them: contention
+//! slows them down but does not change their output. Speed is then measured
+//! one model at a time on the first `--speed` clips (default 10), because
+//! parallel runs would distort the timings.
+
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use anyhow::{Context, Result, bail};
+use fennec::audio::read_wav_16k_mono;
+use fennec::engine::{SAMPLE_RATE, TranscribeOptions, Transcriber, WhisperEngine, default_threads};
+use fennec::eval::{ErrorCount, char_errors, word_errors};
+
+struct Args {
+    manifest: PathBuf,
+    limit: Option<usize>,
+    speed_clips: usize,
+    gpu: bool,
+    models: Vec<PathBuf>,
+}
+
+struct Clip {
+    pcm: Vec<f32>,
+    reference: String,
+}
+
+struct Accuracy {
+    model: PathBuf,
+    wer: ErrorCount,
+    cer: ErrorCount,
+    worst: Vec<(f64, String, String)>,
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+    let args = parse_args()?;
+    let clips = load_manifest(&args.manifest, args.limit)?;
+    let audio_secs: f64 = clips
+        .iter()
+        .map(|c| c.pcm.len() as f64 / SAMPLE_RATE as f64)
+        .sum();
+    eprintln!(
+        "{} clips, {:.1} min of audio, {} models",
+        clips.len(),
+        audio_secs / 60.0,
+        args.models.len()
+    );
+
+    let accuracy = run_accuracy_in_parallel(&args, &clips)?;
+    let speed = run_speed_sequentially(&args, &clips)?;
+
+    println!(
+        "\n{:<34} {:>7} {:>7} {:>9} {:>9}",
+        "model", "WER", "CER", "load s", "RTF"
+    );
+    for (a, (load, rtf)) in accuracy.iter().zip(&speed) {
+        println!(
+            "{:<34} {:>6.1}% {:>6.1}% {:>9.1} {:>9.3}",
+            file_name(&a.model),
+            a.wer.rate() * 100.0,
+            a.cer.rate() * 100.0,
+            load,
+            rtf
+        );
+    }
+    println!("\nRTF = processing time / audio time (lower is faster; below 1 keeps up with speech).");
+    for a in &accuracy {
+        println!("\nWorst clips for {}:", file_name(&a.model));
+        for (wer, reference, hypothesis) in a.worst.iter().take(3) {
+            println!(
+                "  WER {:.0}%\n    ref: {reference}\n    hyp: {hypothesis}",
+                wer * 100.0
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_accuracy_in_parallel(args: &Args, clips: &[Clip]) -> Result<Vec<Accuracy>> {
+    let threads_each = (default_threads() / args.models.len()).max(1);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = args
+            .models
+            .iter()
+            .map(|model| {
+                scope.spawn(move || -> Result<Accuracy> {
+                    let mut engine = WhisperEngine::load(model, args.gpu)?;
+                    let opts = TranscribeOptions {
+                        threads: threads_each,
+                        ..Default::default()
+                    };
+                    let mut acc = Accuracy {
+                        model: model.clone(),
+                        wer: ErrorCount::default(),
+                        cer: ErrorCount::default(),
+                        worst: Vec::new(),
+                    };
+                    for (i, clip) in clips.iter().enumerate() {
+                        let hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
+                        let w = word_errors(&clip.reference, &hyp);
+                        acc.wer.add(w);
+                        acc.cer.add(char_errors(&clip.reference, &hyp));
+                        acc.worst.push((w.rate(), clip.reference.clone(), hyp));
+                        eprintln!("[{}] {}/{}", file_name(model), i + 1, clips.len());
+                    }
+                    acc.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    Ok(acc)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("benchmark thread panicked"))
+            .collect()
+    })
+}
+
+/// Returns (load seconds, real-time factor) per model.
+fn run_speed_sequentially(args: &Args, clips: &[Clip]) -> Result<Vec<(f64, f64)>> {
+    let sample = &clips[..args.speed_clips.min(clips.len())];
+    let audio: f64 = sample
+        .iter()
+        .map(|c| c.pcm.len() as f64 / SAMPLE_RATE as f64)
+        .sum();
+    let opts = TranscribeOptions::default();
+    args.models
+        .iter()
+        .map(|model| {
+            eprintln!("[{}] timing {} clips alone", file_name(model), sample.len());
+            let t = Instant::now();
+            let mut engine = WhisperEngine::load(model, args.gpu)?;
+            let load = t.elapsed().as_secs_f64();
+            let t = Instant::now();
+            for clip in sample {
+                engine.transcribe(&clip.pcm, &opts)?;
+            }
+            Ok((load, t.elapsed().as_secs_f64() / audio))
+        })
+        .collect()
+}
+
+fn join_text(segments: &[fennec::engine::Segment]) -> String {
+    segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn load_manifest(path: &Path, limit: Option<usize>) -> Result<Vec<Clip>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let base = path.parent().unwrap_or(Path::new("."));
+    let mut clips = Vec::new();
+    for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+        let Some((wav, reference)) = line.split_once('\t') else {
+            bail!("{}:{}: expected `wav_path<TAB>reference`", path.display(), n + 1);
+        };
+        let pcm = read_wav_16k_mono(&base.join(wav))?;
+        clips.push(Clip {
+            pcm,
+            reference: reference.to_string(),
+        });
+        if limit.is_some_and(|l| clips.len() >= l) {
+            break;
+        }
+    }
+    if clips.is_empty() {
+        bail!("{} has no clips", path.display());
+    }
+    Ok(clips)
+}
+
+fn parse_args() -> Result<Args> {
+    let mut args = Args {
+        manifest: PathBuf::new(),
+        limit: None,
+        speed_clips: 10,
+        gpu: false,
+        models: Vec::new(),
+    };
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--manifest" => args.manifest = it.next().context("--manifest needs a path")?.into(),
+            "--limit" => args.limit = Some(it.next().context("--limit needs a number")?.parse()?),
+            "--speed" => args.speed_clips = it.next().context("--speed needs a number")?.parse()?,
+            "--gpu" => args.gpu = true,
+            _ if a.starts_with("--") => bail!("unknown option {a}"),
+            _ => args.models.push(a.into()),
+        }
+    }
+    if args.manifest.as_os_str().is_empty() || args.models.is_empty() {
+        bail!("usage: fennec-bench --manifest set.tsv [--limit N] [--speed N] [--gpu] model.bin...");
+    }
+    Ok(args)
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
