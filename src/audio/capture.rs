@@ -78,7 +78,7 @@ pub struct InputDevice {
 /// protocol) when one runs, else raw ALSA. Raw ALSA reads the hardware with
 /// its capture boost and ignores the system input volume, which clipped
 /// speech badly (RMS 0.38 against 0.03 through the sound server).
-fn audio_host() -> cpal::Host {
+pub(crate) fn audio_host() -> cpal::Host {
     match cpal::host_from_id(cpal::HostId::PulseAudio) {
         Ok(h) => h,
         Err(e) => {

@@ -11,6 +11,7 @@ use crate::store::{DocumentId, Store, StoreError};
 use crate::template::Template;
 use crate::text::{clock, danish_date};
 
+pub use pdf::page_count;
 pub use pdf::preview as preview_first_page;
 pub use txt::render_txt;
 

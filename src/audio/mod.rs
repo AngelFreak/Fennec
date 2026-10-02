@@ -3,6 +3,7 @@
 pub mod capture;
 pub mod decode;
 pub mod level;
+pub mod playback;
 
 use std::path::{Path, PathBuf};
 
