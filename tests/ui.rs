@@ -433,12 +433,24 @@ fn main() {
         w.templates.names().contains(&"Besigtigelse".to_string()),
     );
     check("the template preview renders", w.templates.has_preview());
+    w.templates.add_field("Dato", false);
+    w.templates.move_field(1, false);
+    check(
+        "a field can be moved up the table",
+        w.templates.field_labels() == ["Dato", "Adresse"],
+    );
     screenshot(&w.window, "templates");
     w.templates.add_field("Adresse", false);
     check(
         "a duplicate field is refused with a reason",
         w.templates.save().is_err() && w.templates.error_text().contains("twice"),
     );
+    w.templates.reload(Some("notat"));
+    check(
+        "opening a template shows its fields",
+        w.templates.field_labels().len() == 4,
+    );
+    screenshot(&w.window, "templates-notat");
 
     // --- settings: models, compute, dictation; changes are saved
     w.sidebar.go(fennec::ui::Nav::Settings);
