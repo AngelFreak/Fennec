@@ -59,3 +59,13 @@ fn install_targets_ship_every_packaged_file() {
         assert!(deb.contains(needed), "build-deb.sh misses {needed}");
     }
 }
+
+#[test]
+fn make_install_points_the_launcher_at_the_installed_binary() {
+    // Desktop launchers often run without ~/.local/bin on PATH.
+    let make = std::fs::read_to_string("Makefile").unwrap();
+    assert!(
+        make.contains("s|^Exec=fennec|Exec=$(PREFIX)/bin/fennec|"),
+        "{make}"
+    );
+}

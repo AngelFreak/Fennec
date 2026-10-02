@@ -26,11 +26,15 @@ pub struct Segment {
 pub struct TranscribeOptions {
     /// ISO 639-1 code; Fennec always passes "da".
     pub language: String,
-    /// Vocabulary and preceding text that steer spelling and continuity.
+    /// Vocabulary that steers the spelling of names and terms.
     pub initial_prompt: Option<String>,
     pub threads: usize,
     /// Tokens with a probability below this are marked low-confidence.
     pub low_confidence_threshold: f32,
+    /// Encode only as much audio as there is instead of a full 30 s window:
+    /// about 2.5× faster, but WER rose from 7.9% to 10.6% for Edda on FLEURS.
+    /// For live previews only.
+    pub fast: bool,
 }
 
 impl Default for TranscribeOptions {
@@ -40,6 +44,7 @@ impl Default for TranscribeOptions {
             initial_prompt: None,
             threads: default_threads(),
             low_confidence_threshold: 0.4,
+            fast: false,
         }
     }
 }

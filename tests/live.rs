@@ -209,3 +209,75 @@ fn real_engine_and_silero_turn_danish_speech_into_a_final_event() {
             .any(|e| matches!(e, LiveEvent::Level(l) if *l > 0.01))
     );
 }
+
+/// Remembers the options of every call; answers "Sætning N.".
+struct Recording(Arc<Mutex<Vec<TranscribeOptions>>>);
+
+impl Transcriber for Recording {
+    fn transcribe(&mut self, _: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        let mut calls = self.0.lock().unwrap();
+        calls.push(opts.clone());
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1,
+            text: format!("Sætning {}.", calls.len()),
+            low_confidence: vec![],
+        }])
+    }
+}
+
+#[test]
+fn earlier_text_never_goes_into_the_prompt_only_the_vocabulary() {
+    // Prompting Edda with what was just said made it drop and garble words.
+    let mut audio = Vec::new();
+    for _ in 0..3 {
+        audio.extend(tone(1.0));
+        audio.extend(silence(1.0));
+    }
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let cfg = LiveConfig {
+        show_preview: false,
+        vocabulary: "Nørregade, Vicevært".into(),
+        ..Default::default()
+    };
+    run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(Recording(Arc::clone(&calls))),
+        cfg,
+    );
+    let prompts: Vec<Option<String>> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|o| o.initial_prompt.clone())
+        .collect();
+    assert_eq!(prompts.len(), 3);
+    assert!(
+        prompts
+            .iter()
+            .all(|p| p.as_deref() == Some("Nørregade, Vicevært")),
+        "{prompts:?}"
+    );
+}
+
+#[test]
+fn previews_use_the_fast_encoder_and_finals_the_full_one() {
+    let mut audio = tone(4.0);
+    audio.extend(silence(1.5));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let events = run(
+        PcmSource::new(audio).realtime(),
+        Box::new(EnergyVad::default()),
+        Box::new(Recording(Arc::clone(&calls))),
+        LiveConfig::default(),
+    );
+    let calls = calls.lock().unwrap();
+    let finals = events
+        .iter()
+        .filter(|e| matches!(e, LiveEvent::Final { .. }))
+        .count();
+    assert!(calls.iter().any(|o| o.fast), "a preview ran: {calls:?}");
+    assert_eq!(calls.iter().filter(|o| !o.fast).count(), finals);
+    assert_eq!(finals, 1);
+}

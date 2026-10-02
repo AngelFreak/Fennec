@@ -6,8 +6,8 @@
 //! reports by how much.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -16,7 +16,7 @@ use crossbeam_channel::{Receiver, unbounded};
 use crate::audio::capture::AudioSource;
 use crate::commands::{Command, CommandTable};
 use crate::engine::{SAMPLE_RATE, TranscribeOptions};
-use crate::ingest::{keep_tail, prompt};
+use crate::ingest::prompt;
 use crate::utterance::{FrameVad, Utterance, UtteranceBuilder, UtteranceConfig, UtteranceEvent, rms};
 use crate::worker::{EngineWorker, Priority, Reply};
 
@@ -89,14 +89,12 @@ impl LiveSession {
         on_event: EventSink,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let context = Arc::new(Mutex::new(String::new()));
         let (pending_tx, pending_rx) = unbounded::<Pending>();
         let started = Instant::now();
 
         let capture = {
             let worker = Arc::clone(&worker);
             let stop = Arc::clone(&stop);
-            let context = Arc::clone(&context);
             let on_event = Arc::clone(&on_event);
             let cfg = cfg.clone();
             std::thread::Builder::new()
@@ -110,9 +108,12 @@ impl LiveSession {
                             None
                         }
                     });
-                    let opts_for = |ctx: &Mutex<String>| {
+                    let opts_for = |fast: bool| {
                         let mut t = cfg.transcribe.clone();
-                        t.initial_prompt = prompt(&cfg.vocabulary, &ctx.lock().expect("context poisoned"));
+                        t.initial_prompt = prompt(&cfg.vocabulary);
+                        // Previews are replaced by the final text, so they trade
+                        // accuracy for speed and stop holding up the finals.
+                        t.fast = fast;
                         t
                     };
                     let handle = |events: Vec<UtteranceEvent>| {
@@ -121,18 +122,15 @@ impl LiveSession {
                                 UtteranceEvent::Started { .. } => on_event(LiveEvent::SpeechStarted),
                                 UtteranceEvent::Partial(u) => {
                                     if cfg.show_preview && !worker.is_busy() {
-                                        let rx = worker.submit(
-                                            u.samples,
-                                            opts_for(&context),
-                                            Priority::LivePartial,
-                                        );
+                                        let rx =
+                                            worker.submit(u.samples, opts_for(true), Priority::LivePartial);
                                         let _ = pending_tx.send(Pending::Preview(u.id, rx));
                                     }
                                 }
                                 UtteranceEvent::Final(u) => {
                                     let rx = worker.submit(
                                         u.samples.clone(),
-                                        opts_for(&context),
+                                        opts_for(false),
                                         Priority::LiveFinal,
                                     );
                                     let _ = pending_tx.send(Pending::Final(u, rx));
@@ -200,11 +198,6 @@ impl LiveSession {
                                         if let Some(cmd) = commands.match_utterance(&text) {
                                             on_event(LiveEvent::Command(cmd));
                                         } else if !text.is_empty() {
-                                            let mut ctx = context.lock().expect("context poisoned");
-                                            ctx.push(' ');
-                                            ctx.push_str(&text);
-                                            keep_tail(&mut ctx, 200);
-                                            drop(ctx);
                                             on_event(LiveEvent::Final {
                                                 text,
                                                 start_ms: u.start_ms() + offset,

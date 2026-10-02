@@ -14,7 +14,10 @@ install:
 	cargo build $(CARGO_FLAGS)
 	install -Dm755 target/release/fennec $(PREFIX)/bin/fennec
 	install -Dm755 target/release/fennec-bench $(PREFIX)/bin/fennec-bench
-	install -Dm644 data/$(APP_ID).desktop $(PREFIX)/share/applications/$(APP_ID).desktop
+	# Launchers (rofi, sway) often lack ~/.local/bin on PATH: use the full path.
+	sed 's|^Exec=fennec|Exec=$(PREFIX)/bin/fennec|' data/$(APP_ID).desktop > $(APP_ID).desktop.tmp
+	install -Dm644 $(APP_ID).desktop.tmp $(PREFIX)/share/applications/$(APP_ID).desktop
+	rm -f $(APP_ID).desktop.tmp
 	install -Dm644 data/icons/hicolor/scalable/apps/$(APP_ID).svg $(PREFIX)/$(ICON)
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null
 	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null

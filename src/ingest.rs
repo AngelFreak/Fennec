@@ -93,7 +93,6 @@ pub fn ingest_file(
 
     let mut builder = ParagraphBuilder::new(opts.paragraph_gap_ms, 90_000);
     let mut saved = 0;
-    let mut context = String::new();
     let save =
         |p: Paragraph, saved: &mut usize, on_event: &mut dyn FnMut(IngestEvent)| -> Result<(), IngestError> {
             let id = store.append_paragraph(doc, &p)?;
@@ -110,18 +109,15 @@ pub fn ingest_file(
             return Err(IngestError::Cancelled);
         }
         let mut t = opts.transcribe.clone();
-        t.initial_prompt = prompt(&opts.vocabulary, &context);
+        t.initial_prompt = prompt(&opts.vocabulary);
         let offset = samples_to_ms(chunk.start);
         let segments = models.engine.transcribe(&pcm[chunk.clone()], &t)?;
         // Engines may return empty segments for silence; they are not paragraphs.
         for seg in segments.into_iter().filter(|s| !s.text.trim().is_empty()) {
-            context.push(' ');
-            context.push_str(&seg.text);
             if let Some(done) = builder.push(&seg, offset) {
                 save(done, &mut saved, &mut on_event)?;
             }
         }
-        keep_tail(&mut context, 200);
         on_event(IngestEvent::Progress {
             done_ms: samples_to_ms(chunk.end),
             total_ms,
@@ -138,20 +134,11 @@ pub fn ingest_file(
     Ok(saved)
 }
 
-/// Vocabulary first, then the end of what was just said.
-pub fn prompt(vocabulary: &str, context: &str) -> Option<String> {
-    let p = format!("{} {}", vocabulary.trim(), context.trim());
-    let p = p.trim();
+/// The prompt is the user's vocabulary only. Feeding back what was just
+/// said made the Danish fine-tunes drop and garble words.
+pub fn prompt(vocabulary: &str) -> Option<String> {
+    let p = vocabulary.trim();
     (!p.is_empty()).then(|| p.to_string())
-}
-
-/// Keeps roughly the last `chars` characters, cut at a char boundary.
-pub fn keep_tail(s: &mut String, chars: usize) {
-    let count = s.chars().count();
-    if count > chars {
-        let cut = s.char_indices().nth(count - chars).map(|(i, _)| i).unwrap_or(0);
-        s.drain(..cut);
-    }
 }
 
 fn samples_to_ms(n: usize) -> i64 {
@@ -167,18 +154,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keep_tail_cuts_on_char_boundaries() {
-        let mut s = "æøå".repeat(100);
-        keep_tail(&mut s, 5);
-        assert_eq!(s, "øåæøå");
-    }
-
-    #[test]
-    fn prompt_combines_vocabulary_and_context_or_is_none() {
-        assert_eq!(
-            prompt(" BBR ", "sidste sætning").as_deref(),
-            Some("BBR sidste sætning")
-        );
-        assert_eq!(prompt("", " "), None);
+    fn the_prompt_is_the_vocabulary_or_nothing() {
+        assert_eq!(prompt(" BBR, Nørregade ").as_deref(), Some("BBR, Nørregade"));
+        assert_eq!(prompt(" "), None);
     }
 }

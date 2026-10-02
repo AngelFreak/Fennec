@@ -51,6 +51,17 @@ impl Transcriber for WhisperEngine {
         // for them garbles the first words (FLEURS WER: Edda 18.7% → 7.9%,
         // Røst 26.1% → 11.5%). Times come from voice detection instead.
         params.set_no_timestamps(true);
+        if opts.fast {
+            // 1500 encoder frames cover 30 s; a margin keeps the last words.
+            // Fixed sizes, because a new size each call makes the GPU backend
+            // rebuild its graph, which cost more than it saved (9–15 s lag).
+            let frames = (pcm.len() as f64 / f64::from(super::SAMPLE_RATE) * 50.0).ceil() as i32 + 64;
+            let bucket = [500, 1000, 1500]
+                .into_iter()
+                .find(|b| frames <= *b)
+                .unwrap_or(1500);
+            params.set_audio_ctx(bucket);
+        }
         if let Some(prompt) = &opts.initial_prompt {
             params.set_initial_prompt(prompt);
         }
