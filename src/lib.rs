@@ -11,6 +11,7 @@ pub mod eval;
 pub mod export;
 pub mod ingest;
 pub mod live;
+pub mod models;
 pub mod paragraphs;
 pub mod store;
 pub mod template;

@@ -71,11 +71,11 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
     let lines = Arc::new(lines);
     Deps {
         paths: Paths::under(root),
-        settings: Settings {
+        settings: std::rc::Rc::new(std::cell::RefCell::new(Settings {
             keep_dictation_audio: false,
             show_preview: false,
             ..Default::default()
-        },
+        })),
         engine: Arc::new(move |_, _| {
             if engine_ok {
                 Ok(Box::new(Scripted((*lines).clone())) as Box<dyn Transcriber>)
@@ -433,6 +433,37 @@ fn main() {
         "a duplicate field is refused with a reason",
         w.templates.save().is_err() && w.templates.error_text().contains("twice"),
     );
+
+    // --- settings: models, compute, dictation; changes are saved
+    w.sidebar.go(fennec::ui::Nav::Settings);
+    check("Settings opens", w.visible_page() == "settings");
+    check(
+        "the catalog lists Edda first",
+        w.settings.model_names().first().map(String::as_str) == Some("Edda v0.1"),
+    );
+    let custom = tmp.path().join("min-model.bin");
+    std::fs::write(&custom, b"not a real model").unwrap();
+    w.settings.add_custom(&custom);
+    check(
+        "a custom model is copied and selected",
+        w.settings.settings().model == "min-model.bin",
+    );
+    check(
+        "it is listed",
+        w.settings.model_names().contains(&"min-model.bin".to_string()),
+    );
+    let on_disk = Settings::load(&root.join("config/settings.toml")).unwrap();
+    check(
+        "the choice is saved to settings.toml",
+        on_disk.model == "min-model.bin",
+    );
+    w.settings.use_model("edda-v0.1-q5_0.bin");
+    w.settings.run_speed_test();
+    let measured = pump_until(Duration::from_secs(10), || {
+        w.settings.speed_text().contains("real time")
+    });
+    check("the speed test reports a real-time factor", measured);
+    screenshot(&w.window, "settings");
 
     // --- a missing model explains itself instead of failing silently
     let root_b = tmp.path().join("b");

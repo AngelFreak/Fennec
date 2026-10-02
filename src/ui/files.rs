@@ -264,7 +264,7 @@ impl FilesPage {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "Optagelse".into());
             let doc = match self.store.create_document(&NewDocument {
-                template_id: Some(self.deps.settings.default_template.clone()),
+                template_id: Some(self.deps.settings.borrow().default_template.clone()),
                 ..NewDocument::file(&title)
             }) {
                 Ok(d) => d,
@@ -384,7 +384,7 @@ impl FilesPage {
         let (job_tx, job_rx) = crossbeam_channel::unbounded::<Job>();
         let (msg_tx, msg_rx) = async_channel::unbounded::<Msg>();
         let db = self.deps.paths.database();
-        let settings = self.deps.settings.clone();
+        let settings = self.deps.settings();
         let paths = self.deps.paths.clone();
         let file_vad = Arc::clone(&self.deps.file_vad);
         std::thread::Builder::new()

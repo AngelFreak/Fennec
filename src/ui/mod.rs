@@ -11,6 +11,7 @@ mod export_page;
 mod files;
 mod inspector;
 pub mod project;
+mod settings_page;
 pub mod sidebar;
 mod templates_page;
 mod window;
@@ -29,7 +30,7 @@ pub use sidebar::Nav;
 pub use window::MainWindow;
 
 use crate::audio::capture::{AudioSource, MicSource};
-use crate::config::{Backend, Paths, Settings};
+use crate::config::{Paths, Settings};
 use crate::engine::{Transcriber, WhisperEngine};
 use crate::utterance::{EnergyVad, FrameVad, SileroFrameVad};
 use crate::vad::{SileroVad, SpeechDetector, WholeAudio};
@@ -46,7 +47,8 @@ pub type VadFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn FrameVad>,
 #[derive(Clone)]
 pub struct Deps {
     pub paths: Paths,
-    pub settings: Settings,
+    /// Shared by every screen; Settings edits it and saves it to disk.
+    pub settings: Rc<RefCell<Settings>>,
     pub engine: EngineFactory,
     pub audio: AudioFactory,
     pub vad: VadFactory,
@@ -59,10 +61,19 @@ impl Deps {
     pub fn real(paths: Paths, settings: Settings) -> Self {
         Self {
             paths,
-            settings,
+            settings: Rc::new(RefCell::new(settings)),
             engine: Arc::new(|s, p| {
-                let gpu = s.backend != Backend::Cpu;
-                WhisperEngine::load(&s.model_path(p), gpu)
+                let path = s.model_path(p);
+                let gpu = crate::models::wants_gpu(s.backend);
+                let loaded = WhisperEngine::load(&path, gpu).or_else(|e| {
+                    if !gpu {
+                        return Err(e);
+                    }
+                    // A GPU that fails to start must not stop dictation.
+                    tracing::warn!("GPU backend failed ({e}); falling back to CPU");
+                    WhisperEngine::load(&path, false)
+                });
+                loaded
                     .map(|e| Box::new(e) as Box<dyn Transcriber>)
                     .map_err(|e| e.to_string())
             }),
@@ -87,6 +98,21 @@ impl Deps {
                 }
             }),
         }
+    }
+}
+
+impl Deps {
+    /// A copy of the current settings (for threads and short reads).
+    pub fn settings(&self) -> Settings {
+        self.settings.borrow().clone()
+    }
+
+    /// Writes the current settings to `settings.toml`.
+    pub fn save_settings(&self) -> Result<(), String> {
+        self.settings
+            .borrow()
+            .save(&self.paths.settings_file())
+            .map_err(|e| e.to_string())
     }
 }
 

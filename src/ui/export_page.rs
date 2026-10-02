@@ -281,7 +281,7 @@ impl ExportPage {
             Target::Document(id) => self.store.document(*id).ok().and_then(|d| d.template_id),
             Target::Documents { .. } => None,
         }
-        .unwrap_or_else(|| self.deps.settings.default_template.clone());
+        .unwrap_or_else(|| self.deps.settings.borrow().default_template.clone());
         let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
         self.template.set_model(Some(&gtk::StringList::new(&names)));
         self.template

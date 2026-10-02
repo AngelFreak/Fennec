@@ -235,3 +235,11 @@ entry.fx-field.required-empty { border: 1px solid @fx_accent; }
 .fx-template-list { background-color: @fx_chrome; border-right: 1px solid @fx_border; padding: 12px; }
 .fx-template-editor { padding: 28px 32px; }
 .fx-field-row { padding: 6px 0; }
+
+/* Settings */
+.fx-settings-nav { padding: 20px 12px; border-right: 1px solid @fx_border; }
+.fx-settings-section { padding: 28px 36px; }
+.fx-model-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
+.fx-model-card.active { border: 1.5px solid @fx_accent; background-color: alpha(@fx_accent, 0.05); }
+.fx-storage-row { min-height: 52px; border-bottom: 1px solid @fx_border; }
+.fx-vocab { border: 1px solid @fx_border; border-radius: 8px; padding: 8px; }

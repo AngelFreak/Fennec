@@ -10,6 +10,7 @@ use super::engine::EngineHolder;
 use super::export_page::{ExportPage, Target};
 use super::files::FilesPage;
 use super::project::{ProjectPage, Scope};
+use super::settings_page::SettingsPage;
 use super::sidebar::{Nav, Sidebar};
 use super::templates_page::TemplatesPage;
 use super::{Deps, icon_button, label};
@@ -23,6 +24,8 @@ pub struct MainWindow {
     pub export: Rc<ExportPage>,
     pub project: Rc<ProjectPage>,
     pub templates: Rc<TemplatesPage>,
+    pub settings: Rc<SettingsPage>,
+    model_chip: gtk::Button,
     pub sidebar: Rc<Sidebar>,
     pub store: Rc<Store>,
     crumb_project: gtk::Label,
@@ -80,7 +83,7 @@ impl MainWindow {
         crumbs.append(&saved);
         header.append(&crumbs);
 
-        let model_chip = gtk::Button::with_label(&model_label(&deps));
+        let model_chip = gtk::Button::with_label(&model_label(&deps.settings()));
         model_chip.add_css_class("fx-secondary");
         model_chip.set_valign(gtk::Align::Center);
         header.append(&model_chip);
@@ -106,6 +109,7 @@ impl MainWindow {
         let export = ExportPage::new(Rc::clone(&store), deps.clone());
         let project = ProjectPage::new(Rc::clone(&store), deps.paths.templates());
         let templates = TemplatesPage::new(deps.paths.templates());
+        let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine));
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
@@ -114,12 +118,7 @@ impl MainWindow {
         stack.add_named(&export.root, Some("export"));
         stack.add_named(&project.root, Some("project"));
         stack.add_named(&templates.root, Some("templates"));
-        // Settings arrives with the model manager (Stage 7).
-        let settings_page = adw::StatusPage::builder()
-            .title("Settings")
-            .description("This screen is being built.")
-            .build();
-        stack.add_named(&settings_page, Some("settings"));
+        stack.add_named(&settings.root, Some("settings"));
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         body.set_vexpand(true);
@@ -140,6 +139,8 @@ impl MainWindow {
             export,
             project,
             templates,
+            settings,
+            model_chip: model_chip.clone(),
             sidebar,
             store,
             crumb_project,
@@ -158,6 +159,12 @@ impl MainWindow {
         export_button.connect_clicked(move |_| {
             if let Some(w) = weak.upgrade() {
                 w.export_current();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.settings.connect_model_changed(move |()| {
+            if let Some(w) = weak.upgrade() {
+                w.model_chip.set_label(&model_label(&w.settings_snapshot()));
             }
         });
         let weak = Rc::downgrade(self);
@@ -254,6 +261,10 @@ impl MainWindow {
         app.set_accels_for_action("win.new-document", &["<Control>n"]);
     }
 
+    fn settings_snapshot(&self) -> crate::config::Settings {
+        self.settings.settings()
+    }
+
     pub fn open_in_editor(&self, doc: crate::store::DocumentId) {
         match self.dictation.open_document(doc) {
             Ok(()) => {
@@ -328,9 +339,9 @@ impl MainWindow {
     }
 }
 
-fn model_label(deps: &Deps) -> String {
-    let name = deps.settings.model.trim_end_matches(".bin").to_string();
-    let backend = match deps.settings.backend {
+fn model_label(settings: &crate::config::Settings) -> String {
+    let name = settings.model.trim_end_matches(".bin").to_string();
+    let backend = match settings.backend {
         crate::config::Backend::Auto => "Auto",
         crate::config::Backend::Cuda => "CUDA",
         crate::config::Backend::Vulkan => "Vulkan",

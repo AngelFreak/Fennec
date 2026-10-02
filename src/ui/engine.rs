@@ -45,7 +45,7 @@ impl EngineHolder {
         }
         let (tx, rx) = async_channel::bounded(1);
         let factory = Arc::clone(&self.deps.engine);
-        let settings = self.deps.settings.clone();
+        let settings = self.deps.settings();
         let paths = self.deps.paths.clone();
         std::thread::spawn(move || {
             let _ = tx.send_blocking(factory(&settings, &paths));

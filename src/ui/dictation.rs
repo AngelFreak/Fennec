@@ -223,9 +223,9 @@ impl DictationPage {
     fn placeholders(&self) -> PlaceholderContext {
         PlaceholderContext {
             today: danish_today(),
-            user: self.deps.settings.user_name.clone(),
+            user: self.deps.settings.borrow().user_name.clone(),
             duration: String::new(),
-            model: self.deps.settings.model.clone(),
+            model: self.deps.settings.borrow().model.clone(),
         }
     }
 
@@ -242,7 +242,7 @@ impl DictationPage {
                     .find(|x| x.id == p)?
                     .default_template
             })
-            .unwrap_or_else(|| self.deps.settings.default_template.clone());
+            .unwrap_or_else(|| self.deps.settings.borrow().default_template.clone());
         let template = templates
             .iter()
             .find(|t| t.id == preferred)
@@ -280,7 +280,7 @@ impl DictationPage {
         let selected = doc
             .template_id
             .clone()
-            .unwrap_or_else(|| self.deps.settings.default_template.clone());
+            .unwrap_or_else(|| self.deps.settings.borrow().default_template.clone());
         self.inspector.set_templates(templates, &selected);
         self.loading_templates.set(false);
         if let Some(t) = self.inspector.selected_template() {
@@ -486,7 +486,7 @@ impl DictationPage {
     }
 
     fn begin_session(self: &Rc<Self>, worker: Arc<EngineWorker>) {
-        let settings = &self.deps.settings;
+        let settings = &self.deps.settings();
         let source = match (self.deps.audio)(settings) {
             Ok(s) => s,
             Err(e) => {
