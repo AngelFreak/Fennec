@@ -66,6 +66,27 @@ fn hviske_model_directories_are_recognised() {
 }
 
 #[test]
+fn a_model_that_prompts_while_loading_cannot_take_the_request_pipe() {
+    // transformers asks "[y/N]" about custom code on stdout and reads the
+    // answer from stdin; that stdin is Fennec's request pipe.
+    let dir = tempfile::tempdir().unwrap();
+    let load = r#"print("Do you wish to run the custom code? [y/N] ", flush=True)
+        try:
+            input()
+        except EOFError:
+            pass"#;
+    let model = fake_model(dir.path(), load);
+    let mut e = SidecarEngine::hviske("python3", &model).unwrap();
+    let text: String = e
+        .transcribe(&tone(2.0), &TranscribeOptions::default())
+        .unwrap()
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
+    assert_eq!(text.trim(), "Hej med dig.");
+}
+
+#[test]
 fn the_helper_transcribes_and_gives_one_segment_per_piece() {
     let dir = tempfile::tempdir().unwrap();
     let mut e = engine(dir.path());
