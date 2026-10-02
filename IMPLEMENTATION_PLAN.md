@@ -1,0 +1,65 @@
+# Fennec implementation plan
+
+Design: `docs/plans/2026-10-02-fennec-design.md`. Each stage: test first,
+`cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt`,
+commit. Integration tests drive the real wiring.
+
+## Stage 0: Scaffold and engine spike
+**Goal**: Cargo project, whisper-rs transcribing Danish audio on CPU; Edda converted to GGML; VAD source decided.
+**Success Criteria**: `fennec-bench <wav>` prints Danish text + timing; tiny test model downloads for tests; decision notes in `docs/plans/stage0-notes.md`.
+**Tests**: engine transcribes a known WAV with the tiny model (non-empty text, segments ordered).
+**Status**: Not Started
+
+## Stage 1: Store and domain
+**Goal**: SQLite schema + migrations; projects, documents, tags, paragraphs, FTS search, summaries, action items.
+**Success Criteria**: CRUD + tag filter + FTS search through the public API.
+**Tests**: per-query unit tests; migration from empty DB; FTS finds Danish text with æøå.
+**Status**: Not Started
+
+## Stage 2: Templates and export
+**Goal**: TOML templates (fields, heading, footer, logo, font, `{summary}` slot); TXT, DOCX, PDF writers; combined project export.
+**Success Criteria**: export a stored document to all three formats; required-field validation.
+**Tests**: parse/validate templates; DOCX XML contains fields + text; PDF text extractable; project export ordering.
+**Status**: Not Started
+
+## Stage 3: Audio, VAD and file ingest
+**Goal**: decode (symphonia + ffmpeg fallback), resample, VAD chunking, ingest job with progress into the store.
+**Success Criteria**: a WAV/MP3 becomes timestamped paragraphs in the DB.
+**Tests**: resampler, VAD on synthetic tone/silence; integration: file → engine → store → DOCX.
+**Status**: Not Started
+
+## Stage 4: Live dictation pipeline
+**Goal**: cpal capture, utterance builder, partials, voice commands, low-confidence spans, disk buffer, engine priority queue.
+**Success Criteria**: fake audio source → events → paragraphs, commands applied.
+**Tests**: utterance boundaries, force-cut, partial dropping when busy, command matching; integration through the real pipeline.
+**Status**: Not Started
+
+## Stage 5: GTK shell — window, sidebar, dictation screen
+**Goal**: main window per mockup: header, sidebar (nav, projects, tags, settings), editor with tags, record dock, inspector fields, CSS.
+**Success Criteria**: app launches, dictation writes into the editor, autosave to DB.
+**Tests**: UI smoke test builds window; editor-model unit tests (partial replace, paragraph mapping).
+**Status**: Not Started
+
+## Stage 6: Files, export, templates, project screens
+**Goal**: file queue + player/timeline, export dialog with preview, template editor, project view (docs/filter/search).
+**Success Criteria**: every mockup screen except AI reachable and working.
+**Tests**: UI smoke per screen; integration: import file via UI action → paragraphs shown.
+**Status**: Not Started
+
+## Stage 7: Models and compute
+**Goal**: model catalog, download + convert + checksum, backend selection (auto/CUDA/Vulkan/CPU) with fallback, speed test; Settings speech/dictation/storage sections.
+**Success Criteria**: switch model/backend from Settings; Vulkan build works on this laptop.
+**Tests**: catalog/path logic; fallback chain with a failing backend stub.
+**Status**: Not Started
+
+## Stage 8: AI providers and actions
+**Goal**: Anthropic + OpenAI-compatible providers, keyring, privacy gate, summary/clean-up/action items/ask/fields, Settings AI sections, UI (AI menu, tabs, diff view, Ask tab).
+**Success Criteria**: each action works against mock servers and a real provider when configured.
+**Tests**: mock-server integration per protocol and action; AI-off makes zero requests; local-only rejects cloud; citation validation.
+**Status**: Not Started
+
+## Stage 9: Packaging and docs
+**Goal**: Makefile install, .desktop, icon, cargo-deb, README.
+**Success Criteria**: `make install` gives a launchable app.
+**Tests**: release build; desktop file validates.
+**Status**: Not Started
