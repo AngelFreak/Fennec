@@ -32,6 +32,29 @@ def pick_device():
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def cpu_has_bf16():
+    """Zen 4 and recent Intel CPUs do bfloat16 in hardware; on them it is
+    about twice as fast as float32 for hviske-v6, with the same accuracy.
+    Elsewhere it is emulated and slower."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            flags = f.read()
+    except OSError:
+        return False
+    return "avx512_bf16" in flags or "amx_bf16" in flags
+
+
+def pick_dtype(device):
+    """None leaves the model's own choice (bfloat16 on CUDA, float32 on CPU)."""
+    if device != "cpu" or not cpu_has_bf16():
+        return None
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch.bfloat16
+
+
 def transformers_compat():
     """hviske-v6's code was written for transformers 4, where
     `_tied_weights_keys` is a list. transformers 5 wants a mapping from each
@@ -86,7 +109,7 @@ def load(model_dir):
     from processing_whisper_qwen import HviskeASR  # the model's own code
 
     device = pick_device()
-    asr = HviskeASR.from_pretrained(model_dir, device=device)
+    asr = HviskeASR.from_pretrained(model_dir, device=device, dtype=pick_dtype(device))
     if hasattr(asr, "model"):
         rebuild_rotary(asr.model)
     return asr, device

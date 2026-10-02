@@ -24,6 +24,9 @@ impl WhisperEngine {
         }
         let mut params = WhisperContextParameters::default();
         params.use_gpu(use_gpu);
+        // Measured on 30 FLEURS clips: about 5 % faster on a Vulkan GPU at the
+        // same WER, but 15 % slower on the CPU, so only for GPU builds.
+        params.flash_attn(use_gpu && cfg!(any(feature = "vulkan", feature = "cuda")));
         let ctx = WhisperContext::new_with_params(path, params).map_err(|source| EngineError::Load {
             path: path.to_path_buf(),
             source,
