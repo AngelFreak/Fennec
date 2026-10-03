@@ -83,6 +83,11 @@ pub type EventSink = Arc<dyn Fn(LiveEvent) + Send + Sync>;
 const QUICK_MAX: usize = 3 * SAMPLE_RATE as usize;
 
 enum Pending {
+    /// An utterance that went on after a held pause, and the quick pass
+    /// over what came after it (from sample `.1`).
+    Tail(Utterance, usize, Receiver<Reply>),
+    /// A held fragment its quick pass found to be a command.
+    Command(Utterance, Command),
     /// A short utterance's quick pass.
     Quick(Utterance, Receiver<Reply>),
     Final(Utterance, Receiver<Reply>),
@@ -128,9 +133,19 @@ impl LiveSession {
                     });
                     let opts_for = |fast: bool| options(&cfg, fast);
                     let context = context.as_ref();
+                    // A quick pass over a held fragment: a command ends it at once.
+                    let probe: std::cell::RefCell<Option<Receiver<Reply>>> = Default::default();
                     let handle = |events: Vec<UtteranceEvent>| {
                         for ev in events {
                             match ev {
+                                UtteranceEvent::Paused(u) => {
+                                    *probe.borrow_mut() = Some(worker.submit_with(
+                                        u.samples,
+                                        opts_for(true),
+                                        Priority::LiveFinal,
+                                        context,
+                                    ));
+                                }
                                 UtteranceEvent::Started { .. } => on_event(LiveEvent::SpeechStarted),
                                 UtteranceEvent::Partial(u) => {
                                     if cfg.show_preview && !worker.is_busy() {
@@ -143,7 +158,23 @@ impl LiveSession {
                                         let _ = pending_tx.send(Pending::Preview(u.id, rx));
                                     }
                                 }
+                                UtteranceEvent::Final(u)
+                                    if u.resumed_at.is_some_and(|k| u.samples.len() - k <= QUICK_MAX) =>
+                                {
+                                    // Speech went on after a held pause: the
+                                    // part after it may be a command.
+                                    probe.borrow_mut().take();
+                                    let k = u.resumed_at.unwrap_or(0);
+                                    let rx = worker.submit_with(
+                                        u.samples[k..].to_vec(),
+                                        opts_for(true),
+                                        Priority::LiveFinal,
+                                        context,
+                                    );
+                                    let _ = pending_tx.send(Pending::Tail(u, k, rx));
+                                }
                                 UtteranceEvent::Final(u) if u.samples.len() <= QUICK_MAX => {
+                                    probe.borrow_mut().take();
                                     let commands = cfg.commands.clone();
                                     let rx = worker.submit_two_pass(
                                         u.samples.clone(),
@@ -159,6 +190,7 @@ impl LiveSession {
                                     let _ = pending_tx.send(Pending::Quick(u, rx));
                                 }
                                 UtteranceEvent::Final(u) => {
+                                    probe.borrow_mut().take();
                                     let rx = worker.submit_final(u.samples.clone(), opts_for(false), context);
                                     let _ = pending_tx.send(Pending::Final(u, rx));
                                 }
@@ -191,6 +223,22 @@ impl LiveSession {
                                     write_recording(w, &chunk);
                                 }
                                 handle(builder.push(&chunk));
+                                let answer = probe.borrow().as_ref().and_then(|rx| rx.try_recv().ok());
+                                if let Some(reply) = answer {
+                                    probe.borrow_mut().take();
+                                    let heard = reply.map(|segs| join(&segs).0).unwrap_or_default();
+                                    if let Some(cmd) = cfg.commands.match_utterance(&heard) {
+                                        // Already heard: no need to transcribe it again.
+                                        for ev in builder.end_now() {
+                                            if let UtteranceEvent::Final(u) = ev {
+                                                let _ = pending_tx.send(Pending::Command(u, cmd));
+                                            }
+                                        }
+                                    } else if ends_sentence(&heard) {
+                                        // A finished sentence: no need to wait.
+                                        handle(builder.end_now());
+                                    }
+                                }
                             }
                             Ok(None) => break,
                             Err(e) => {
@@ -217,6 +265,7 @@ impl LiveSession {
             let offset = cfg.offset_ms;
             let commands = cfg.commands.clone();
             let vocabulary = Vocabulary::parse(&cfg.vocabulary);
+            let results_context = context.clone();
             std::thread::Builder::new()
                 .name("fennec-live-results".into())
                 .spawn(move || {
@@ -273,6 +322,45 @@ impl LiveSession {
                                 finalized = Some(u.id);
                                 deliver(u, rx);
                             }
+                            Pending::Tail(u, k, rx) => {
+                                finalized = Some(u.id);
+                                let tail = match rx.recv() {
+                                    Ok(Ok(segs)) => commands.match_utterance(&join(&segs).0),
+                                    _ => None,
+                                };
+                                match tail {
+                                    // A sentence, then a command: the sentence
+                                    // is text, the command acts.
+                                    Some(cmd) => {
+                                        let head = Utterance {
+                                            samples: u.samples[..k].to_vec(),
+                                            resumed_at: None,
+                                            ..u.clone()
+                                        };
+                                        let rx = worker_alive.submit_final(
+                                            head.samples.clone(),
+                                            options(&cfg, false),
+                                            results_context.as_ref(),
+                                        );
+                                        deliver(head, rx);
+                                        on_event(LiveEvent::Command(cmd));
+                                    }
+                                    None => {
+                                        let rx = worker_alive.submit_final(
+                                            u.samples.clone(),
+                                            options(&cfg, false),
+                                            results_context.as_ref(),
+                                        );
+                                        deliver(u, rx);
+                                    }
+                                }
+                            }
+                            Pending::Command(u, cmd) => {
+                                finalized = Some(u.id);
+                                let lag = started.elapsed().as_millis() as i64 - u.end_ms();
+                                on_event(LiveEvent::Lag(lag.max(0)));
+                                on_event(LiveEvent::Command(cmd));
+                            }
                         }
                     }
                     drop(worker_alive);
@@ -322,6 +410,14 @@ impl Drop for LiveSession {
         self.stop.store(true, Ordering::Relaxed);
         self.join();
     }
+}
+
+/// Whether a quick pass over a pause ends with a full stop, question or
+/// exclamation mark: the sentence is finished, so the utterance can end.
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
+        .trim_end_matches(['"', '»', '”', ')'])
+        .ends_with(['.', '?', '!'])
 }
 
 fn options(cfg: &LiveConfig, fast: bool) -> TranscribeOptions {

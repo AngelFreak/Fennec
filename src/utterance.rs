@@ -89,6 +89,16 @@ pub struct UtteranceConfig {
     pub start_ms: u32,
     /// Silence that ends an utterance.
     pub pause_ms: u32,
+    /// An utterance is held across a normal pause until this much silence,
+    /// unless [`UtteranceBuilder::end_now`] ends it (the live session does
+    /// when a quick pass shows a finished sentence or a command): a
+    /// sentence cut at a pause is heard much worse (FLEURS with a 0.7 s
+    /// pause mid-sentence: WER 13.8% split, 8.0% whole).
+    pub long_pause_ms: u32,
+    /// Only utterances with less speech than this are held: longer ones
+    /// have context enough, and holding them made whole monologues one
+    /// utterance (late text, forced cuts).
+    pub hold_max_ms: u32,
     /// Audio kept from before the detected start.
     pub preroll_ms: u32,
     /// Utterances are cut before this length (Whisper's window is 30 s).
@@ -107,6 +117,8 @@ impl Default for UtteranceConfig {
             threshold: 0.5,
             start_ms: 100,
             pause_ms: 600,
+            long_pause_ms: 1_500,
+            hold_max_ms: 8_000,
             preroll_ms: 200,
             max_ms: 25_000,
             cut_search_ms: 2_000,
@@ -124,6 +136,9 @@ pub struct Utterance {
     pub samples: Vec<f32>,
     /// Sequence number, shared with this utterance's partials.
     pub id: u64,
+    /// Where speech resumed after the last held pause (in `samples`): what
+    /// follows may be a command said after a short sentence.
+    pub resumed_at: Option<usize>,
 }
 
 impl Utterance {
@@ -142,6 +157,10 @@ pub enum UtteranceEvent {
     },
     /// The utterance so far, for a preview.
     Partial(Utterance),
+    /// A short utterance reached a normal pause and is held open, in case
+    /// the sentence goes on. If it is a command, [`UtteranceBuilder::end_now`]
+    /// ends it at once.
+    Paused(Utterance),
     Final(Utterance),
 }
 
@@ -157,6 +176,9 @@ pub struct UtteranceBuilder {
     frame_rms: Vec<f32>,
     voiced_run: u32,
     silent_run: u32,
+    /// [`UtteranceEvent::Paused`] was sent for the current pause.
+    paused: bool,
+    resumed_at: Option<usize>,
     /// Length of `current` at which the next preview is offered.
     next_partial: usize,
     next_id: u64,
@@ -176,6 +198,8 @@ impl UtteranceBuilder {
             frame_rms: Vec::new(),
             voiced_run: 0,
             silent_run: 0,
+            paused: false,
+            resumed_at: None,
             next_partial: 0,
             next_id: 0,
         }
@@ -241,13 +265,33 @@ impl UtteranceBuilder {
         self.frame_rms.push(rms(frame));
         self.silent_run = if voiced { 0 } else { self.silent_run + 1 };
 
-        if self.silent_run >= Self::frames(self.cfg.pause_ms) {
-            // Keep a little of the trailing silence; drop the rest.
-            let keep_silence = Self::frames(200).min(self.silent_run) as usize;
-            let drop = (self.silent_run as usize - keep_silence) * FRAME;
-            self.current.truncate(self.current.len().saturating_sub(drop));
-            self.finish(events);
+        if voiced && self.paused {
+            // Speech again: a held fragment goes on.
+            self.paused = false;
+            self.resumed_at = Some(self.current.len().saturating_sub(FRAME));
+        }
+        let held = self
+            .current
+            .len()
+            .saturating_sub(self.silent_run as usize * FRAME)
+            < Self::samples(self.cfg.hold_max_ms);
+        let end_after = if held {
+            self.cfg.long_pause_ms.max(self.cfg.pause_ms)
+        } else {
+            self.cfg.pause_ms
+        };
+        if self.silent_run >= Self::frames(end_after) {
+            self.end_at_pause(events);
             return;
+        }
+        if self.silent_run >= Self::frames(self.cfg.pause_ms) && !self.paused {
+            self.paused = true;
+            events.push(UtteranceEvent::Paused(Utterance {
+                start_sample: self.current_start,
+                samples: self.current[..self.trimmed_len()].to_vec(),
+                id: self.next_id,
+                resumed_at: None,
+            }));
         }
         if self.current.len() >= self.cfg.max_ms as usize * SAMPLE_RATE as usize / 1000 {
             self.force_cut(events);
@@ -264,16 +308,42 @@ impl UtteranceBuilder {
                 start_sample: self.current_start,
                 samples: self.current.clone(),
                 id: self.next_id,
+                resumed_at: None,
             }));
         }
     }
 
+    /// The utterance's length without its trailing silence, but for 200 ms.
+    fn trimmed_len(&self) -> usize {
+        let keep_silence = Self::frames(200).min(self.silent_run) as usize;
+        let drop = (self.silent_run as usize - keep_silence) * FRAME;
+        self.current.len().saturating_sub(drop)
+    }
+
+    fn end_at_pause(&mut self, events: &mut Vec<UtteranceEvent>) {
+        let len = self.trimmed_len();
+        self.current.truncate(len);
+        self.finish(events);
+    }
+
+    /// Ends a held fragment now (it was a command), if it is still in its
+    /// pause; speech already going on is left alone.
+    pub fn end_now(&mut self) -> Vec<UtteranceEvent> {
+        let mut events = Vec::new();
+        if self.speaking && self.silent_run > 0 {
+            self.end_at_pause(&mut events);
+        }
+        events
+    }
+
     fn finish(&mut self, events: &mut Vec<UtteranceEvent>) {
+        self.paused = false;
         let samples = std::mem::take(&mut self.current);
         events.push(UtteranceEvent::Final(Utterance {
             start_sample: self.current_start,
             samples,
             id: self.next_id,
+            resumed_at: self.resumed_at.take(),
         }));
         self.next_id += 1;
         self.speaking = false;
@@ -293,10 +363,13 @@ impl UtteranceBuilder {
         let rest = self.current.split_off(cut);
         let rest_rms = self.frame_rms.split_off(quietest + 1);
         let head = std::mem::replace(&mut self.current, rest);
+        // A resume point after the cut moves to the part that goes on.
+        self.resumed_at = self.resumed_at.and_then(|k| k.checked_sub(cut));
         events.push(UtteranceEvent::Final(Utterance {
             start_sample: self.current_start,
             samples: head,
             id: self.next_id,
+            resumed_at: None,
         }));
         self.next_id += 1;
         self.current_start += cut as u64;
@@ -351,7 +424,7 @@ mod tests {
         let mut b = builder(UtteranceConfig::default());
         let mut ev = b.push(&silence(1.0));
         ev.extend(b.push(&tone(2.0)));
-        ev.extend(b.push(&silence(1.0)));
+        ev.extend(b.push(&silence(1.6)));
         let f = finals(&ev);
         assert_eq!(f.len(), 1, "{ev:?}");
         // Starts just before the tone (pre-roll), ends a little after it.
@@ -367,10 +440,11 @@ mod tests {
     #[test]
     fn two_utterances_get_increasing_ids() {
         let mut b = builder(UtteranceConfig::default());
+        // Pauses long enough to end even a short utterance.
         let mut ev = b.push(&tone(1.0));
-        ev.extend(b.push(&silence(1.0)));
+        ev.extend(b.push(&silence(1.6)));
         ev.extend(b.push(&tone(1.0)));
-        ev.extend(b.push(&silence(1.0)));
+        ev.extend(b.push(&silence(1.6)));
         let ids: Vec<u64> = finals(&ev).iter().map(|u| u.id).collect();
         assert_eq!(ids, [0, 1]);
     }
@@ -381,7 +455,7 @@ mod tests {
         let mut ev = b.push(&tone(1.0));
         ev.extend(b.push(&silence(0.3)));
         ev.extend(b.push(&tone(1.0)));
-        ev.extend(b.push(&silence(1.0)));
+        ev.extend(b.push(&silence(1.6)));
         assert_eq!(finals(&ev).len(), 1);
     }
 
@@ -401,6 +475,8 @@ mod tests {
         let cfg = UtteranceConfig {
             max_ms: 3_000,
             cut_search_ms: 1_000,
+            // About cutting, not holding: end at the normal pause.
+            long_pause_ms: 600,
             ..Default::default()
         };
         let mut b = builder(cfg);
@@ -477,6 +553,59 @@ mod tests {
                 u.samples.len()
             );
         }
+    }
+
+    #[test]
+    fn a_short_fragment_continues_into_the_speech_after_a_pause() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(0.8);
+        audio.extend(silence(0.8));
+        audio.extend(tone(1.5));
+        audio.extend(silence(2.0));
+        let ev = b.push(&audio);
+        assert_eq!(finals(&ev).len(), 1, "one sentence: {ev:?}");
+        assert!(ev.iter().any(|e| matches!(e, UtteranceEvent::Paused(_))));
+    }
+
+    #[test]
+    fn a_long_utterance_is_not_held_but_ends_at_the_pause() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(9.0);
+        audio.extend(silence(0.8));
+        assert_eq!(finals(&b.push(&audio)).len(), 1);
+    }
+
+    #[test]
+    fn a_held_utterance_ends_at_once_when_asked_in_its_pause() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(2.0);
+        audio.extend(silence(0.8));
+        let ev = b.push(&audio);
+        assert!(finals(&ev).is_empty() && ev.iter().any(|e| matches!(e, UtteranceEvent::Paused(_))));
+        assert_eq!(finals(&b.end_now()).len(), 1, "a finished sentence");
+    }
+
+    #[test]
+    fn a_short_utterance_alone_ends_after_a_long_pause() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(0.6);
+        audio.extend(silence(1.0));
+        assert!(finals(&b.push(&audio)).is_empty(), "still waiting");
+        assert_eq!(finals(&b.push(&silence(0.6))).len(), 1);
+    }
+
+    #[test]
+    fn a_fragment_in_its_pause_can_be_ended_at_once() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(0.6);
+        audio.extend(silence(0.7));
+        b.push(&audio);
+        let f = b.end_now();
+        assert_eq!(finals(&f).len(), 1);
+        assert!(
+            finals(&b.push(&tone(0.2))).is_empty(),
+            "a new utterance starts afresh"
+        );
     }
 
     #[test]

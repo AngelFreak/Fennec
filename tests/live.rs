@@ -92,7 +92,8 @@ fn spoken_commands_shape_paragraphs_that_save_to_the_store() {
     let mut audio = Vec::new();
     for _ in 0..3 {
         audio.extend(tone(1.0));
-        audio.extend(silence(1.0));
+        // Long enough that the short sentences are not held together.
+        audio.extend(silence(1.6));
     }
     let engine = Scripted(vec!["Første sætning.", "Nyt afsnit.", "Anden sætning."]);
     let cfg = LiveConfig {
@@ -389,7 +390,7 @@ fn short_utterance(fast: &'static str, full: &'static str) -> (Vec<LiveEvent>, V
     let mut audio = tone(0.5);
     audio.extend(silence(1.0));
     let events = run(
-        PcmSource::new(audio),
+        PcmSource::new(audio).realtime(),
         Box::new(EnergyVad::default()),
         Box::new(TwoPass {
             fast,
@@ -427,7 +428,8 @@ fn a_short_phrase_shows_the_quick_text_then_the_accurate_one() {
             if p == "Hej med dig" && text == "Hej med dig."),
         "{shown:?}"
     );
-    assert_eq!(calls, [true, false]);
+    // A check for a command at the pause, then the quick and accurate passes.
+    assert_eq!(calls, [true, true, false]);
 }
 
 #[test]
@@ -457,7 +459,8 @@ fn long_utterances_go_straight_to_the_accurate_pass() {
             ..Default::default()
         },
     );
-    assert_eq!(*calls.lock().unwrap(), [false]);
+    // The check at the pause (is the sentence finished?), then one accurate pass.
+    assert_eq!(*calls.lock().unwrap(), [true, false]);
 }
 
 #[test]
@@ -465,7 +468,7 @@ fn a_model_that_takes_context_hears_the_sentence_before_each_utterance() {
     let mut audio = Vec::new();
     for _ in 0..2 {
         audio.extend(tone(1.0));
-        audio.extend(silence(1.0));
+        audio.extend(silence(1.6));
     }
     audio.extend(tone(4.0));
     audio.extend(silence(1.0));
@@ -502,7 +505,7 @@ fn the_app_can_replace_the_context_with_punctuated_text() {
     let mut audio = Vec::new();
     for _ in 0..2 {
         audio.extend(tone(1.0));
-        audio.extend(silence(1.5));
+        audio.extend(silence(1.6));
     }
     let calls = Arc::new(Mutex::new(Vec::new()));
     let (tx, rx) = std::sync::mpsc::channel();
@@ -531,4 +534,50 @@ fn the_app_can_replace_the_context_with_punctuated_text() {
     session.wait();
     let last = calls.lock().unwrap().last().cloned().unwrap();
     assert_eq!(last.initial_prompt.as_deref(), Some("Det regner."));
+}
+
+/// Hears a command in short audio and a sentence in longer audio.
+struct ByLength;
+
+impl Transcriber for ByLength {
+    fn transcribe(&mut self, pcm: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        // A short command with its lead-in is under 1.2 s; the sentence is over.
+        let text = if pcm.len() < SR * 12 / 10 {
+            "Nyt afsnit."
+        } else {
+            "Det regner i dag."
+        };
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1,
+            text: text.into(),
+            low_confidence: vec![],
+        }])
+    }
+}
+
+#[test]
+fn a_command_after_a_short_sentence_and_a_short_pause_still_acts() {
+    let mut audio = tone(1.0);
+    audio.extend(silence(1.0));
+    audio.extend(tone(0.5));
+    audio.extend(silence(2.0));
+    let events = run(
+        PcmSource::new(audio).realtime(),
+        Box::new(EnergyVad::default()),
+        Box::new(ByLength),
+        LiveConfig {
+            show_preview: false,
+            ..Default::default()
+        },
+    );
+    let shown: Vec<&LiveEvent> = events
+        .iter()
+        .filter(|e| matches!(e, LiveEvent::Final { .. } | LiveEvent::Command(_)))
+        .collect();
+    assert!(
+        matches!(shown.as_slice(), [LiveEvent::Final { text, .. }, LiveEvent::Command(Command::NewParagraph)]
+            if text == "Det regner i dag."),
+        "{shown:?}"
+    );
 }

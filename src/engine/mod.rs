@@ -86,3 +86,58 @@ pub trait Transcriber: Send {
     /// Transcribes 16 kHz mono samples.
     fn transcribe(&mut self, pcm: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError>;
 }
+
+/// Edda now and then writes no space after a full stop ("positivt.Denne");
+/// puts one where a lower-case letter, a sentence mark and a capital meet
+/// (so initials such as "A.P. Møller" stay), moving unsure spans along.
+pub fn space_after_sentences(
+    text: &str,
+    spans: &[std::ops::Range<usize>],
+) -> (String, Vec<std::ops::Range<usize>>) {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut inserts = Vec::new();
+    for w in chars.windows(3) {
+        let [(_, a), (_, b), (at, c)] = [w[0], w[1], w[2]];
+        if a.is_lowercase() && matches!(b, '.' | '?' | '!') && c.is_uppercase() {
+            inserts.push(at);
+        }
+    }
+    if inserts.is_empty() {
+        return (text.to_string(), spans.to_vec());
+    }
+    let mut out = String::with_capacity(text.len() + inserts.len());
+    let mut last = 0;
+    for &at in &inserts {
+        out.push_str(&text[last..at]);
+        out.push(' ');
+        last = at;
+    }
+    out.push_str(&text[last..]);
+    let shift = |p: usize| p + inserts.iter().filter(|&&i| i <= p).count();
+    let spans: Vec<std::ops::Range<usize>> = spans
+        .iter()
+        .map(|r| shift(r.start)..shift(r.end.max(r.start + 1) - 1) + 1)
+        .collect();
+    (out, spans)
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::space_after_sentences;
+
+    #[test]
+    fn a_missing_space_after_a_full_stop_is_put_back() {
+        let text = "Det er positivt.Denne graf hakker";
+        let graf = text.find("graf").unwrap();
+        let (out, spans) = space_after_sentences(text, &[graf..graf + 4]);
+        assert_eq!(out, "Det er positivt. Denne graf hakker");
+        assert_eq!(&out[spans[0].clone()], "graf");
+    }
+
+    #[test]
+    fn initials_and_numbers_stay_as_they_are() {
+        for t in ["A.P. Møller", "kl. 14.30", "Det er godt. Ja."] {
+            assert_eq!(space_after_sentences(t, &[]).0, t);
+        }
+    }
+}

@@ -95,7 +95,8 @@ fn tones(n: usize) -> Vec<f32> {
     let mut v = Vec::new();
     for _ in 0..n {
         v.extend((0..16_000).map(|i| (i as f32 * 0.07).sin() * 0.3));
-        v.extend(std::iter::repeat_n(0.0, 16_000));
+        // Pauses long enough that these short sentences stay apart.
+        v.extend(std::iter::repeat_n(0.0, 16_000 * 16 / 10));
     }
     v
 }

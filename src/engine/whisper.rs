@@ -94,7 +94,7 @@ impl Transcriber for WhisperEngine {
             }
             let trimmed_start = text.len() - text.trim_start().len();
             let text_trimmed = text.trim().to_string();
-            let low_confidence = merge_ranges(low_confidence)
+            let low_confidence: Vec<std::ops::Range<usize>> = merge_ranges(low_confidence)
                 .into_iter()
                 .filter_map(|r| {
                     let s = r.start.checked_sub(trimmed_start)?;
@@ -111,6 +111,7 @@ impl Transcriber for WhisperEngine {
             if text_trimmed.is_empty() {
                 continue;
             }
+            let (text_trimmed, low_confidence) = super::space_after_sentences(&text_trimmed, &low_confidence);
             segments.push(Segment {
                 start_ms,
                 end_ms,
