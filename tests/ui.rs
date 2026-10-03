@@ -44,13 +44,39 @@ fn pump_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
 }
 
 /// Answers utterances with scripted lines.
-struct Scripted(Vec<&'static str>);
+/// The same utterance (previews, a quick pass, the accurate one) gets the
+/// same line.
+struct Scripted {
+    lines: Vec<&'static str>,
+    last: Option<(Vec<f32>, &'static str)>,
+}
+
+#[allow(non_snake_case)]
+fn Scripted(lines: Vec<&'static str>) -> Scripted {
+    Scripted { lines, last: None }
+}
+
+fn same_utterance(a: &[f32], b: &[f32]) -> bool {
+    let n = a.len().min(b.len());
+    n > 0 && a[..n] == b[..n]
+}
+
 impl Transcriber for Scripted {
-    fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        let text = if self.0.is_empty() {
-            "Mere tekst."
-        } else {
-            self.0.remove(0)
+    fn transcribe(&mut self, pcm: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        // A real engine takes a while; the interface must not wait for it.
+        std::thread::sleep(Duration::from_millis(200));
+        let text = match &self.last {
+            // A preview's audio is the start of its utterance's.
+            Some((last, text)) if same_utterance(last, pcm) => text,
+            _ => {
+                let text = if self.lines.is_empty() {
+                    "Mere tekst."
+                } else {
+                    self.lines.remove(0)
+                };
+                self.last = Some((pcm.to_vec(), text));
+                text
+            }
         };
         Ok(vec![Segment {
             start_ms: 0,
@@ -175,9 +201,19 @@ fn main() {
 
     // --- dictation through the real live pipeline
     w.dictation.start_recording();
+    let mut placeholder_seen = false;
     let stopped = pump_until(Duration::from_secs(15), || {
+        placeholder_seen |= w.dictation.editor.preview_text().as_deref() == Some("…");
         !w.dictation.is_recording() && w.dictation.dock.state_text() == "Ready"
     });
+    check(
+        "speech shows a placeholder at once, before any text is ready",
+        placeholder_seen,
+    );
+    check(
+        "no placeholder is left behind",
+        w.dictation.editor.preview_text().is_none(),
+    );
     check("saying «stop optagelse» stops the dictation", stopped);
     let texts: Vec<String> = w
         .dictation

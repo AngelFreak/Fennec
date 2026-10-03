@@ -19,10 +19,15 @@ pub enum Priority {
 
 pub type Reply = Result<Vec<Segment>, EngineError>;
 
+/// Decides from the first pass whether the second one is needed.
+type NeedsSecond = Box<dyn Fn(&Reply) -> bool + Send>;
+
 struct Job {
     pcm: Vec<f32>,
     opts: TranscribeOptions,
     reply: Sender<Reply>,
+    /// A second pass over the same audio, run straight after the first.
+    then: Option<(TranscribeOptions, NeedsSecond)>,
 }
 
 #[derive(Default)]
@@ -58,6 +63,29 @@ impl EngineWorker {
     /// preview's channel closes without a reply.
     pub fn submit(&self, pcm: Vec<f32>, opts: TranscribeOptions, priority: Priority) -> Receiver<Reply> {
         enqueue(&self.shared, pcm, opts, priority)
+    }
+
+    /// A live final in two passes: `first`, then `second` over the same
+    /// audio if `needs_second` says so, with nothing run in between. Each
+    /// pass replies on the returned channel.
+    pub fn submit_two_pass(
+        &self,
+        pcm: Vec<f32>,
+        first: TranscribeOptions,
+        second: TranscribeOptions,
+        needs_second: impl Fn(&Reply) -> bool + Send + 'static,
+    ) -> Receiver<Reply> {
+        let (tx, rx) = bounded(2);
+        let job = Job {
+            pcm,
+            opts: first,
+            reply: tx,
+            then: Some((second, Box::new(needs_second))),
+        };
+        let (lock, cv) = &*self.shared;
+        lock.lock().expect("engine queue poisoned").finals.push_back(job);
+        cv.notify_one();
+        rx
     }
 
     /// True while a job runs or real (non-preview) work is queued.
@@ -105,7 +133,12 @@ fn enqueue(
     priority: Priority,
 ) -> Receiver<Reply> {
     let (tx, rx) = bounded(1);
-    let job = Job { pcm, opts, reply: tx };
+    let job = Job {
+        pcm,
+        opts,
+        reply: tx,
+        then: None,
+    };
     let (lock, cv) = shared;
     let mut q = lock.lock().expect("engine queue poisoned");
     match priority {
@@ -142,8 +175,14 @@ fn run(mut engine: Box<dyn Transcriber>, shared: Arc<(Mutex<Queues>, Condvar)>) 
             }
         };
         let result = engine.transcribe(&job.pcm, &job.opts);
+        let second = job
+            .then
+            .and_then(|(opts, needed)| needed(&result).then_some(opts));
         // The requester may have given up; that is fine.
         let _ = job.reply.send(result);
+        if let Some(opts) = second {
+            let _ = job.reply.send(engine.transcribe(&job.pcm, &opts));
+        }
         lock.lock().expect("engine queue poisoned").busy = false;
     }
 }
@@ -195,6 +234,37 @@ pub(crate) mod tests {
             gate: gate.clone(),
         }));
         (w, seen, gate)
+    }
+
+    #[test]
+    fn a_two_pass_job_runs_both_passes_before_the_next_job() {
+        let (w, seen, gate) = worker();
+        let quick = TranscribeOptions {
+            fast: true,
+            ..Default::default()
+        };
+        let a = w.submit_two_pass(vec![1.0], quick.clone(), TranscribeOptions::default(), |_| true);
+        let b = w.submit_two_pass(vec![2.0], quick, TranscribeOptions::default(), |_| true);
+        gate.store(false, Ordering::SeqCst);
+        for rx in [&a, &a, &b, &b] {
+            rx.recv().unwrap().unwrap();
+        }
+        assert_eq!(*seen.lock().unwrap(), [1.0, 1.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn the_second_pass_is_skipped_when_the_first_settles_it() {
+        let (w, seen, gate) = worker();
+        let rx = w.submit_two_pass(
+            vec![3.0],
+            TranscribeOptions::default(),
+            TranscribeOptions::default(),
+            |r| r.as_ref().map_or(true, |s| s[0].text != "3"),
+        );
+        gate.store(false, Ordering::SeqCst);
+        rx.recv().unwrap().unwrap();
+        assert!(rx.recv().is_err(), "no second reply");
+        assert_eq!(*seen.lock().unwrap(), [3.0]);
     }
 
     #[test]

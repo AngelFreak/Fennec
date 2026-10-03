@@ -33,7 +33,7 @@ fn main() {
             ..LiveConfig::default()
         },
         Arc::new(move |e| match e {
-            LiveEvent::Level(_) | LiveEvent::Preview(_) => {}
+            LiveEvent::Level(_) => {}
             e => println!("{:6.1}s {e:?}", t0.elapsed().as_secs_f64()),
         }),
     );

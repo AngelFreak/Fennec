@@ -51,6 +51,11 @@ opt-level = 3
 name = "ui"
 harness = false
 
+# The real window, model and microphone, timed (FENNEC_RESPONSIVENESS=1).
+[[test]]
+name = "responsiveness"
+harness = false
+
 # Stages the mockup's content and screenshots it (FENNEC_MOCKUP_DIR).
 [[test]]
 name = "mockup"

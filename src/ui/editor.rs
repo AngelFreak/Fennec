@@ -257,6 +257,18 @@ impl Editor {
     }
 
     /// Shows (or clears) the grey preview of what is being said, at the cursor.
+    /// The preview text shown at the cursor, if any.
+    pub fn preview_text(&self) -> Option<String> {
+        let mut start = self.buffer.start_iter();
+        if !start.starts_tag(Some(&self.tag_preview)) && !start.forward_to_tag_toggle(Some(&self.tag_preview))
+        {
+            return None;
+        }
+        let mut end = start;
+        end.forward_to_tag_toggle(Some(&self.tag_preview));
+        Some(self.buffer.text(&start, &end, false).trim().to_string())
+    }
+
     pub fn set_preview(&self, text: Option<&str>) {
         self.quietly(|| {
             self.remove_preview();

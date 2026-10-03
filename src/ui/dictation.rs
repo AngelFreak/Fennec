@@ -700,6 +700,11 @@ impl DictationPage {
         match ev {
             LiveEvent::Level(l) => self.dock.push_level(l),
             LiveEvent::Clipping => self.dock.set_status(CLIPPING, true),
+            // Something on screen the moment speech is heard; the text
+            // follows when the engine has it.
+            LiveEvent::SpeechStarted if self.editor.preview_text().is_none() => {
+                self.editor.set_preview(Some(PLACEHOLDER));
+            }
             LiveEvent::SpeechStarted => {}
             LiveEvent::Preview(t) => self.editor.set_preview(Some(&t)),
             LiveEvent::Final {
@@ -716,11 +721,20 @@ impl DictationPage {
                 self.editor.apply(c);
                 self.dock.set_status(&format!("Command: {}", c.label()), false);
             }
-            LiveEvent::Lag(ms) if ms > 3_000 => self.dock.set_status(
-                &format!("Behind by {} s. Nothing is lost; text will catch up.", ms / 1000),
-                false,
-            ),
-            LiveEvent::Lag(_) => {}
+            LiveEvent::Lag(ms) => {
+                // An utterance that was only noise leaves no text to replace it.
+                if self.editor.preview_text().as_deref() == Some(PLACEHOLDER) {
+                    self.editor.set_preview(None);
+                }
+                // A long sentence normally lands 3–3.5 s after it ends (the
+                // pause, then 1.5–2 s on a laptop GPU); more means a backlog.
+                if ms > BEHIND_MS {
+                    self.dock.set_status(
+                        &format!("Behind by {} s. Nothing is lost; text will catch up.", ms / 1000),
+                        false,
+                    );
+                }
+            }
             LiveEvent::Error(e) => self.dock.set_status(&e, true),
             LiveEvent::Stopped => {
                 let mut st = self.state.borrow_mut();
@@ -745,6 +759,12 @@ impl DictationPage {
         }
     }
 }
+
+/// Shown at the cursor while speech is heard but no text is ready.
+const PLACEHOLDER: &str = "…";
+
+/// Text arriving later than this after speech ends is reported as a backlog.
+const BEHIND_MS: i64 = 6_000;
 
 // ---- AI ----
 

@@ -26,12 +26,38 @@ fn silence(secs: f32) -> Vec<f32> {
     vec![0.0; (secs * SR as f32) as usize]
 }
 
-/// Answers each utterance with the next scripted line.
-struct Scripted(Vec<&'static str>);
+/// Answers each utterance with the next scripted line, and the same
+/// utterance (previews, a quick pass, the accurate one) with the same line.
+struct Scripted {
+    lines: Vec<&'static str>,
+    last: Option<(Vec<f32>, &'static str)>,
+}
+
+#[allow(non_snake_case)]
+fn Scripted(lines: Vec<&'static str>) -> Scripted {
+    Scripted { lines, last: None }
+}
+
+fn same_utterance(a: &[f32], b: &[f32]) -> bool {
+    let n = a.len().min(b.len());
+    n > 0 && a[..n] == b[..n]
+}
 
 impl Transcriber for Scripted {
-    fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        let text = if self.0.is_empty() { "" } else { self.0.remove(0) };
+    fn transcribe(&mut self, pcm: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        let text = match &self.last {
+            // A preview's audio is the start of its utterance's.
+            Some((last, text)) if same_utterance(last, pcm) => text,
+            _ => {
+                let text = if self.lines.is_empty() {
+                    ""
+                } else {
+                    self.lines.remove(0)
+                };
+                self.last = Some((pcm.to_vec(), text));
+                text
+            }
+        };
         Ok(vec![Segment {
             start_ms: 0,
             end_ms: 1,
@@ -252,7 +278,8 @@ fn earlier_text_never_goes_into_the_prompt_only_the_vocabulary() {
         .iter()
         .map(|o| o.initial_prompt.clone())
         .collect();
-    assert_eq!(prompts.len(), 3);
+    // A quick pass and an accurate one for each short utterance.
+    assert_eq!(prompts.len(), 6);
     assert!(
         prompts
             .iter()
@@ -335,4 +362,99 @@ fn the_level_meter_gets_a_steady_twenty_readings_a_second() {
         .collect();
     assert_eq!(levels.len(), 40, "{levels:?}");
     assert!(levels[5] > 0.1 && levels[35] < 0.001, "{levels:?}");
+}
+
+/// Answers fast and full passes differently and records which it ran.
+struct TwoPass {
+    fast: &'static str,
+    full: &'static str,
+    calls: Arc<Mutex<Vec<bool>>>,
+}
+
+impl Transcriber for TwoPass {
+    fn transcribe(&mut self, _: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        self.calls.lock().unwrap().push(opts.fast);
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1,
+            text: if opts.fast { self.fast } else { self.full }.into(),
+            low_confidence: vec![],
+        }])
+    }
+}
+
+fn short_utterance(fast: &'static str, full: &'static str) -> (Vec<LiveEvent>, Vec<bool>) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut audio = tone(0.5);
+    audio.extend(silence(1.0));
+    let events = run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(TwoPass {
+            fast,
+            full,
+            calls: Arc::clone(&calls),
+        }),
+        LiveConfig {
+            show_preview: false,
+            ..Default::default()
+        },
+    );
+    let calls = calls.lock().unwrap().clone();
+    (events, calls)
+}
+
+#[test]
+fn a_short_command_acts_on_the_quick_pass_alone() {
+    let (events, calls) = short_utterance("Punktum.", "Punktum.");
+    assert!(
+        events.contains(&LiveEvent::Command(Command::Punctuate('.'))),
+        "{events:?}"
+    );
+    assert_eq!(calls, [true], "no slow pass for a command");
+}
+
+#[test]
+fn a_short_phrase_shows_the_quick_text_then_the_accurate_one() {
+    let (events, calls) = short_utterance("Hej med dig", "Hej med dig.");
+    let shown: Vec<&LiveEvent> = events
+        .iter()
+        .filter(|e| matches!(e, LiveEvent::Preview(_) | LiveEvent::Final { .. }))
+        .collect();
+    assert!(
+        matches!(shown.as_slice(), [LiveEvent::Preview(p), LiveEvent::Final { text, .. }]
+            if p == "Hej med dig" && text == "Hej med dig."),
+        "{shown:?}"
+    );
+    assert_eq!(calls, [true, false]);
+}
+
+#[test]
+fn a_command_the_quick_pass_missed_is_still_caught() {
+    let (events, _) = short_utterance("Bunktum", "Punktum.");
+    assert!(
+        events.contains(&LiveEvent::Command(Command::Punctuate('.'))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn long_utterances_go_straight_to_the_accurate_pass() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut audio = tone(4.0);
+    audio.extend(silence(1.0));
+    run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(TwoPass {
+            fast: "x",
+            full: "y",
+            calls: Arc::clone(&calls),
+        }),
+        LiveConfig {
+            show_preview: false,
+            ..Default::default()
+        },
+    );
+    assert_eq!(*calls.lock().unwrap(), [false]);
 }

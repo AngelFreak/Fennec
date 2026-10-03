@@ -71,7 +71,14 @@ pub enum LiveEvent {
 
 pub type EventSink = Arc<dyn Fn(LiveEvent) + Send + Sync>;
 
+/// Utterances up to this long (3 s) get a quick pass first: a spoken
+/// command then acts in about a second instead of two, and other short
+/// phrases show at once while the accurate pass runs.
+const QUICK_MAX: usize = 3 * SAMPLE_RATE as usize;
+
 enum Pending {
+    /// A short utterance's quick pass.
+    Quick(Utterance, Receiver<Reply>),
     Final(Utterance, Receiver<Reply>),
     Preview(u64, Receiver<Reply>),
 }
@@ -110,14 +117,7 @@ impl LiveSession {
                             None
                         }
                     });
-                    let opts_for = |fast: bool| {
-                        let mut t = cfg.transcribe.clone();
-                        t.initial_prompt = prompt(&cfg.vocabulary);
-                        // Previews are replaced by the final text, so they trade
-                        // accuracy for speed and stop holding up the finals.
-                        t.fast = fast;
-                        t
-                    };
+                    let opts_for = |fast: bool| options(&cfg, fast);
                     let handle = |events: Vec<UtteranceEvent>| {
                         for ev in events {
                             match ev {
@@ -128,6 +128,20 @@ impl LiveSession {
                                             worker.submit(u.samples, opts_for(true), Priority::LivePartial);
                                         let _ = pending_tx.send(Pending::Preview(u.id, rx));
                                     }
+                                }
+                                UtteranceEvent::Final(u) if u.samples.len() <= QUICK_MAX => {
+                                    let commands = cfg.commands.clone();
+                                    let rx = worker.submit_two_pass(
+                                        u.samples.clone(),
+                                        opts_for(true),
+                                        opts_for(false),
+                                        // A command needs no accurate pass.
+                                        move |r| match r {
+                                            Ok(segs) => commands.match_utterance(&join(segs).0).is_none(),
+                                            Err(_) => true,
+                                        },
+                                    );
+                                    let _ = pending_tx.send(Pending::Quick(u, rx));
                                 }
                                 UtteranceEvent::Final(u) => {
                                     let rx = worker.submit(
@@ -195,6 +209,25 @@ impl LiveSession {
                 .name("fennec-live-results".into())
                 .spawn(move || {
                     let mut finalized: Option<u64> = None;
+                    let deliver = |u: Utterance, rx: Receiver<Reply>| match rx.recv() {
+                        Ok(Ok(segs)) => {
+                            let (text, low_confidence) = join(&segs);
+                            let lag = started.elapsed().as_millis() as i64 - u.end_ms();
+                            on_event(LiveEvent::Lag(lag.max(0)));
+                            if let Some(cmd) = commands.match_utterance(&text) {
+                                on_event(LiveEvent::Command(cmd));
+                            } else if !text.is_empty() {
+                                on_event(LiveEvent::Final {
+                                    text,
+                                    start_ms: u.start_ms() + offset,
+                                    end_ms: u.end_ms() + offset,
+                                    low_confidence,
+                                });
+                            }
+                        }
+                        Ok(Err(e)) => on_event(LiveEvent::Error(e.to_string())),
+                        Err(_) => on_event(LiveEvent::Error("the engine stopped".into())),
+                    };
                     for pending in pending_rx {
                         match pending {
                             Pending::Preview(id, rx) => {
@@ -205,27 +238,27 @@ impl LiveSession {
                                     on_event(LiveEvent::Preview(join(&segs).0));
                                 }
                             }
+                            Pending::Quick(u, rx) => {
+                                finalized = Some(u.id);
+                                let quick = match rx.recv() {
+                                    Ok(Ok(segs)) => join(&segs).0,
+                                    _ => String::new(),
+                                };
+                                if let Some(cmd) = commands.match_utterance(&quick) {
+                                    let lag = started.elapsed().as_millis() as i64 - u.end_ms();
+                                    on_event(LiveEvent::Lag(lag.max(0)));
+                                    on_event(LiveEvent::Command(cmd));
+                                    continue;
+                                }
+                                if !quick.is_empty() {
+                                    on_event(LiveEvent::Preview(quick));
+                                }
+                                // The accurate pass replies on the same channel.
+                                deliver(u, rx);
+                            }
                             Pending::Final(u, rx) => {
                                 finalized = Some(u.id);
-                                match rx.recv() {
-                                    Ok(Ok(segs)) => {
-                                        let (text, low_confidence) = join(&segs);
-                                        let lag = started.elapsed().as_millis() as i64 - u.end_ms();
-                                        on_event(LiveEvent::Lag(lag.max(0)));
-                                        if let Some(cmd) = commands.match_utterance(&text) {
-                                            on_event(LiveEvent::Command(cmd));
-                                        } else if !text.is_empty() {
-                                            on_event(LiveEvent::Final {
-                                                text,
-                                                start_ms: u.start_ms() + offset,
-                                                end_ms: u.end_ms() + offset,
-                                                low_confidence,
-                                            });
-                                        }
-                                    }
-                                    Ok(Err(e)) => on_event(LiveEvent::Error(e.to_string())),
-                                    Err(_) => on_event(LiveEvent::Error("the engine stopped".into())),
-                                }
+                                deliver(u, rx);
                             }
                         }
                     }
@@ -272,6 +305,15 @@ impl Drop for LiveSession {
 }
 
 /// Joins segment texts with spaces, shifting low-confidence spans.
+fn options(cfg: &LiveConfig, fast: bool) -> TranscribeOptions {
+    let mut t = cfg.transcribe.clone();
+    t.initial_prompt = prompt(&cfg.vocabulary);
+    // Previews are replaced by the final text, so they trade accuracy for
+    // speed and stop holding up the finals.
+    t.fast = fast;
+    t
+}
+
 fn join(segs: &[crate::engine::Segment]) -> (String, Vec<std::ops::Range<usize>>) {
     let mut text = String::new();
     let mut spans = Vec::new();

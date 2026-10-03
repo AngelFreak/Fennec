@@ -95,7 +95,9 @@ pub struct UtteranceConfig {
     pub max_ms: u32,
     /// The forced cut lands on the quietest frame within this tail.
     pub cut_search_ms: u32,
-    /// How often a growing utterance is offered for a preview.
+    /// Audio in an utterance before it is first offered for a preview.
+    pub first_partial_ms: u32,
+    /// How often a growing utterance is offered for a preview after that.
     pub partial_every_ms: u32,
 }
 
@@ -108,7 +110,9 @@ impl Default for UtteranceConfig {
             preroll_ms: 200,
             max_ms: 25_000,
             cut_search_ms: 2_000,
-            partial_every_ms: 1_500,
+            // A preview of a short clip takes about 0.4 s on a laptop GPU.
+            first_partial_ms: 700,
+            partial_every_ms: 1_000,
         }
     }
 }
@@ -153,7 +157,8 @@ pub struct UtteranceBuilder {
     frame_rms: Vec<f32>,
     voiced_run: u32,
     silent_run: u32,
-    since_partial: usize,
+    /// Length of `current` at which the next preview is offered.
+    next_partial: usize,
     next_id: u64,
 }
 
@@ -171,9 +176,13 @@ impl UtteranceBuilder {
             frame_rms: Vec::new(),
             voiced_run: 0,
             silent_run: 0,
-            since_partial: 0,
+            next_partial: 0,
             next_id: 0,
         }
+    }
+
+    fn samples(ms: u32) -> usize {
+        ms as usize * SAMPLE_RATE as usize / 1000
     }
 
     fn frames(ms: u32) -> u32 {
@@ -222,7 +231,7 @@ impl UtteranceBuilder {
                 self.current_start = self.consumed - self.current.len() as u64;
                 self.frame_rms = self.current.chunks(FRAME).map(rms).collect();
                 self.silent_run = 0;
-                self.since_partial = 0;
+                self.next_partial = Self::samples(self.cfg.first_partial_ms);
                 events.push(UtteranceEvent::Started { id: self.next_id });
             }
             return;
@@ -230,7 +239,6 @@ impl UtteranceBuilder {
 
         self.current.extend_from_slice(frame);
         self.frame_rms.push(rms(frame));
-        self.since_partial += FRAME;
         self.silent_run = if voiced { 0 } else { self.silent_run + 1 };
 
         if self.silent_run >= Self::frames(self.cfg.pause_ms) {
@@ -245,8 +253,13 @@ impl UtteranceBuilder {
             self.force_cut(events);
             return;
         }
-        if self.since_partial >= self.cfg.partial_every_ms as usize * SAMPLE_RATE as usize / 1000 {
-            self.since_partial = 0;
+        // Not in a pause: the final may be on its way, and a preview
+        // running then would hold it up.
+        if self.current.len() >= self.next_partial && voiced {
+            self.next_partial += Self::samples(self.cfg.partial_every_ms);
+            if self.next_partial <= self.current.len() {
+                self.next_partial = self.current.len() + Self::samples(self.cfg.partial_every_ms);
+            }
             events.push(UtteranceEvent::Partial(Utterance {
                 start_sample: self.current_start,
                 samples: self.current.clone(),
@@ -288,7 +301,7 @@ impl UtteranceBuilder {
         self.next_id += 1;
         self.current_start += cut as u64;
         self.frame_rms = rest_rms;
-        self.since_partial = 0;
+        self.next_partial = self.current.len() + Self::samples(self.cfg.first_partial_ms);
         events.push(UtteranceEvent::Started { id: self.next_id });
     }
 }
@@ -421,6 +434,49 @@ mod tests {
             .filter(|e| matches!(e, UtteranceEvent::Partial(_)))
             .count();
         assert_eq!(partials, 3, "{ev:?}");
+    }
+
+    fn partials(events: &[UtteranceEvent]) -> Vec<&Utterance> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                UtteranceEvent::Partial(u) => Some(u),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_first_preview_comes_early_and_then_every_second() {
+        let mut b = builder(UtteranceConfig::default());
+        let ev = b.push(&tone(3.0));
+        let secs: Vec<f32> = partials(&ev)
+            .iter()
+            .map(|u| u.samples.len() as f32 / SR as f32)
+            .collect();
+        assert_eq!(secs.len(), 3, "{secs:?}");
+        for (got, want) in secs.iter().zip([0.7, 1.7, 2.7]) {
+            assert!((got - want).abs() < 0.05, "{secs:?}");
+        }
+    }
+
+    #[test]
+    fn no_preview_starts_in_a_pause_where_the_final_may_be_coming() {
+        let mut b = builder(UtteranceConfig::default());
+        let mut audio = tone(0.5);
+        audio.extend(silence(0.5));
+        audio.extend(tone(1.5));
+        let ev = b.push(&audio);
+        let p = partials(&ev);
+        assert!(!p.is_empty());
+        for u in p {
+            let tail = &u.samples[u.samples.len() - SR / 10..];
+            assert!(
+                rms(tail) > 0.01,
+                "a preview ended in silence at {} samples",
+                u.samples.len()
+            );
+        }
     }
 
     #[test]
