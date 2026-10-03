@@ -50,9 +50,11 @@ pub fn catalog() -> Vec<CatalogModel> {
             size: "q5_0 · ~550 MB",
             mean_wer: Some("8.8%"),
             file_name: "edda-v0.2-q5_0.bin",
-            source: Source::Convert {
-                repo: "danish-foundation-models/edda-v0.2",
-                quant: "q5_0",
+            // Converted once from danish-foundation-models/edda-v0.2 (Apache
+            // 2.0), so installing it needs no Python.
+            source: Source::Ggml {
+                repo: "tec-7/edda-v0.2-ggml",
+                file: "edda-v0.2-q5_0.bin",
             },
             takes_context: true,
         },
@@ -495,6 +497,17 @@ mod tests {
             c[0].file_name,
             crate::config::Settings::default().model,
             "the default setting names Edda"
+        );
+    }
+
+    #[test]
+    fn the_default_model_downloads_ready_to_use_without_python() {
+        let edda = &catalog()[0];
+        assert_eq!(edda.file_name, crate::config::Settings::default().model);
+        assert!(
+            matches!(edda.source, Source::Ggml { file, .. } if file == edda.file_name),
+            "{:?}",
+            edda.source
         );
     }
 
