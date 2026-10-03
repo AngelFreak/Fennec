@@ -71,6 +71,7 @@ fn tones(n: usize) -> Vec<f32> {
 }
 
 fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> Deps {
+    let n_tones = lines.len().max(3);
     let lines = Arc::new(lines);
     Deps {
         paths: Paths::under(root),
@@ -86,7 +87,7 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
                 Err("model file not found: /x/edda.bin".into())
             }
         }),
-        audio: Arc::new(|_| Ok(Box::new(PcmSource::new(tones(3))) as Box<dyn AudioSource>)),
+        audio: Arc::new(move |_| Ok(Box::new(PcmSource::new(tones(n_tones))) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
         secrets: Arc::new(fennec::ai::MemorySecrets::default()),
@@ -146,7 +147,13 @@ fn main() {
     let root = tmp.path().join("a");
     let w = ui::build_window(deps(
         &root,
-        vec!["Første sætning.", "Nyt afsnit.", "Anden sætning."],
+        vec![
+            "Første sætning",
+            "Punktum.",
+            "Nyt afsnit.",
+            "anden sætning",
+            "Stopoptagelse.",
+        ],
         true,
     ));
     check("opens on the Dictate screen", w.visible_page() == "dictate");
@@ -171,7 +178,7 @@ fn main() {
     let stopped = pump_until(Duration::from_secs(15), || {
         !w.dictation.is_recording() && w.dictation.dock.state_text() == "Ready"
     });
-    check("dictation runs to the end of the audio", stopped);
+    check("saying «stop optagelse» stops the dictation", stopped);
     let texts: Vec<String> = w
         .dictation
         .editor
@@ -180,10 +187,10 @@ fn main() {
         .map(|p| p.text)
         .collect();
     check(
-        "spoken command split the paragraphs",
-        texts == ["Første sætning.", "Anden sætning."],
+        "spoken commands punctuate, split and capitalise the paragraphs",
+        texts == ["Første sætning.", "Anden sætning"],
     );
-    if texts != ["Første sætning.", "Anden sætning."] {
+    if texts != ["Første sætning.", "Anden sætning"] {
         println!(
             "     editor: {texts:?}; status: {}",
             w.dictation.dock.status_text()
@@ -598,6 +605,14 @@ fn main() {
     );
     screenshot(&w.window, "settings");
     w.settings.show_section("dictation");
+    let settings_text = ui::texts_in(&w.settings.root);
+    check(
+        "Settings lists spoken punctuation and the other ways to say a command",
+        settings_text.iter().any(|t| t == "«punktum»")
+            && settings_text
+                .iter()
+                .any(|t| t.contains("«stop diktat» or «stop optagelse»")),
+    );
     screenshot(&w.window, "settings-dictation");
     w.settings.show_section("storage");
     w.settings.audio_retention.set_selected(2);

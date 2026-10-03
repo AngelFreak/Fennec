@@ -690,13 +690,24 @@ impl SettingsPage {
             for c in classes {
                 r.add_css_class(c);
             }
-            r.append(&label(a, &[]));
-            r.append(&label(b, &[]));
+            for text in [a, b] {
+                let l = label(text, &[]);
+                l.set_wrap(true);
+                l.set_xalign(0.0);
+                r.append(&l);
+            }
             r
         };
         table.append(&row("SAY", "ACTION", &["fx-table-head"]));
+        let mut actions: Vec<(crate::commands::Command, Vec<String>)> = Vec::new();
         for (say, c) in &s.commands.phrases {
-            table.append(&row(&format!("«{say}»"), c.label(), &["fx-table-row", "cmd"]));
+            match actions.iter_mut().find(|(a, _)| a == c) {
+                Some((_, says)) => says.push(format!("«{say}»")),
+                None => actions.push((*c, vec![format!("«{say}»")])),
+            }
+        }
+        for (c, says) in actions {
+            table.append(&row(&says.join(" or "), c.label(), &["fx-table-row", "cmd"]));
         }
         commands.append(&table);
         b.append(&commands);

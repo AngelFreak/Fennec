@@ -130,10 +130,15 @@ impl Settings {
     /// not silently reset the user's settings.
     pub fn load(path: &Path) -> Result<Self, SettingsError> {
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|e| SettingsError::Invalid {
-                path: path.to_path_buf(),
-                message: e.message().to_string(),
-            }),
+            Ok(text) => toml::from_str::<Self>(&text)
+                .map(|mut s| {
+                    s.commands = s.commands.with_defaults();
+                    s
+                })
+                .map_err(|e| SettingsError::Invalid {
+                    path: path.to_path_buf(),
+                    message: e.message().to_string(),
+                }),
             Err(_) => Ok(Self::default()),
         }
     }
@@ -167,6 +172,20 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_saved_before_new_voice_commands_still_get_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.toml");
+        let mut old = Settings::default();
+        old.commands.phrases.truncate(4);
+        old.save(&p).unwrap();
+        let loaded = Settings::load(&p).unwrap();
+        assert_eq!(
+            loaded.commands.match_utterance("punktum"),
+            Some(crate::commands::Command::Punctuate('.'))
+        );
+    }
 
     #[test]
     fn missing_settings_file_gives_defaults() {

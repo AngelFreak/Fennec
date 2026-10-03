@@ -62,7 +62,7 @@ impl Transcript {
                 start_ms: Some(start_ms),
                 end_ms: Some(end_ms),
                 low_confidence: low_confidence.to_vec(),
-                ..Paragraph::new(text)
+                ..Paragraph::new(&sentence_case("", text))
             });
             return Some(Change::Appended {
                 index: self.paragraphs.len() - 1,
@@ -72,8 +72,9 @@ impl Transcript {
         let p = &mut self.paragraphs[index];
         let sep = if p.text.ends_with('\n') { "" } else { " " };
         let shift = p.text.len() + sep.len();
+        let text = sentence_case(&p.text, text);
         p.text.push_str(sep);
-        p.text.push_str(text);
+        p.text.push_str(&text);
         p.low_confidence
             .extend(low_confidence.iter().map(|r| r.start + shift..r.end + shift));
         p.end_ms = Some(end_ms);
@@ -108,7 +109,42 @@ impl Transcript {
                 Some(Change::Edited { index })
             }
             Command::StopDictation => None,
+            Command::Punctuate(mark) => {
+                let index = self.paragraphs.len().checked_sub(1)?;
+                let p = &mut self.paragraphs[index];
+                p.text.truncate(punctuation_cut(&p.text));
+                p.text.push(mark);
+                Some(Change::Edited { index })
+            }
         }
+    }
+}
+
+/// Byte length of `before` to keep when a spoken mark goes at its end: drops
+/// trailing spaces and the mark the model may already have written.
+pub fn punctuation_cut(before: &str) -> usize {
+    let body = before.trim_end();
+    body.strip_suffix(['.', ',', '!', '?', ':', ';'])
+        .unwrap_or(body)
+        .len()
+}
+
+/// `text` with a capital first letter when it starts a sentence after
+/// `before` (nothing, or text ending in . ! ?).
+pub fn sentence_case(before: &str, text: &str) -> String {
+    let starts = before.trim_end().is_empty() || before.trim_end().ends_with(['.', '!', '?']);
+    let mut chars = text.chars();
+    match chars.next() {
+        // Same byte length, so unsure-word ranges stay valid.
+        Some(c) if starts && c.is_lowercase() && c.to_uppercase().count() == 1 => {
+            let upper = c.to_uppercase().next().unwrap_or(c);
+            if upper.len_utf8() == c.len_utf8() {
+                format!("{upper}{}", chars.as_str())
+            } else {
+                text.to_string()
+            }
+        }
+        _ => text.to_string(),
     }
 }
 
@@ -173,5 +209,30 @@ mod tests {
         t.set_preview(Some("Det reg".into()));
         t.add_final("Det regner.", 0, 1_000, &[]);
         assert!(t.preview.is_none());
+    }
+
+    #[test]
+    fn punctuation_replaces_the_mark_the_model_already_wrote() {
+        assert_eq!(punctuation_cut("Jeg prøver lige."), "Jeg prøver lige".len());
+        assert_eq!(punctuation_cut("Jeg prøver lige "), "Jeg prøver lige".len());
+        assert_eq!(punctuation_cut("Jeg prøver lige"), "Jeg prøver lige".len());
+        assert_eq!(punctuation_cut(""), 0);
+    }
+
+    #[test]
+    fn a_new_sentence_starts_with_a_capital() {
+        assert_eq!(sentence_case("Det regner.", "hvad nu hvis"), "Hvad nu hvis");
+        assert_eq!(sentence_case("", "ølet er koldt"), "Ølet er koldt");
+        assert_eq!(sentence_case("Det regner,", "og det sner"), "og det sner");
+        assert_eq!(sentence_case("Hvad?", "1 time"), "1 time");
+    }
+
+    #[test]
+    fn spoken_punctuation_ends_the_sentence() {
+        let mut t = Transcript::new(3_000);
+        t.add_final("Jeg prøver lige", 0, 1_000, &[]);
+        t.apply(Command::Punctuate('.'));
+        t.add_final("hvad nu hvis", 1_100, 2_000, &[]);
+        assert_eq!(texts(&t), ["Jeg prøver lige. Hvad nu hvis"]);
     }
 }

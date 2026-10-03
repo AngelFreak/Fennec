@@ -11,7 +11,7 @@ use gtk::prelude::*;
 
 use crate::commands::Command;
 use crate::store::Paragraph;
-use crate::transcript::last_sentence_start;
+use crate::transcript::{last_sentence_start, punctuation_cut, sentence_case};
 
 /// Mark name → (start_ms, end_ms) of the paragraph starting at that mark.
 type ParagraphTimes = HashMap<String, (Option<i64>, Option<i64>)>;
@@ -294,6 +294,7 @@ impl Editor {
                 self.buffer.insert(&mut cursor, "\n");
             }
             self.force_new.set(false);
+            let text = &sentence_case(&self.line_before(&cursor), text);
             let sep = self.separator_before(&cursor);
             let line_start = {
                 let mut s = cursor;
@@ -341,6 +342,19 @@ impl Editor {
                     }
                 }
                 Command::StopDictation => {}
+                Command::Punctuate(mark) => {
+                    let mut cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+                    let before = self.line_before(&cursor);
+                    if before.trim().is_empty() {
+                        return;
+                    }
+                    let mut from = cursor;
+                    from.set_line_offset(0);
+                    from.forward_chars(before[..punctuation_cut(&before)].chars().count() as i32);
+                    self.buffer.delete(&mut from, &mut cursor);
+                    self.buffer.insert(&mut cursor, &mark.to_string());
+                    self.buffer.place_cursor(&cursor);
+                }
             }
         });
     }
@@ -365,6 +379,13 @@ impl Editor {
             i.forward_char();
         }
         out
+    }
+
+    /// The text of the line up to `at`.
+    fn line_before(&self, at: &gtk::TextIter) -> String {
+        let mut start = *at;
+        start.set_line_offset(0);
+        self.buffer.text(&start, at, false).to_string()
     }
 
     fn separator_before(&self, at: &gtk::TextIter) -> &'static str {
