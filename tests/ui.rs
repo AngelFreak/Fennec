@@ -1120,6 +1120,10 @@ fn audio_checks(root: &std::path::Path) {
         dock.push_level(0.012);
     }
     dock.push_level(0.045);
+    // The bars scroll in on the frame clock.
+    pump_until(Duration::from_secs(2), || {
+        dock.bar_heights().last().is_some_and(|h| *h > 0.0)
+    });
     let bars = dock.bar_heights();
     check(
         "the level meter shows room noise low and speech clearly higher",

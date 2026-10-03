@@ -1,13 +1,13 @@
 //! The record bar: button, state and timer, level meter, status, shortcut.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use super::label;
-use crate::audio::level::Meter;
+use crate::audio::level::{Bars, Meter};
 
 const BARS: usize = 16;
 
@@ -19,8 +19,10 @@ pub struct Dock {
     status: gtk::Label,
     meter: gtk::DrawingArea,
     /// Bar heights, oldest first.
-    levels: Rc<RefCell<VecDeque<f32>>>,
+    levels: Rc<RefCell<Bars>>,
     meter_scale: RefCell<Meter>,
+    /// Scrolls the bars each frame, while recording.
+    ticking: RefCell<Option<gtk::TickCallbackId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +51,7 @@ impl Dock {
         state_box.append(&state);
         state_box.append(&timer);
 
-        let levels = Rc::new(RefCell::new(VecDeque::from(vec![0.0; BARS])));
+        let levels = Rc::new(RefCell::new(Bars::new(BARS)));
         let meter = gtk::DrawingArea::builder()
             .content_width(BARS as i32 * 7)
             .content_height(48)
@@ -71,7 +73,7 @@ impl Dock {
                 )
             };
             cr.set_source_rgba(r, g, b, if recording { 1.0 } else { 0.25 });
-            for (i, height) in draw_levels.borrow().iter().enumerate() {
+            for (i, height) in draw_levels.borrow().heights().iter().enumerate() {
                 let bar_h = (f64::from(h) * f64::from(*height)).max(4.0);
                 let x = i as f64 * 7.0;
                 let y = (f64::from(h) - bar_h) / 2.0;
@@ -111,6 +113,7 @@ impl Dock {
             meter,
             levels,
             meter_scale: RefCell::default(),
+            ticking: RefCell::default(),
         };
         dock.set_state(DockState::Idle);
         dock
@@ -143,9 +146,13 @@ impl Dock {
             self.record.add_css_class("recording");
             // A new session may use another microphone in another room.
             *self.meter_scale.borrow_mut() = Meter::default();
+            self.start_ticking();
         } else {
             self.record.remove_css_class("recording");
-            self.levels.borrow_mut().iter_mut().for_each(|l| *l = 0.0);
+            if let Some(t) = self.ticking.borrow_mut().take() {
+                t.remove();
+            }
+            self.levels.borrow_mut().clear();
             self.meter.queue_draw();
         }
     }
@@ -171,7 +178,7 @@ impl Dock {
 
     /// Bar heights from 0 to 1, oldest first.
     pub fn bar_heights(&self) -> Vec<f32> {
-        self.levels.borrow().iter().copied().collect()
+        self.levels.borrow().heights()
     }
 
     pub fn status_text(&self) -> String {
@@ -182,12 +189,28 @@ impl Dock {
         self.timer.set_text(&format!("{:02}:{:02}", secs / 60, secs % 60));
     }
 
+    fn start_ticking(&self) {
+        if self.ticking.borrow().is_some() {
+            return;
+        }
+        let levels = Rc::clone(&self.levels);
+        let last_frame = std::cell::Cell::new(None::<i64>);
+        let id = self.meter.add_tick_callback(move |area, clock| {
+            let now = clock.frame_time();
+            let secs = last_frame
+                .replace(Some(now))
+                .map_or(0.0, |t| (now - t) as f64 / 1e6);
+            if levels.borrow_mut().advance(secs) {
+                area.queue_draw();
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.ticking.borrow_mut() = Some(id);
+    }
+
     pub fn push_level(&self, level: f32) {
         let height = self.meter_scale.borrow_mut().height(level);
-        let mut l = self.levels.borrow_mut();
-        l.pop_front();
-        l.push_back(height);
-        drop(l);
-        self.meter.queue_draw();
+        // Drawn by the frame clock (see `new`), at a steady pace.
+        self.levels.borrow_mut().push(height);
     }
 }

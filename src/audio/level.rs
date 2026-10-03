@@ -81,6 +81,74 @@ impl Meter {
     }
 }
 
+/// The meter's bars, scrolled at a steady 20 a second by the display's
+/// frame clock, whenever the readings arrive: they come in bursts when the
+/// interface is busy, and drawing them as they came made the meter jerk.
+/// A couple of readings are held in hand to smooth that out; a larger
+/// backlog is scrolled through at once so the meter never trails the voice.
+#[derive(Debug)]
+pub struct Bars {
+    heights: std::collections::VecDeque<f32>,
+    queue: std::collections::VecDeque<f32>,
+    /// Seconds of scrolling owed.
+    due: f64,
+}
+
+impl Bars {
+    const STEP: f64 = 0.050;
+    const IN_HAND: usize = 2;
+
+    pub fn new(n: usize) -> Self {
+        Self {
+            heights: std::iter::repeat_n(0.0, n).collect(),
+            queue: Default::default(),
+            due: 0.0,
+        }
+    }
+
+    pub fn push(&mut self, height: f32) {
+        self.queue.push_back(height);
+    }
+
+    /// Moves time on by `secs`; true when the bars changed.
+    pub fn advance(&mut self, secs: f64) -> bool {
+        self.due += secs;
+        let mut changed = false;
+        while self.due >= Self::STEP {
+            if self.queue.is_empty() {
+                // Hold; a late reading then shows as soon as it comes.
+                self.due = Self::STEP;
+                break;
+            }
+            self.due -= Self::STEP;
+            while self.queue.len() > Self::IN_HAND + 1 {
+                self.scroll();
+            }
+            self.scroll();
+            changed = true;
+        }
+        changed
+    }
+
+    fn scroll(&mut self) {
+        if let Some(h) = self.queue.pop_front() {
+            self.heights.pop_front();
+            self.heights.push_back(h);
+        }
+    }
+
+    pub fn heights(&self) -> Vec<f32> {
+        self.heights.iter().copied().collect()
+    }
+
+    /// Empties the bars (recording stopped).
+    pub fn clear(&mut self) {
+        self.heights.iter_mut().for_each(|h| *h = 0.0);
+        self.queue.clear();
+        self.due = 0.0;
+    }
+}
+
 /// Peak and RMS of one block of samples.
 pub fn measure(samples: &[f32]) -> (f32, f32) {
     let peak = samples.iter().fold(0f32, |a, s| a.max(s.abs()));
@@ -145,6 +213,41 @@ mod tests {
             m.height(0.04);
         }
         assert!(m.height(0.04) < 0.2);
+    }
+
+    #[test]
+    fn a_burst_of_readings_scrolls_in_at_a_steady_pace() {
+        let mut q = Bars::new(4);
+        for h in [0.1, 0.2, 0.3] {
+            q.push(h);
+        }
+        assert!(q.advance(0.050));
+        assert_eq!(q.heights(), [0.0, 0.0, 0.0, 0.1]);
+        assert!(!q.advance(0.020), "not yet time for the next bar");
+        assert!(q.advance(0.030));
+        assert_eq!(q.heights(), [0.0, 0.0, 0.1, 0.2]);
+    }
+
+    #[test]
+    fn the_bars_hold_still_when_a_reading_is_late() {
+        let mut q = Bars::new(2);
+        q.push(0.5);
+        q.advance(0.050);
+        assert!(!q.advance(0.100));
+        assert_eq!(q.heights(), [0.0, 0.5]);
+        q.push(0.7);
+        assert!(q.advance(0.016), "a late reading shows at once");
+        assert_eq!(q.heights(), [0.5, 0.7]);
+    }
+
+    #[test]
+    fn a_backlog_is_skipped_so_the_meter_never_trails_the_voice() {
+        let mut q = Bars::new(2);
+        for h in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] {
+            q.push(h);
+        }
+        q.advance(0.050);
+        assert_eq!(q.heights(), [0.3, 0.4], "kept two readings in hand");
     }
 
     #[test]
