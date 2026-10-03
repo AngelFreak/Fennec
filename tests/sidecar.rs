@@ -179,6 +179,7 @@ fn file_ingest_runs_through_the_helper_with_vad_chunk_timestamps() {
         Recognizer {
             engine: &mut e,
             vad: &mut WholeAudio,
+            punctuator: None,
         },
         &IngestOptions::default(),
         &AtomicBool::new(false),

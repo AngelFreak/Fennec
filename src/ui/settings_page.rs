@@ -35,6 +35,8 @@ struct Install {
     percent: gtk::Label,
 }
 
+const PUNCT_READY: &str = "Uses a Danish punctuation model on this computer; your words are never changed.";
+
 pub struct SettingsPage {
     pub root: gtk::Box,
     /// Buttons for the window header while this screen shows.
@@ -388,6 +390,7 @@ impl SettingsPage {
         });
         let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
         let paths = self.deps.paths.clone();
+        let punctuate = self.deps.settings().punctuate;
         std::thread::spawn(move || {
             let send = |p| {
                 let _ = tx.send_blocking(Ok(p));
@@ -395,6 +398,9 @@ impl SettingsPage {
             // The voice detector comes with the first model.
             if let Err(e) = models::ensure_vad(&paths, &cancel, send) {
                 tracing::warn!("could not fetch the voice detector: {e}");
+            }
+            if punctuate && let Err(e) = models::ensure_punctuation(&paths, &cancel, send) {
+                tracing::warn!("could not fetch the punctuation model: {e}");
             }
             let result = match &m.source {
                 Source::Ggml { repo, file } => models::download(
@@ -669,6 +675,30 @@ impl SettingsPage {
             s.keep_dictation_audio,
             |s, v| s.keep_dictation_audio = v,
         ));
+        let punctuate = self.check_row("Add commas, full stops and capitals", s.punctuate, |s, v| {
+            s.punctuate = v
+        });
+        checks.append(&punctuate);
+        let dir = self.deps.paths.models().join(crate::punctuation::DIR);
+        let note = label(
+            if crate::punctuation::installed(&dir) {
+                PUNCT_READY
+            } else {
+                "Uses a Danish punctuation model (440 MB), downloaded when this is turned on."
+            },
+            &["fx-field-note"],
+        );
+        note.set_xalign(0.0);
+        note.set_wrap(true);
+        checks.append(&note);
+        let weak = Rc::downgrade(self);
+        punctuate.connect_toggled(move |c| {
+            if let Some(p) = weak.upgrade()
+                && c.is_active()
+            {
+                p.download_punctuation(&note);
+            }
+        });
         b.append(&checks);
 
         let commands = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -742,6 +772,37 @@ impl SettingsPage {
         shortcut.set_wrap(true);
         b.append(&shortcut);
         outer
+    }
+
+    /// Fetches the punctuation model if it is missing, reporting in `note`.
+    fn download_punctuation(self: &Rc<Self>, note: &gtk::Label) {
+        if crate::punctuation::installed(&self.deps.paths.models().join(crate::punctuation::DIR)) {
+            note.set_text(PUNCT_READY);
+            return;
+        }
+        let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
+        let paths = self.deps.paths.clone();
+        std::thread::spawn(move || {
+            let send = |p| {
+                let _ = tx.send_blocking(Ok(p));
+            };
+            let result = models::ensure_punctuation(&paths, &AtomicBool::new(false), send);
+            let _ = tx.send_blocking(Err(result));
+        });
+        let note = note.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(msg) = rx.recv().await {
+                match msg {
+                    Ok(Progress::Bytes { done, total: Some(t) }) if t > 0 => note.set_text(&format!(
+                        "Downloading the punctuation model… {} %",
+                        done * 100 / t
+                    )),
+                    Ok(_) => {}
+                    Err(Ok(())) => note.set_text(PUNCT_READY),
+                    Err(Err(e)) => note.set_text(&format!("Could not download the punctuation model: {e}")),
+                }
+            }
+        });
     }
 
     fn check_row(

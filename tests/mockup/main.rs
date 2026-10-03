@@ -542,6 +542,22 @@ fn model(rec: &Recorded) -> Reply {
     Reply::Text("OK".into())
 }
 
+/// Stands in for the punctuation model: a full stop after the last word.
+struct EndsSentences;
+
+impl fennec::punctuation::Punctuate for EndsSentences {
+    fn labels(
+        &self,
+        words: &[String],
+    ) -> Result<Vec<fennec::punctuation::Label>, fennec::punctuation::PunctuationError> {
+        let mut labels = vec![fennec::punctuation::Label::NONE; words.len()];
+        if let Some(last) = labels.last_mut() {
+            last.mark = Some('.');
+        }
+        Ok(labels)
+    }
+}
+
 fn deps(root: &Path, llm: &MockLlm) -> Deps {
     let provider = |id: &str, name: &str, protocol, url: &str, model: &str, locality| ProviderConfig {
         id: id.into(),
@@ -609,6 +625,7 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
         audio: Arc::new(|_| Ok(Box::new(PcmSource::new(vec![0.0; 16_000])) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(files::EverySecond) as Box<dyn SpeechDetector>),
+        punctuator: Arc::new(|_| Ok(Arc::new(EndsSentences) as Arc<dyn fennec::punctuation::Punctuate>)),
         secrets: Arc::new(MemorySecrets::with("claude", "sk-ant-mockup")),
         confirm_cloud: Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),

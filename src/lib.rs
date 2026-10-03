@@ -17,6 +17,7 @@ pub mod ingest;
 pub mod live;
 pub mod models;
 pub mod paragraphs;
+pub mod punctuation;
 pub mod store;
 pub mod template;
 pub mod text;

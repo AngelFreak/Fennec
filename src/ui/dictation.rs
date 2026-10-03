@@ -24,6 +24,18 @@ use crate::text::{danish_today, duration};
 use crate::utterance::UtteranceConfig;
 use crate::worker::EngineWorker;
 
+/// The punctuation model and the paragraph runs waiting for it.
+#[derive(Default)]
+struct Punctuation {
+    model: Option<Arc<dyn crate::punctuation::Punctuate>>,
+    loading: bool,
+    busy: bool,
+    /// A run asked for while busy or loading; `true` if it may stay open.
+    queued: Option<bool>,
+    /// The paragraph last punctuated with its end left open.
+    open: Option<usize>,
+}
+
 #[derive(Default)]
 struct State {
     doc: Option<DocumentId>,
@@ -59,6 +71,7 @@ pub struct DictationPage {
     deps: Deps,
     engine: Rc<EngineHolder>,
     state: RefCell<State>,
+    punctuation: RefCell<Punctuation>,
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
     on_document_changed: super::Handler<()>,
@@ -221,12 +234,14 @@ impl DictationPage {
             deps,
             engine,
             state: RefCell::default(),
+            punctuation: RefCell::default(),
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
             on_document_changed: RefCell::default(),
             on_navigate: RefCell::default(),
         });
         page.editor.paragraph_gap_ms.set(3_000);
+        page.load_punctuator();
         page.wire();
         page.build_ai_menu();
         page.refresh_ai();
@@ -557,6 +572,126 @@ impl DictationPage {
         }
     }
 
+    /// Loads the punctuation model in the background, if it is wanted and
+    /// downloaded; queued runs start when it is ready.
+    pub fn load_punctuator(self: &Rc<Self>) {
+        let dir = self.deps.paths.models().join(crate::punctuation::DIR);
+        {
+            let p = self.punctuation.borrow();
+            if !self.deps.settings().punctuate || p.model.is_some() || p.loading {
+                return;
+            }
+        }
+        if !crate::punctuation::installed(&dir) {
+            return;
+        }
+        self.punctuation.borrow_mut().loading = true;
+        let (tx, rx) = async_channel::bounded(1);
+        let factory = Arc::clone(&self.deps.punctuator);
+        let paths = self.deps.paths.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(factory(&paths));
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Ok(result) = rx.recv().await else { return };
+            let Some(page) = weak.upgrade() else { return };
+            let queued = {
+                let mut p = page.punctuation.borrow_mut();
+                p.loading = false;
+                match result {
+                    Ok(m) => p.model = Some(m),
+                    Err(e) => tracing::warn!("no punctuation: {e}"),
+                }
+                p.queued.take()
+            };
+            if let Some(open) = queued {
+                page.repunctuate(open);
+            }
+        });
+    }
+
+    pub fn punctuator_loaded(&self) -> bool {
+        self.punctuation.borrow().model.is_some()
+    }
+
+    /// Punctuates the paragraph at the cursor in the background. `open`
+    /// while dictation goes on: its last word then waits. A paragraph left
+    /// open earlier is closed first.
+    fn repunctuate(self: &Rc<Self>, open: bool) {
+        if !self.deps.settings().punctuate {
+            return;
+        }
+        let model = {
+            let mut p = self.punctuation.borrow_mut();
+            if p.busy || p.model.is_none() {
+                p.queued = Some(p.queued.unwrap_or(true) && open);
+                drop(p);
+                self.load_punctuator();
+                return;
+            }
+            p.busy = true;
+            p.model.clone().expect("checked above")
+        };
+        let paragraphs = self.editor.paragraphs();
+        let here = self.editor.cursor_paragraph();
+        let mut runs: Vec<(usize, bool)> = Vec::new();
+        {
+            let mut p = self.punctuation.borrow_mut();
+            if let Some(prev) = p.open.take()
+                && Some(prev) != here
+            {
+                runs.push((prev, false));
+            }
+            if let Some(i) = here {
+                runs.push((i, open));
+                p.open = open.then_some(i);
+            }
+        }
+        let jobs: Vec<(usize, String, bool)> = runs
+            .into_iter()
+            .filter_map(|(i, open)| paragraphs.get(i).map(|p| (i, p.text.clone(), open)))
+            .collect();
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let done: Vec<(usize, String, String)> = jobs
+                .into_iter()
+                .filter_map(
+                    |(i, text, open)| match crate::punctuation::punctuate(&*model, &text, open) {
+                        Ok(new) => Some((i, text, new)),
+                        Err(e) => {
+                            tracing::warn!("{e}");
+                            None
+                        }
+                    },
+                )
+                .collect();
+            let _ = tx.send_blocking(done);
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Ok(done) = rx.recv().await else { return };
+            let Some(page) = weak.upgrade() else { return };
+            let mut changed = false;
+            for (i, old, new) in done {
+                if old != new {
+                    changed |= page.editor.punctuate_paragraph(i, &old, &new);
+                }
+            }
+            if changed {
+                page.save_now();
+            }
+            let queued = {
+                let mut p = page.punctuation.borrow_mut();
+                p.busy = false;
+                p.queued.take()
+            };
+            if let Some(open) = queued {
+                page.repunctuate(open);
+            }
+        });
+    }
+
     pub fn model_loaded(&self) -> bool {
         self.engine.is_loaded()
     }
@@ -727,6 +862,7 @@ impl DictationPage {
             } => {
                 self.editor.insert_final(&text, start_ms, end_ms, &low_confidence);
                 self.save_now();
+                self.repunctuate(true);
             }
             LiveEvent::Command(crate::commands::Command::StopDictation) => self.stop_recording(),
             LiveEvent::Command(c) => {
@@ -761,6 +897,7 @@ impl DictationPage {
                     .dictation_live
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 self.editor.set_preview(None);
+                self.repunctuate(false);
                 self.dock.set_state(DockState::Idle);
                 // Problems (no microphone, clipping) stay visible after stopping.
                 if !self.dock.status_is_error() {

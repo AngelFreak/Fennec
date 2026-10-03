@@ -2,6 +2,8 @@
 //! resample → Silero VAD → whisper → paragraphs in the store → DOCX.
 //! Needs `python scripts/fetch_models.py tiny vad` and ffmpeg.
 
+#![allow(clippy::single_range_in_vec_init)]
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -80,6 +82,7 @@ fn mp3_becomes_timestamped_paragraphs_and_exports_to_docx() {
         Recognizer {
             engine: &mut engine,
             vad: &mut vad,
+            punctuator: None,
         },
         &opts,
         &AtomicBool::new(false),
@@ -160,6 +163,7 @@ fn cancelling_stops_before_transcribing_and_says_so() {
         Recognizer {
             engine: &mut engine,
             vad: &mut vad,
+            punctuator: None,
         },
         &IngestOptions::default(),
         &AtomicBool::new(true),
@@ -185,6 +189,7 @@ fn an_unreadable_file_fails_with_a_decode_error_and_leaves_the_document_empty() 
         Recognizer {
             engine: &mut engine,
             vad: &mut vad,
+            punctuator: None,
         },
         &IngestOptions::default(),
         &AtomicBool::new(false),
@@ -229,6 +234,7 @@ fn imported_files_are_corrected_by_the_vocabulary_not_prompted_with_it() {
         Recognizer {
             engine: &mut Hears(Arc::clone(&calls)),
             vad: &mut WholeAudio,
+            punctuator: None,
         },
         &opts,
         &AtomicBool::new(false),
@@ -272,6 +278,7 @@ fn with_a_model_that_takes_context_each_chunk_hears_the_one_before() {
         Recognizer {
             engine: &mut Hears(Arc::clone(&calls)),
             vad: &mut vad,
+            punctuator: None,
         },
         &opts,
         &AtomicBool::new(false),
@@ -287,4 +294,69 @@ fn with_a_model_that_takes_context_each_chunk_hears_the_one_before() {
     assert!(prompts.len() >= 2, "{prompts:?}");
     assert_eq!(prompts[0], None);
     assert_eq!(prompts[1].as_deref(), Some("Vi mødes på Nørregarde."));
+}
+
+/// Stands in for the punctuation model: a full stop after the last word.
+struct EndsSentences;
+
+impl fennec::punctuation::Punctuate for EndsSentences {
+    fn labels(
+        &self,
+        words: &[String],
+    ) -> Result<Vec<fennec::punctuation::Label>, fennec::punctuation::PunctuationError> {
+        let mut labels = vec![fennec::punctuation::Label::NONE; words.len()];
+        if let Some(last) = labels.last_mut() {
+            last.mark = Some('.');
+        }
+        Ok(labels)
+    }
+}
+
+/// Hears an unpunctuated sentence with one unsure word.
+struct Unpunctuated;
+
+impl Transcriber for Unpunctuated {
+    fn transcribe(&mut self, _: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        let text = "vi mødes på nørregade i morgen";
+        let at = text.find("nørregade").unwrap();
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1_000,
+            text: text.into(),
+            low_confidence: vec![at..at + "nørregade".len()],
+        }])
+    }
+}
+
+#[test]
+fn imported_paragraphs_are_punctuated_and_keep_their_unsure_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp3 = two_utterances_mp3(dir.path());
+    let store = Store::open(&dir.path().join("fennec.db")).unwrap();
+    let doc = store.create_document(&NewDocument::file("Møde")).unwrap();
+    ingest_file(
+        &mp3,
+        doc,
+        &store,
+        Recognizer {
+            engine: &mut Unpunctuated,
+            vad: &mut WholeAudio,
+            punctuator: Some(&EndsSentences),
+        },
+        &IngestOptions::default(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let paragraphs = store.paragraphs(doc).unwrap();
+    assert!(!paragraphs.is_empty());
+    for p in &paragraphs {
+        assert!(p.text.starts_with("Vi mødes") && p.text.ends_with('.'), "{p:?}");
+        let unsure: Vec<&str> = p.low_confidence.iter().map(|r| &p.text[r.clone()]).collect();
+        assert!(
+            unsure.iter().all(|w| *w == "nørregade"),
+            "{unsure:?} in {:?}",
+            p.text
+        );
+    }
 }

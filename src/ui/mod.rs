@@ -65,6 +65,9 @@ pub type AudioFactory = Arc<dyn Fn(&Settings) -> Result<Box<dyn AudioSource>, St
 pub type FileVadFactory = Arc<dyn Fn(&Settings, &Paths) -> Box<dyn SpeechDetector> + Send + Sync>;
 /// Asks whether text may go to a cloud provider; answers through the callback.
 pub type ConfirmCloud = Rc<dyn Fn(&gtk::Widget, &CloudSend, Box<dyn FnOnce(bool)>)>;
+/// Loads the punctuation model (slow: a few seconds), off the main thread.
+pub type PunctuatorFactory =
+    Arc<dyn Fn(&Paths) -> Result<Arc<dyn crate::punctuation::Punctuate>, String> + Send + Sync>;
 pub type VadFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn FrameVad>, String> + Send + Sync>;
 
 #[derive(Clone)]
@@ -77,6 +80,7 @@ pub struct Deps {
     pub vad: VadFactory,
     /// Voice detection for whole files (import).
     pub file_vad: FileVadFactory,
+    pub punctuator: PunctuatorFactory,
     /// Where AI provider API keys live.
     pub secrets: Arc<dyn crate::ai::SecretStore>,
     pub confirm_cloud: ConfirmCloud,
@@ -123,6 +127,11 @@ impl Deps {
                     tracing::warn!("{e}; using the loudness detector instead");
                     Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)
                 }
+            }),
+            punctuator: Arc::new(|p| {
+                crate::punctuation::Punctuator::load(&p.models().join(crate::punctuation::DIR))
+                    .map(|m| Arc::new(m) as Arc<dyn crate::punctuation::Punctuate>)
+                    .map_err(|e| e.to_string())
             }),
             secrets: Arc::new(crate::ai::Keyring),
             confirm_cloud: Rc::new(ai::confirm_with_dialog),

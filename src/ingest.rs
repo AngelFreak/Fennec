@@ -72,6 +72,8 @@ pub enum IngestError {
 pub struct Recognizer<'a> {
     pub engine: &'a mut dyn Transcriber,
     pub vad: &'a mut dyn SpeechDetector,
+    /// Adds punctuation to each paragraph before it is saved.
+    pub punctuator: Option<&'a dyn crate::punctuation::Punctuate>,
 }
 
 /// Transcribes `path` into document `doc`, appending paragraphs as they are
@@ -99,13 +101,25 @@ pub fn ingest_file(
 
     let mut builder = ParagraphBuilder::new(opts.paragraph_gap_ms, 90_000);
     let mut saved = 0;
-    let save =
-        |p: Paragraph, saved: &mut usize, on_event: &mut dyn FnMut(IngestEvent)| -> Result<(), IngestError> {
-            let id = store.append_paragraph(doc, &p)?;
-            *saved += 1;
-            on_event(IngestEvent::Paragraph(Paragraph { id: Some(id), ..p }));
-            Ok(())
-        };
+    let punctuator = models.punctuator;
+    let save = |mut p: Paragraph,
+                saved: &mut usize,
+                on_event: &mut dyn FnMut(IngestEvent)|
+     -> Result<(), IngestError> {
+        if let Some(m) = punctuator {
+            match crate::punctuation::punctuate(m, &p.text, false) {
+                Ok(text) => {
+                    p.low_confidence = crate::punctuation::moved_spans(&p.text, &text, &p.low_confidence);
+                    p.text = text;
+                }
+                Err(e) => tracing::warn!("{e}"),
+            }
+        }
+        let id = store.append_paragraph(doc, &p)?;
+        *saved += 1;
+        on_event(IngestEvent::Paragraph(Paragraph { id: Some(id), ..p }));
+        Ok(())
+    };
 
     let vocabulary = Vocabulary::parse(&opts.vocabulary);
     let context = opts.context.then(|| Context::new(""));

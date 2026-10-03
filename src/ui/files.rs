@@ -628,6 +628,7 @@ impl FilesPage {
         let settings = self.deps.settings();
         let paths = self.deps.paths.clone();
         let file_vad = Arc::clone(&self.deps.file_vad);
+        let punctuator_factory = Arc::clone(&self.deps.punctuator);
         std::thread::Builder::new()
             .name("fennec-ingest".into())
             .spawn(move || {
@@ -645,6 +646,13 @@ impl FilesPage {
                     context: crate::models::takes_context(&settings.model),
                     ..Default::default()
                 };
+                let punct_dir = paths.models().join(crate::punctuation::DIR);
+                let punctuator = (settings.punctuate && crate::punctuation::installed(&punct_dir))
+                    .then(|| punctuator_factory(&paths))
+                    .and_then(|r| {
+                        r.map_err(|e| tracing::warn!("no punctuation for imports: {e}"))
+                            .ok()
+                    });
                 for job in job_rx {
                     opts.paragraph_gap_ms = job.gap_ms;
                     let mut vad = file_vad(&settings, &paths);
@@ -657,6 +665,7 @@ impl FilesPage {
                         Recognizer {
                             engine: &mut engine,
                             vad: &mut *vad,
+                            punctuator: punctuator.as_deref(),
                         },
                         &opts,
                         &job.cancel,

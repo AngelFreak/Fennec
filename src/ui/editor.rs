@@ -189,6 +189,119 @@ impl Editor {
         false
     }
 
+    /// Adds punctuation to paragraph `index` (as in [`Self::paragraphs`]):
+    /// `new` is `expected` with marks inserted and first letters re-cased.
+    /// Only those characters change, so unsure words, timestamps and the
+    /// preview stay. Nothing happens if the paragraph no longer reads
+    /// `expected` (edited meanwhile).
+    pub fn punctuate_paragraph(&self, index: usize, expected: &str, new: &str) -> bool {
+        let Some((start, end)) = self.paragraph_range(index) else {
+            return false;
+        };
+        if self.text_without_preview(&start, &end).replace(LINE_BREAK, "\n") != expected {
+            return false;
+        }
+        // Walk the buffer (skipping the preview) and `new` together.
+        enum Edit {
+            Insert(i32, char),
+            Recase(i32, char),
+        }
+        let mut edits = Vec::new();
+        let mut at = start;
+        let mut want = new
+            .chars()
+            .map(|c| if c == '\n' { LINE_BREAK } else { c })
+            .peekable();
+        while at.offset() < end.offset() || want.peek().is_some() {
+            if at.offset() < end.offset() && at.has_tag(&self.tag_preview) {
+                at.forward_char();
+                continue;
+            }
+            let Some(w) = want.next() else {
+                return false;
+            };
+            let have = (at.offset() < end.offset()).then(|| at.char());
+            match have {
+                Some(h) if h == w => {
+                    at.forward_char();
+                }
+                Some(h) if h.to_lowercase().eq(w.to_lowercase()) => {
+                    edits.push(Edit::Recase(at.offset(), w));
+                    at.forward_char();
+                }
+                _ if !w.is_alphanumeric() && !w.is_whitespace() => edits.push(Edit::Insert(at.offset(), w)),
+                _ => return false,
+            }
+        }
+        self.quietly(|| {
+            for edit in edits.iter().rev() {
+                match *edit {
+                    Edit::Insert(offset, c) => {
+                        let mut it = self.buffer.iter_at_offset(offset);
+                        self.buffer.insert(&mut it, &c.to_string());
+                    }
+                    Edit::Recase(offset, c) => {
+                        let mut from = self.buffer.iter_at_offset(offset);
+                        let tags = from.tags();
+                        let mut to = from;
+                        to.forward_char();
+                        self.buffer.delete(&mut from, &mut to);
+                        let mut it = self.buffer.iter_at_offset(offset);
+                        let refs: Vec<&gtk::TextTag> = tags.iter().collect();
+                        self.buffer.insert_with_tags(&mut it, &c.to_string(), &refs);
+                    }
+                }
+            }
+        });
+        true
+    }
+
+    /// The paragraph the cursor is in, counted as [`Self::paragraphs`]
+    /// counts; `None` on a blank line.
+    pub fn cursor_paragraph(&self) -> Option<usize> {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert()).line();
+        let mut n = 0;
+        for line in 0..=cursor {
+            let start = self.buffer.iter_at_line(line)?;
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            if self.text_without_preview(&start, &end).trim().is_empty() {
+                if line == cursor {
+                    return None;
+                }
+                continue;
+            }
+            if line == cursor {
+                return Some(n);
+            }
+            n += 1;
+        }
+        None
+    }
+
+    /// Start and end of paragraph `index`, counted as [`Self::paragraphs`]
+    /// counts (blank lines skipped).
+    fn paragraph_range(&self, index: usize) -> Option<(gtk::TextIter, gtk::TextIter)> {
+        let mut n = 0;
+        for line in 0..self.buffer.line_count() {
+            let start = self.buffer.iter_at_line(line)?;
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            if self.text_without_preview(&start, &end).trim().is_empty() {
+                continue;
+            }
+            if n == index {
+                return Some((start, end));
+            }
+            n += 1;
+        }
+        None
+    }
+
     /// Puts the cursor at the start of paragraph `index` and scrolls to it.
     pub fn go_to_paragraph(&self, index: usize) {
         let mut n = 0;

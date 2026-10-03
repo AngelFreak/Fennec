@@ -100,7 +100,29 @@ fn tones(n: usize) -> Vec<f32> {
     v
 }
 
+/// Stands in for the punctuation model: a full stop after the last word.
+struct EndsSentences;
+
+impl fennec::punctuation::Punctuate for EndsSentences {
+    fn labels(
+        &self,
+        words: &[String],
+    ) -> Result<Vec<fennec::punctuation::Label>, fennec::punctuation::PunctuationError> {
+        let mut labels = vec![fennec::punctuation::Label::NONE; words.len()];
+        if let Some(last) = labels.last_mut() {
+            last.mark = Some('.');
+        }
+        Ok(labels)
+    }
+}
+
 fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> Deps {
+    // Stand-ins for the punctuation model's files; EndsSentences does the work.
+    let punct = Paths::under(root).models().join(fennec::punctuation::DIR);
+    std::fs::create_dir_all(&punct).unwrap();
+    for f in fennec::punctuation::FILES {
+        std::fs::write(punct.join(f), b"stand-in").unwrap();
+    }
     let n_tones = lines.len().max(3);
     let lines = Arc::new(lines);
     Deps {
@@ -120,6 +142,7 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
         audio: Arc::new(move |_| Ok(Box::new(PcmSource::new(tones(n_tones))) as Box<dyn AudioSource>)),
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
+        punctuator: Arc::new(|_| Ok(Arc::new(EndsSentences) as Arc<dyn fennec::punctuation::Punctuate>)),
         secrets: Arc::new(fennec::ai::MemorySecrets::default()),
         confirm_cloud: std::rc::Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -223,6 +246,16 @@ fn main() {
         w.dictation.editor.preview_text().is_none(),
     );
     check("saying «stop optagelse» stops the dictation", stopped);
+    check(
+        "the punctuation model ends the last sentence when dictation stops",
+        pump_until(Duration::from_secs(5), || {
+            w.dictation
+                .editor
+                .paragraphs()
+                .last()
+                .is_some_and(|p| p.text.ends_with('.'))
+        }),
+    );
     let texts: Vec<String> = w
         .dictation
         .editor
@@ -232,9 +265,9 @@ fn main() {
         .collect();
     check(
         "spoken commands punctuate, split and capitalise the paragraphs",
-        texts == ["Første sætning.", "Anden sætning"],
+        texts == ["Første sætning.", "Anden sætning."],
     );
-    if texts != ["Første sætning.", "Anden sætning"] {
+    if texts != ["Første sætning.", "Anden sætning."] {
         println!(
             "     editor: {texts:?}; status: {}",
             w.dictation.dock.status_text()
@@ -359,6 +392,38 @@ fn main() {
     check(
         "previews are not part of the saved text",
         !e.plain_text().contains("foreløbig"),
+    );
+    e.set_preview(None);
+
+    // --- punctuation added in place: unsure words and previews survive
+    let heard = "det regner i Aarhus i dag og vi bliver hjemme";
+    let at = heard.find("Aarhus").unwrap();
+    e.load(&[Paragraph {
+        start_ms: Some(0),
+        end_ms: Some(3_000),
+        low_confidence: vec![at..at + "Aarhus".len()],
+        ..Paragraph::new(heard)
+    }]);
+    e.set_preview(Some("foreløbig"));
+    let fixed = "Det regner i Aarhus i dag, og vi bliver hjemme.";
+    check(
+        "punctuation goes into the paragraph in place",
+        e.punctuate_paragraph(0, heard, fixed),
+    );
+    let p = e.paragraphs().remove(0);
+    check(
+        "the text, its unsure word, its times and the preview all survive",
+        p.text == fixed
+            && e.unsure_words() == ["Aarhus"]
+            && p.start_ms == Some(0)
+            && e.preview_text().as_deref() == Some("foreløbig"),
+    );
+    if p.text != fixed {
+        println!("     got: {:?}", p.text);
+    }
+    check(
+        "a paragraph edited meanwhile is left alone",
+        !e.punctuate_paragraph(0, heard, fixed),
     );
     e.set_preview(None);
 
@@ -665,6 +730,16 @@ fn main() {
             && settings_text
                 .iter()
                 .any(|t| t.contains("«stop diktat» or «stop optagelse»")),
+    );
+    check(
+        "Settings offers automatic punctuation, on and ready",
+        settings_text
+            .iter()
+            .any(|t| t == "Add commas, full stops and capitals")
+            && settings_text
+                .iter()
+                .any(|t| t.contains("your words are never changed"))
+            && Settings::default().punctuate,
     );
     screenshot(&w.window, "settings-dictation");
     w.settings.show_section("storage");

@@ -252,6 +252,27 @@ pub fn ensure_vad(paths: &Paths, cancel: &AtomicBool, progress: impl FnMut(Progr
     download(&hf_url(VAD_REPO, VAD_FILE), &dest, cancel, progress)
 }
 
+/// Downloads the Danish punctuation model if it is missing (about 440 MB).
+pub fn ensure_punctuation(
+    paths: &Paths,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> Result<(), String> {
+    let dir = paths.models().join(crate::punctuation::DIR);
+    for file in crate::punctuation::FILES {
+        let dest = dir.join(file);
+        if !dest.exists() {
+            download(
+                &hf_url(crate::punctuation::REPO, file),
+                &dest,
+                cancel,
+                &mut progress,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Downloads `url` to `dest`, resuming a previous `.part` file. `cancel`
 /// stops it, leaving the partial file for next time.
 pub fn download(

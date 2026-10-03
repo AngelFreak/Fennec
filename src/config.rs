@@ -85,6 +85,8 @@ pub struct Settings {
     pub input_gain_db: f32,
     pub pause_ms: u32,
     pub show_preview: bool,
+    /// Add commas, full stops and capitals with the Danish punctuation model.
+    pub punctuate: bool,
     pub keep_dictation_audio: bool,
     /// Recordings older than this many days are deleted at startup (the
     /// text stays). `None`: keep them.
@@ -106,6 +108,7 @@ impl Default for Settings {
             input_gain_db: 0.0,
             pause_ms: 600,
             show_preview: true,
+            punctuate: true,
             keep_dictation_audio: true,
             delete_audio_after_days: None,
             vocabulary: String::new(),
