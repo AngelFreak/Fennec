@@ -9,11 +9,12 @@ use crate::engine::{EngineError, SAMPLE_RATE, TranscribeOptions, Transcriber};
 use crate::paragraphs::ParagraphBuilder;
 use crate::store::{DocumentId, Paragraph, Store, StoreError};
 use crate::vad::{SpeechDetector, VadError, chunk_speech};
+use crate::vocabulary::Vocabulary;
 
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     pub transcribe: TranscribeOptions,
-    /// Names and terms passed to the engine with every chunk.
+    /// Names and terms the transcript is corrected towards.
     pub vocabulary: String,
     pub paragraph_gap_ms: i64,
     /// Whisper's window is 30 s; chunks stay below that.
@@ -101,6 +102,7 @@ pub fn ingest_file(
             Ok(())
         };
 
+    let vocabulary = Vocabulary::parse(&opts.vocabulary);
     for chunk in &chunks {
         if cancel.load(Ordering::Relaxed) {
             if let Some(p) = builder.finish() {
@@ -108,12 +110,11 @@ pub fn ingest_file(
             }
             return Err(IngestError::Cancelled);
         }
-        let mut t = opts.transcribe.clone();
-        t.initial_prompt = prompt(&opts.vocabulary);
         let offset = samples_to_ms(chunk.start);
-        let segments = models.engine.transcribe(&pcm[chunk.clone()], &t)?;
+        let segments = models.engine.transcribe(&pcm[chunk.clone()], &opts.transcribe)?;
         // Engines may return empty segments for silence; they are not paragraphs.
-        for seg in segments.into_iter().filter(|s| !s.text.trim().is_empty()) {
+        for mut seg in segments.into_iter().filter(|s| !s.text.trim().is_empty()) {
+            (seg.text, seg.low_confidence) = vocabulary.correct(&seg.text, &seg.low_confidence);
             if let Some(done) = builder.push(&seg, offset) {
                 save(done, &mut saved, &mut on_event)?;
             }
@@ -134,28 +135,10 @@ pub fn ingest_file(
     Ok(saved)
 }
 
-/// The prompt is the user's vocabulary only. Feeding back what was just
-/// said made the Danish fine-tunes drop and garble words.
-pub fn prompt(vocabulary: &str) -> Option<String> {
-    let p = vocabulary.trim();
-    (!p.is_empty()).then(|| p.to_string())
-}
-
 fn samples_to_ms(n: usize) -> i64 {
     n as i64 * 1000 / SAMPLE_RATE as i64
 }
 
 fn ms_to_samples(ms: i64) -> usize {
     (ms.max(0) as usize) * SAMPLE_RATE as usize / 1000
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_prompt_is_the_vocabulary_or_nothing() {
-        assert_eq!(prompt(" BBR, Nørregade ").as_deref(), Some("BBR, Nørregade"));
-        assert_eq!(prompt(" "), None);
-    }
 }

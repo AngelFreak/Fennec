@@ -24,4 +24,5 @@ pub mod transcript;
 pub mod ui;
 pub mod utterance;
 pub mod vad;
+pub mod vocabulary;
 pub mod worker;

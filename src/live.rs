@@ -16,8 +16,8 @@ use crossbeam_channel::{Receiver, unbounded};
 use crate::audio::capture::AudioSource;
 use crate::commands::{Command, CommandTable};
 use crate::engine::{SAMPLE_RATE, TranscribeOptions};
-use crate::ingest::prompt;
 use crate::utterance::{FrameVad, Utterance, UtteranceBuilder, UtteranceConfig, UtteranceEvent};
+use crate::vocabulary::Vocabulary;
 use crate::worker::{EngineWorker, Priority, Reply};
 
 #[derive(Debug, Clone)]
@@ -205,6 +205,7 @@ impl LiveSession {
             let worker_alive = Arc::clone(&worker);
             let offset = cfg.offset_ms;
             let commands = cfg.commands.clone();
+            let vocabulary = Vocabulary::parse(&cfg.vocabulary);
             std::thread::Builder::new()
                 .name("fennec-live-results".into())
                 .spawn(move || {
@@ -217,6 +218,7 @@ impl LiveSession {
                             if let Some(cmd) = commands.match_utterance(&text) {
                                 on_event(LiveEvent::Command(cmd));
                             } else if !text.is_empty() {
+                                let (text, low_confidence) = vocabulary.correct(&text, &low_confidence);
                                 on_event(LiveEvent::Final {
                                     text,
                                     start_ms: u.start_ms() + offset,
@@ -235,7 +237,7 @@ impl LiveSession {
                                 if let Ok(Ok(segs)) = rx.recv()
                                     && finalized.is_none_or(|f| id > f)
                                 {
-                                    on_event(LiveEvent::Preview(join(&segs).0));
+                                    on_event(LiveEvent::Preview(vocabulary.correct(&join(&segs).0, &[]).0));
                                 }
                             }
                             Pending::Quick(u, rx) => {
@@ -251,7 +253,7 @@ impl LiveSession {
                                     continue;
                                 }
                                 if !quick.is_empty() {
-                                    on_event(LiveEvent::Preview(quick));
+                                    on_event(LiveEvent::Preview(vocabulary.correct(&quick, &[]).0));
                                 }
                                 // The accurate pass replies on the same channel.
                                 deliver(u, rx);
@@ -304,16 +306,15 @@ impl Drop for LiveSession {
     }
 }
 
-/// Joins segment texts with spaces, shifting low-confidence spans.
 fn options(cfg: &LiveConfig, fast: bool) -> TranscribeOptions {
     let mut t = cfg.transcribe.clone();
-    t.initial_prompt = prompt(&cfg.vocabulary);
     // Previews are replaced by the final text, so they trade accuracy for
     // speed and stop holding up the finals.
     t.fast = fast;
     t
 }
 
+/// Joins segment texts with spaces, shifting low-confidence spans.
 fn join(segs: &[crate::engine::Segment]) -> (String, Vec<std::ops::Range<usize>>) {
     let mut text = String::new();
     let mut spans = Vec::new();

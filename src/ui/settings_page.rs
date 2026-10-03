@@ -715,7 +715,7 @@ impl SettingsPage {
         let vocab_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
         vocab_box.append(&label("Vocabulary", &["fx-h2"]));
         vocab_box.append(&label(
-            "Names and terms the model should know. Passed as context with each sentence.",
+            "Names and terms spelled your way, separated by commas. Near-misses in the text are corrected to them.",
             &["fx-field-note"],
         ));
         let vocab = gtk::TextView::builder()

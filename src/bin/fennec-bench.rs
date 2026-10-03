@@ -1,8 +1,13 @@
 //! Compares Whisper models on a Danish test set.
 //!
 //! ```text
-//! fennec-bench --manifest set.tsv [--limit N] [--speed N] [--gpu] model.bin...
+//! fennec-bench --manifest set.tsv [--limit N] [--speed N] [--gpu]
+//!              [--prompt TEXT] [--fast] [--pairs] [--vocab TERMS] [--dump FILE] model.bin...
 //! ```
+//!
+//! `--pairs` joins the clips two by two with a short pause, like dictating
+//! two sentences in one breath, so sentence ends inside a transcript are
+//! scored. Punctuation is reported as F1 for commas and sentence ends.
 //!
 //! The manifest has one `wav_path<TAB>reference` per line. Accuracy (WER/CER)
 //! runs all models at the same time, splitting the CPU between them: contention
@@ -16,13 +21,20 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use fennec::audio::read_wav_16k_mono;
 use fennec::engine::{SAMPLE_RATE, TranscribeOptions, default_threads, load_engine};
-use fennec::eval::{ErrorCount, char_errors, word_errors};
+use fennec::eval::{ErrorCount, Punctuation, char_errors, punctuation, word_errors};
 
 struct Args {
     manifest: PathBuf,
     limit: Option<usize>,
     speed_clips: usize,
     gpu: bool,
+    prompt: Option<String>,
+    fast: bool,
+    pairs: bool,
+    /// Corrects transcripts with this vocabulary, as the app does.
+    vocab: Option<String>,
+    /// Writes every `reference<TAB>hypothesis` here.
+    dump: Option<PathBuf>,
     models: Vec<PathBuf>,
 }
 
@@ -35,6 +47,7 @@ struct Accuracy {
     model: PathBuf,
     wer: ErrorCount,
     cer: ErrorCount,
+    punct: Punctuation,
     worst: Vec<(f64, String, String)>,
 }
 
@@ -44,7 +57,10 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let args = parse_args()?;
-    let clips = load_manifest(&args.manifest, args.limit)?;
+    let mut clips = load_manifest(&args.manifest, args.limit)?;
+    if args.pairs {
+        clips = pairs(clips);
+    }
     let audio_secs: f64 = clips
         .iter()
         .map(|c| c.pcm.len() as f64 / SAMPLE_RATE as f64)
@@ -69,8 +85,8 @@ fn main() -> Result<()> {
     let speed = run_speed_sequentially(&args, &clips)?;
 
     println!(
-        "\n{:<34} {:>7} {:>7} {:>9} {:>9}",
-        "model", "WER", "CER", "load s", "RTF"
+        "\n{:<34} {:>7} {:>7} {:>9} {:>9} {:>9} {:>9}",
+        "model", "WER", "CER", "load s", "RTF", "comma F1", "end F1"
     );
     for (a, (load, rtf)) in accuracy.iter().zip(&speed) {
         let rtf = if rtf.is_finite() {
@@ -79,12 +95,19 @@ fn main() -> Result<()> {
             "–".to_string()
         };
         println!(
-            "{:<34} {:>6.1}% {:>6.1}% {:>9.1} {:>9}",
+            "{:<34} {:>6.1}% {:>6.1}% {:>9.1} {:>9} {:>9.2} {:>9.2}",
             file_name(&a.model),
             a.wer.rate() * 100.0,
             a.cer.rate() * 100.0,
             load,
-            rtf
+            rtf,
+            a.punct.commas.f1(),
+            a.punct.ends.f1()
+        );
+        let (c, e) = (a.punct.commas, a.punct.ends);
+        println!(
+            "    commas: {} right, {} missed, {} extra; sentence ends: {} right, {} missed, {} extra",
+            c.right, c.missed, c.extra, e.right, e.missed, e.extra
         );
     }
     println!("\nRTF = processing time / audio time (lower is faster; below 1 keeps up with speech).");
@@ -119,21 +142,32 @@ fn accuracy_of(model: &Path, args: &Args, clips: &[Clip], threads: usize) -> Res
     let mut engine = load_engine(model, args.gpu)?;
     let opts = TranscribeOptions {
         threads,
+        initial_prompt: args.prompt.clone(),
+        fast: args.fast,
         ..Default::default()
     };
     let mut acc = Accuracy {
         model: model.to_path_buf(),
         wer: ErrorCount::default(),
         cer: ErrorCount::default(),
+        punct: Punctuation::default(),
         worst: Vec::new(),
     };
     for (i, clip) in clips.iter().enumerate() {
-        let hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
+        let mut hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
+        if let Some(v) = &args.vocab {
+            hyp = fennec::vocabulary::Vocabulary::parse(v).correct(&hyp, &[]).0;
+        }
         let w = word_errors(&clip.reference, &hyp);
         acc.wer.add(w);
         acc.cer.add(char_errors(&clip.reference, &hyp));
+        acc.punct.add(punctuation(&clip.reference, &hyp));
         acc.worst.push((w.rate(), clip.reference.clone(), hyp));
         eprintln!("[{}] {}/{}", file_name(model), i + 1, clips.len());
+    }
+    if let Some(path) = &args.dump {
+        let lines: String = acc.worst.iter().map(|(_, r, h)| format!("{r}\t{h}\n")).collect();
+        std::fs::write(path, lines).with_context(|| format!("writing {}", path.display()))?;
     }
     acc.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
     Ok(acc)
@@ -171,6 +205,27 @@ fn join_text(segments: &[fennec::engine::Segment]) -> String {
         .join(" ")
 }
 
+/// Clip i joined with clip i + n/2 (neighbours are often the same
+/// sentence read by another speaker), 0.4 s apart: two sentences in one
+/// breath.
+fn pairs(clips: Vec<Clip>) -> Vec<Clip> {
+    let half = clips.len() / 2;
+    (0..half)
+        .map(|i| {
+            let (a, b) = (&clips[i], &clips[i + half]);
+            let mut pcm = a.pcm.clone();
+            pcm.extend(std::iter::repeat_n(0.0, SAMPLE_RATE as usize * 2 / 5));
+            pcm.extend_from_slice(&b.pcm);
+            let first = a.reference.trim_end();
+            let end = if first.ends_with(['.', '?', '!']) { "" } else { "." };
+            Clip {
+                pcm,
+                reference: format!("{first}{end} {}", b.reference),
+            }
+        })
+        .collect()
+}
+
 fn load_manifest(path: &Path, limit: Option<usize>) -> Result<Vec<Clip>> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let base = path.parent().unwrap_or(Path::new("."));
@@ -200,6 +255,11 @@ fn parse_args() -> Result<Args> {
         limit: None,
         speed_clips: 10,
         gpu: false,
+        prompt: None,
+        fast: false,
+        pairs: false,
+        vocab: None,
+        dump: None,
         models: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -209,6 +269,11 @@ fn parse_args() -> Result<Args> {
             "--limit" => args.limit = Some(it.next().context("--limit needs a number")?.parse()?),
             "--speed" => args.speed_clips = it.next().context("--speed needs a number")?.parse()?,
             "--gpu" => args.gpu = true,
+            "--prompt" => args.prompt = Some(it.next().context("--prompt needs a text")?),
+            "--fast" => args.fast = true,
+            "--pairs" => args.pairs = true,
+            "--vocab" => args.vocab = Some(it.next().context("--vocab needs terms")?),
+            "--dump" => args.dump = Some(it.next().context("--dump needs a path")?.into()),
             _ if a.starts_with("--") => bail!("unknown option {a}"),
             _ => args.models.push(a.into()),
         }

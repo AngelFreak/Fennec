@@ -125,12 +125,17 @@ and `~/.config/fennec/prompts/`. Invalid files show an error on their card.
 - Utterance starts after ~100 ms speech (200 ms pre-roll kept), ends after a
   configurable pause (default 0.6 s), force-cut at 25 s at the quietest point
   of the last 2 s.
-- Partial preview every ~1.5 s while speaking, only when the engine is idle.
-- Per-utterance params: language `da`, no translation, initial prompt =
-  vocabulary + last ~200 chars of committed text; tokens below a probability
+- Partial preview after 0.7 s of speech, then every 1 s, only when the engine
+  is idle and not in a pause; utterances up to 3 s get a quick pass first, so
+  commands act on it alone.
+- Per-utterance params: language `da`, no translation, no initial prompt
+  (any prompt wrecks the Danish fine-tunes: Edda's FLEURS WER went from 7.8%
+  to 87.7% with a three-word vocabulary as the prompt; the vocabulary corrects
+  near-misses in the text instead); tokens below a probability
   threshold become low-confidence spans.
 - Voice commands fire only when the whole normalized utterance matches
-  ("nyt afsnit", "ny linje", "slet sidste sætning", "stop diktat").
+  ("nyt afsnit"/"ny paragraf", "ny linje", "slet sidste sætning",
+  "stop diktat"/"stop optagelse", and spoken punctuation such as "punktum").
 - Falling behind is shown ("behind by 4 s"); audio is never dropped.
 - Raw audio is buffered to disk during dictation (crash safety; optional keep).
 - VAD source decided in Stage 0: whisper.cpp's Silero VAD through

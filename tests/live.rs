@@ -236,25 +236,25 @@ fn real_engine_and_silero_turn_danish_speech_into_a_final_event() {
     );
 }
 
-/// Remembers the options of every call; answers "Sætning N.".
-struct Recording(Arc<Mutex<Vec<TranscribeOptions>>>);
+/// Remembers the options of every call; always hears the same sentence.
+struct Recording(Arc<Mutex<Vec<TranscribeOptions>>>, &'static str);
 
 impl Transcriber for Recording {
     fn transcribe(&mut self, _: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        let mut calls = self.0.lock().unwrap();
-        calls.push(opts.clone());
+        self.0.lock().unwrap().push(opts.clone());
         Ok(vec![Segment {
             start_ms: 0,
             end_ms: 1,
-            text: format!("Sætning {}.", calls.len()),
+            text: self.1.into(),
             low_confidence: vec![],
         }])
     }
 }
 
 #[test]
-fn earlier_text_never_goes_into_the_prompt_only_the_vocabulary() {
-    // Prompting Edda with what was just said made it drop and garble words.
+fn the_vocabulary_corrects_the_text_and_no_prompt_reaches_the_model() {
+    // Any prompt wrecks Edda (FLEURS WER 7.8% → 87.7% with a vocabulary),
+    // and feeding back what was just said made it drop and garble words.
     let mut audio = Vec::new();
     for _ in 0..3 {
         audio.extend(tone(1.0));
@@ -262,30 +262,31 @@ fn earlier_text_never_goes_into_the_prompt_only_the_vocabulary() {
     }
     let calls = Arc::new(Mutex::new(Vec::new()));
     let cfg = LiveConfig {
-        show_preview: false,
         vocabulary: "Nørregade, Vicevært".into(),
         ..Default::default()
     };
-    run(
+    let events = run(
         PcmSource::new(audio),
         Box::new(EnergyVad::default()),
-        Box::new(Recording(Arc::clone(&calls))),
+        Box::new(Recording(Arc::clone(&calls), "Vi mødes på Nørregarde.")),
         cfg,
     );
-    let prompts: Vec<Option<String>> = calls
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|o| o.initial_prompt.clone())
-        .collect();
-    // A quick pass and an accurate one for each short utterance.
-    assert_eq!(prompts.len(), 6);
+    let calls = calls.lock().unwrap();
     assert!(
-        prompts
-            .iter()
-            .all(|p| p.as_deref() == Some("Nørregade, Vicevært")),
-        "{prompts:?}"
+        calls.len() >= 6,
+        "a quick and an accurate pass each: {}",
+        calls.len()
     );
+    assert!(calls.iter().all(|o| o.initial_prompt.is_none()));
+    let shown: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            LiveEvent::Final { text, .. } | LiveEvent::Preview(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(shown.len() >= 3, "{events:?}");
+    assert!(shown.iter().all(|t| *t == "Vi mødes på Nørregade."), "{shown:?}");
 }
 
 #[test]
@@ -296,7 +297,7 @@ fn previews_use_the_fast_encoder_and_finals_the_full_one() {
     let events = run(
         PcmSource::new(audio).realtime(),
         Box::new(EnergyVad::default()),
-        Box::new(Recording(Arc::clone(&calls))),
+        Box::new(Recording(Arc::clone(&calls), "Sætning.")),
         LiveConfig::default(),
     );
     let calls = calls.lock().unwrap();

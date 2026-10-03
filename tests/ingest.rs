@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 
-use fennec::engine::{TranscribeOptions, WhisperEngine};
+use std::sync::{Arc, Mutex};
+
+use fennec::engine::{EngineError, Segment, TranscribeOptions, Transcriber, WhisperEngine};
 use fennec::export::{ExportOptions, Format, Report, write};
 use fennec::ingest::{IngestError, IngestEvent, IngestOptions, Recognizer, ingest_file};
 use fennec::store::{NewDocument, Store};
 use fennec::template::Template;
-use fennec::vad::SileroVad;
+use fennec::vad::{SileroVad, WholeAudio};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -192,4 +194,59 @@ fn an_unreadable_file_fails_with_a_decode_error_and_leaves_the_document_empty() 
     assert!(matches!(err, IngestError::Decode(_)), "{err}");
     assert!(err.to_string().contains("ødelagt.mp3"), "{err}");
     assert!(store.paragraphs(doc).unwrap().is_empty());
+}
+
+/// Remembers the options of every call; always hears the same sentence.
+struct Hears(Arc<Mutex<Vec<TranscribeOptions>>>);
+
+impl Transcriber for Hears {
+    fn transcribe(&mut self, _: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+        self.0.lock().unwrap().push(opts.clone());
+        Ok(vec![Segment {
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "Vi mødes på Nørregarde.".into(),
+            low_confidence: vec![],
+        }])
+    }
+}
+
+#[test]
+fn imported_files_are_corrected_by_the_vocabulary_not_prompted_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp3 = two_utterances_mp3(dir.path());
+    let store = Store::open(&dir.path().join("fennec.db")).unwrap();
+    let doc = store.create_document(&NewDocument::file("Møde")).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let opts = IngestOptions {
+        vocabulary: "Nørregade".into(),
+        ..Default::default()
+    };
+    ingest_file(
+        &mp3,
+        doc,
+        &store,
+        Recognizer {
+            engine: &mut Hears(Arc::clone(&calls)),
+            vad: &mut WholeAudio,
+        },
+        &opts,
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert!(calls.lock().unwrap().iter().all(|o| o.initial_prompt.is_none()));
+    let texts: Vec<String> = store
+        .paragraphs(doc)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    assert!(!texts.is_empty());
+    assert!(
+        texts
+            .iter()
+            .all(|t| t.contains("Nørregade") && !t.contains("Nørregarde")),
+        "{texts:?}"
+    );
 }
