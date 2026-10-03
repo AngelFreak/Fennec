@@ -133,6 +133,11 @@ and `~/.config/fennec/prompts/`. Invalid files show an error on their card.
   to 87.7% with a three-word vocabulary as the prompt; the vocabulary corrects
   near-misses in the text instead); tokens below a probability
   threshold become low-confidence spans.
+- Punctuation: a Danish BERT punctuation model (Alvenir, run with candle)
+  re-punctuates the paragraph at the cursor in the background after each
+  final, leaving its last word open until more text comes or dictation
+  stops. Marks are only added and words never change; imported files are
+  punctuated per paragraph. Optional (Settings), 440 MB download.
 - Voice commands fire only when the whole normalized utterance matches
   ("nyt afsnit"/"ny paragraf", "ny linje", "slet sidste sætning",
   "stop diktat"/"stop optagelse", and spoken punctuation such as "punktum").
