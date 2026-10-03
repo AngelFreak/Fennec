@@ -22,12 +22,61 @@ pub type Reply = Result<Vec<Segment>, EngineError>;
 /// Decides from the first pass whether the second one is needed.
 type NeedsSecond = Box<dyn Fn(&Reply) -> bool + Send>;
 
+/// The text a live session has committed so far, for models trained to
+/// take the previous sentence as context (Edda v0.2). A job reads it when
+/// it starts and a final adds to it when it finishes, both on the engine
+/// thread, so every job sees exactly the text before it, however early it
+/// was queued.
+#[derive(Debug, Clone, Default)]
+pub struct Context(Arc<Mutex<String>>);
+
+impl Context {
+    const KEEP: usize = 200;
+
+    pub fn new(seed: &str) -> Self {
+        let c = Self::default();
+        c.push(seed);
+        c
+    }
+
+    /// The last 200 characters, or `None` while nothing is committed.
+    pub fn prompt(&self) -> Option<String> {
+        let text = self.0.lock().expect("context poisoned");
+        let chars: Vec<char> = text.trim().chars().collect();
+        (!chars.is_empty()).then(|| chars[chars.len().saturating_sub(Self::KEEP)..].iter().collect())
+    }
+
+    /// Adds committed text.
+    pub fn push(&self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let mut c = self.0.lock().expect("context poisoned");
+        if !c.is_empty() {
+            c.push(' ');
+        }
+        c.push_str(text);
+        // Only the tail is ever used.
+        let n = c.chars().count();
+        if n > 2 * Self::KEEP {
+            *c = c.chars().skip(n - Self::KEEP).collect();
+        }
+    }
+}
+
 struct Job {
     pcm: Vec<f32>,
     opts: TranscribeOptions,
     reply: Sender<Reply>,
     /// A second pass over the same audio, run straight after the first.
     then: Option<(TranscribeOptions, NeedsSecond)>,
+    /// Prompts each pass with it; a two-pass job's second pass adds its
+    /// text to it.
+    context: Option<Context>,
+    /// A single pass whose text is committed (a live final), so it is added
+    /// to the context.
+    commits: bool,
 }
 
 #[derive(Default)]
@@ -62,18 +111,20 @@ impl EngineWorker {
     /// Queues a job; the reply arrives on the returned channel. A replaced
     /// preview's channel closes without a reply.
     pub fn submit(&self, pcm: Vec<f32>, opts: TranscribeOptions, priority: Priority) -> Receiver<Reply> {
-        enqueue(&self.shared, pcm, opts, priority)
+        enqueue(&self.shared, pcm, opts, priority, None, false)
     }
 
     /// A live final in two passes: `first`, then `second` over the same
     /// audio if `needs_second` says so, with nothing run in between. Each
-    /// pass replies on the returned channel.
+    /// pass replies on the returned channel. With a context, both passes
+    /// are prompted with it and the second pass's text is added to it.
     pub fn submit_two_pass(
         &self,
         pcm: Vec<f32>,
         first: TranscribeOptions,
         second: TranscribeOptions,
         needs_second: impl Fn(&Reply) -> bool + Send + 'static,
+        context: Option<&Context>,
     ) -> Receiver<Reply> {
         let (tx, rx) = bounded(2);
         let job = Job {
@@ -81,11 +132,42 @@ impl EngineWorker {
             opts: first,
             reply: tx,
             then: Some((second, Box::new(needs_second))),
+            context: context.cloned(),
+            commits: false,
         };
         let (lock, cv) = &*self.shared;
         lock.lock().expect("engine queue poisoned").finals.push_back(job);
         cv.notify_one();
         rx
+    }
+
+    /// Like [`submit`](Self::submit), prompted with `context` when it runs.
+    /// Adds nothing to the context.
+    pub fn submit_with(
+        &self,
+        pcm: Vec<f32>,
+        opts: TranscribeOptions,
+        priority: Priority,
+        context: Option<&Context>,
+    ) -> Receiver<Reply> {
+        enqueue(&self.shared, pcm, opts, priority, context.cloned(), false)
+    }
+
+    /// A live final in one pass, prompted with `context` and added to it.
+    pub fn submit_final(
+        &self,
+        pcm: Vec<f32>,
+        opts: TranscribeOptions,
+        context: Option<&Context>,
+    ) -> Receiver<Reply> {
+        enqueue(
+            &self.shared,
+            pcm,
+            opts,
+            Priority::LiveFinal,
+            context.cloned(),
+            true,
+        )
     }
 
     /// True while a job runs or real (non-preview) work is queued.
@@ -131,6 +213,8 @@ fn enqueue(
     pcm: Vec<f32>,
     opts: TranscribeOptions,
     priority: Priority,
+    context: Option<Context>,
+    commits: bool,
 ) -> Receiver<Reply> {
     let (tx, rx) = bounded(1);
     let job = Job {
@@ -138,6 +222,8 @@ fn enqueue(
         opts,
         reply: tx,
         then: None,
+        context,
+        commits,
     };
     let (lock, cv) = shared;
     let mut q = lock.lock().expect("engine queue poisoned");
@@ -174,14 +260,31 @@ fn run(mut engine: Box<dyn Transcriber>, shared: Arc<(Mutex<Queues>, Condvar)>) 
                 q = cv.wait(q).expect("engine queue poisoned");
             }
         };
-        let result = engine.transcribe(&job.pcm, &job.opts);
+        let prompted = |mut opts: TranscribeOptions| {
+            if let Some(c) = &job.context {
+                opts.initial_prompt = c.prompt();
+            }
+            opts
+        };
+        let commit = |result: &Reply| {
+            if let (Some(c), Ok(segs)) = (&job.context, result) {
+                let text: Vec<&str> = segs.iter().map(|s| s.text.trim()).collect();
+                c.push(&text.join(" "));
+            }
+        };
+        let result = engine.transcribe(&job.pcm, &prompted(job.opts.clone()));
+        if job.commits {
+            commit(&result);
+        }
         let second = job
             .then
             .and_then(|(opts, needed)| needed(&result).then_some(opts));
         // The requester may have given up; that is fine.
         let _ = job.reply.send(result);
         if let Some(opts) = second {
-            let _ = job.reply.send(engine.transcribe(&job.pcm, &opts));
+            let result = engine.transcribe(&job.pcm, &prompted(opts));
+            commit(&result);
+            let _ = job.reply.send(result);
         }
         lock.lock().expect("engine queue poisoned").busy = false;
     }
@@ -194,7 +297,14 @@ pub struct WorkerTranscriber {
 
 impl Transcriber for WorkerTranscriber {
     fn transcribe(&mut self, pcm: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
-        let rx = enqueue(&self.shared, pcm.to_vec(), opts.clone(), self.priority);
+        let rx = enqueue(
+            &self.shared,
+            pcm.to_vec(),
+            opts.clone(),
+            self.priority,
+            None,
+            false,
+        );
         rx.recv().unwrap_or(Err(EngineError::WorkerStopped))
     }
 }
@@ -236,6 +346,112 @@ pub(crate) mod tests {
         (w, seen, gate)
     }
 
+    /// Answers "word N" for a job whose first sample is N; records prompts.
+    struct Prompts(Arc<Mutex<Vec<Option<String>>>>);
+
+    impl Transcriber for Prompts {
+        fn transcribe(&mut self, pcm: &[f32], o: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+            self.0.lock().unwrap().push(o.initial_prompt.clone());
+            Ok(vec![Segment {
+                start_ms: 0,
+                end_ms: 1,
+                text: format!("Ord {}.", pcm[0]),
+                low_confidence: vec![],
+            }])
+        }
+    }
+
+    #[test]
+    fn each_final_is_prompted_with_the_text_committed_before_it() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let w = EngineWorker::spawn(Box::new(Prompts(Arc::clone(&prompts))));
+        let ctx = Context::new("Før.");
+        let quick = TranscribeOptions {
+            fast: true,
+            ..Default::default()
+        };
+        // Both queued before either has run.
+        let a = w.submit_two_pass(
+            vec![1.0],
+            quick.clone(),
+            TranscribeOptions::default(),
+            |_| true,
+            Some(&ctx),
+        );
+        let b = w.submit_two_pass(
+            vec![2.0],
+            quick,
+            TranscribeOptions::default(),
+            |_| true,
+            Some(&ctx),
+        );
+        for rx in [&a, &a, &b, &b] {
+            rx.recv().unwrap().unwrap();
+        }
+        let p: Vec<Option<String>> = prompts.lock().unwrap().clone();
+        assert_eq!(
+            p,
+            [
+                Some("Før.".to_string()),
+                Some("Før.".into()),
+                Some("Før. Ord 1.".into()),
+                Some("Før. Ord 1.".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_command_and_a_preview_add_nothing_to_the_context() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let w = EngineWorker::spawn(Box::new(Prompts(Arc::clone(&prompts))));
+        let ctx = Context::new("");
+        let cmd = w.submit_two_pass(
+            vec![1.0],
+            TranscribeOptions::default(),
+            TranscribeOptions::default(),
+            |_| false,
+            Some(&ctx),
+        );
+        cmd.recv().unwrap().unwrap();
+        w.submit_with(
+            vec![2.0],
+            TranscribeOptions::default(),
+            Priority::LivePartial,
+            Some(&ctx),
+        )
+        .recv()
+        .unwrap()
+        .unwrap();
+        w.submit_two_pass(
+            vec![3.0],
+            TranscribeOptions::default(),
+            TranscribeOptions::default(),
+            |_| true,
+            Some(&ctx),
+        );
+        let last = w.submit_two_pass(
+            vec![4.0],
+            TranscribeOptions::default(),
+            TranscribeOptions::default(),
+            |_| true,
+            Some(&ctx),
+        );
+        last.recv().unwrap().unwrap();
+        last.recv().unwrap().unwrap();
+        let p = prompts.lock().unwrap().clone();
+        assert_eq!(p[0], None, "nothing committed yet");
+        assert_eq!(p[1], None, "a command is not text");
+        assert_eq!(p[2], None, "a preview is not committed");
+        assert_eq!(p.last().unwrap().as_deref(), Some("Ord 3."));
+    }
+
+    #[test]
+    fn the_context_is_the_last_two_hundred_characters() {
+        let ctx = Context::new(&"a".repeat(300));
+        assert_eq!(ctx.prompt().unwrap().chars().count(), 200);
+        assert_eq!(Context::new("  ").prompt(), None);
+    }
+
     #[test]
     fn a_two_pass_job_runs_both_passes_before_the_next_job() {
         let (w, seen, gate) = worker();
@@ -243,8 +459,14 @@ pub(crate) mod tests {
             fast: true,
             ..Default::default()
         };
-        let a = w.submit_two_pass(vec![1.0], quick.clone(), TranscribeOptions::default(), |_| true);
-        let b = w.submit_two_pass(vec![2.0], quick, TranscribeOptions::default(), |_| true);
+        let a = w.submit_two_pass(
+            vec![1.0],
+            quick.clone(),
+            TranscribeOptions::default(),
+            |_| true,
+            None,
+        );
+        let b = w.submit_two_pass(vec![2.0], quick, TranscribeOptions::default(), |_| true, None);
         gate.store(false, Ordering::SeqCst);
         for rx in [&a, &a, &b, &b] {
             rx.recv().unwrap().unwrap();
@@ -260,6 +482,7 @@ pub(crate) mod tests {
             TranscribeOptions::default(),
             TranscribeOptions::default(),
             |r| r.as_ref().map_or(true, |s| s[0].text != "3"),
+            None,
         );
         gate.store(false, Ordering::SeqCst);
         rx.recv().unwrap().unwrap();

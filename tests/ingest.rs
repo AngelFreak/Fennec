@@ -250,3 +250,41 @@ fn imported_files_are_corrected_by_the_vocabulary_not_prompted_with_it() {
         "{texts:?}"
     );
 }
+
+#[test]
+fn with_a_model_that_takes_context_each_chunk_hears_the_one_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp3 = two_utterances_mp3(dir.path());
+    let store = Store::open(&dir.path().join("fennec.db")).unwrap();
+    let doc = store.create_document(&NewDocument::file("Møde")).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let opts = IngestOptions {
+        context: true,
+        // Several chunks from the two utterances.
+        max_chunk_ms: 4_000,
+        ..Default::default()
+    };
+    let mut vad = SileroVad::load(&model("ggml-silero-v6.2.0.bin"), 2).unwrap();
+    ingest_file(
+        &mp3,
+        doc,
+        &store,
+        Recognizer {
+            engine: &mut Hears(Arc::clone(&calls)),
+            vad: &mut vad,
+        },
+        &opts,
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let prompts: Vec<Option<String>> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|o| o.initial_prompt.clone())
+        .collect();
+    assert!(prompts.len() >= 2, "{prompts:?}");
+    assert_eq!(prompts[0], None);
+    assert_eq!(prompts[1].as_deref(), Some("Vi mødes på Nørregarde."));
+}

@@ -100,7 +100,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            model: "edda-v0.1-q5_0.bin".into(),
+            model: "edda-v0.2-q5_0.bin".into(),
             backend: Backend::Auto,
             microphone: String::new(),
             input_gain_db: 0.0,
@@ -228,7 +228,7 @@ mod tests {
         let paths = Paths::under(Path::new("/r"));
         assert_eq!(
             Settings::default().model_path(&paths),
-            Path::new("/r/data/models/edda-v0.1-q5_0.bin")
+            Path::new("/r/data/models/edda-v0.2-q5_0.bin")
         );
         let abs = Settings {
             model: "/m/x.bin".into(),

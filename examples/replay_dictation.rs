@@ -16,7 +16,8 @@ fn main() {
     let pcm = read_wav_16k_mono(std::path::Path::new(&a[1])).unwrap();
     let stop_after: Option<f64> = a.get(2).and_then(|s| s.parse().ok());
     let models = fennec::config::Paths::user().models();
-    let engine = load_engine(&models.join("edda-v0.1-q5_0.bin"), true).unwrap();
+    let model = fennec::config::Settings::default().model;
+    let engine = load_engine(&models.join(&model), true).unwrap();
     let vad = SileroFrameVad::load(&models.join("ggml-silero-v6.2.0.bin")).unwrap();
     let worker = Arc::new(EngineWorker::spawn(engine));
     let t0 = std::time::Instant::now();
@@ -30,6 +31,7 @@ fn main() {
         worker,
         LiveConfig {
             show_preview: std::env::var_os("NOPREVIEW").is_none(),
+            context: fennec::models::takes_context(&model).then(String::new),
             ..LiveConfig::default()
         },
         Arc::new(move |e| match e {

@@ -459,3 +459,40 @@ fn long_utterances_go_straight_to_the_accurate_pass() {
     );
     assert_eq!(*calls.lock().unwrap(), [false]);
 }
+
+#[test]
+fn a_model_that_takes_context_hears_the_sentence_before_each_utterance() {
+    let mut audio = Vec::new();
+    for _ in 0..2 {
+        audio.extend(tone(1.0));
+        audio.extend(silence(1.0));
+    }
+    audio.extend(tone(4.0));
+    audio.extend(silence(1.0));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(Recording(Arc::clone(&calls), "Det regner.")),
+        LiveConfig {
+            context: Some("Sagen gælder Nørregade 14.".into()),
+            ..Default::default()
+        },
+    );
+    let finals: Vec<Option<String>> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|o| !o.fast)
+        .map(|o| o.initial_prompt.clone())
+        .collect();
+    assert_eq!(
+        finals,
+        [
+            Some("Sagen gælder Nørregade 14.".to_string()),
+            Some("Sagen gælder Nørregade 14. Det regner.".into()),
+            // The long one (no quick pass) too.
+            Some("Sagen gælder Nørregade 14. Det regner. Det regner.".into()),
+        ]
+    );
+}

@@ -637,6 +637,14 @@ impl DictationPage {
             show_preview: settings.show_preview,
             record_to,
             offset_ms,
+            context: crate::models::takes_context(&settings.model).then(|| {
+                let paragraphs = self.editor.paragraphs();
+                paragraphs
+                    .iter()
+                    .map(|p| p.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
             ..Default::default()
         };
         let (tx, rx) = async_channel::unbounded();

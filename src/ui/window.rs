@@ -665,7 +665,7 @@ fn new_export_button() -> gtk::Button {
     b
 }
 
-/// "Edda v0.1 · Vulkan": the model's catalog name where known, and the
+/// "Edda v0.2 · Vulkan": the model's catalog name where known, and the
 /// compute it will use.
 fn model_label(settings: &crate::config::Settings) -> String {
     let name = crate::models::catalog()

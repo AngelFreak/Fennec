@@ -193,7 +193,7 @@ viceværten været kendt siden sidste vinter.\n\n**Opfølgning**\n- Undersøg ne
 /// Seeds the database the way the mockup's sidebar and lists show it.
 fn seed(root: &Path) -> (DocumentId, ProjectId, DocumentId) {
     std::fs::create_dir_all(root.join("data/models")).unwrap();
-    std::fs::write(root.join("data/models/edda-v0.1-q5_0.bin"), b"stand-in").unwrap();
+    std::fs::write(root.join("data/models/edda-v0.2-q5_0.bin"), b"stand-in").unwrap();
     let path = root.join("data/fennec.db");
     let store = Store::open(&path).unwrap();
     let db = rusqlite::Connection::open(&path).unwrap();

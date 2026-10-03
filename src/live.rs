@@ -18,7 +18,7 @@ use crate::commands::{Command, CommandTable};
 use crate::engine::{SAMPLE_RATE, TranscribeOptions};
 use crate::utterance::{FrameVad, Utterance, UtteranceBuilder, UtteranceConfig, UtteranceEvent};
 use crate::vocabulary::Vocabulary;
-use crate::worker::{EngineWorker, Priority, Reply};
+use crate::worker::{Context, EngineWorker, Priority, Reply};
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
@@ -31,6 +31,11 @@ pub struct LiveConfig {
     pub record_to: Option<PathBuf>,
     /// Added to event times, for dictation that continues a document.
     pub offset_ms: i64,
+    /// For models trained to take the previous sentence as context (Edda
+    /// v0.2): the document's text so far. Each utterance is then prompted
+    /// with the text committed before it. `None` for models that a prompt
+    /// breaks.
+    pub context: Option<String>,
 }
 
 impl Default for LiveConfig {
@@ -43,6 +48,7 @@ impl Default for LiveConfig {
             show_preview: true,
             record_to: None,
             offset_ms: 0,
+            context: None,
         }
     }
 }
@@ -118,14 +124,20 @@ impl LiveSession {
                         }
                     });
                     let opts_for = |fast: bool| options(&cfg, fast);
+                    let context = cfg.context.as_deref().map(Context::new);
+                    let context = context.as_ref();
                     let handle = |events: Vec<UtteranceEvent>| {
                         for ev in events {
                             match ev {
                                 UtteranceEvent::Started { .. } => on_event(LiveEvent::SpeechStarted),
                                 UtteranceEvent::Partial(u) => {
                                     if cfg.show_preview && !worker.is_busy() {
-                                        let rx =
-                                            worker.submit(u.samples, opts_for(true), Priority::LivePartial);
+                                        let rx = worker.submit_with(
+                                            u.samples,
+                                            opts_for(true),
+                                            Priority::LivePartial,
+                                            context,
+                                        );
                                         let _ = pending_tx.send(Pending::Preview(u.id, rx));
                                     }
                                 }
@@ -140,15 +152,12 @@ impl LiveSession {
                                             Ok(segs) => commands.match_utterance(&join(segs).0).is_none(),
                                             Err(_) => true,
                                         },
+                                        context,
                                     );
                                     let _ = pending_tx.send(Pending::Quick(u, rx));
                                 }
                                 UtteranceEvent::Final(u) => {
-                                    let rx = worker.submit(
-                                        u.samples.clone(),
-                                        opts_for(false),
-                                        Priority::LiveFinal,
-                                    );
+                                    let rx = worker.submit_final(u.samples.clone(), opts_for(false), context);
                                     let _ = pending_tx.send(Pending::Final(u, rx));
                                 }
                             }

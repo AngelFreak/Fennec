@@ -10,6 +10,7 @@ use crate::paragraphs::ParagraphBuilder;
 use crate::store::{DocumentId, Paragraph, Store, StoreError};
 use crate::vad::{SpeechDetector, VadError, chunk_speech};
 use crate::vocabulary::Vocabulary;
+use crate::worker::Context;
 
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
@@ -17,6 +18,9 @@ pub struct IngestOptions {
     /// Names and terms the transcript is corrected towards.
     pub vocabulary: String,
     pub paragraph_gap_ms: i64,
+    /// Prompt each chunk with the text before it, for models trained that
+    /// way (Edda v0.2); others are harmed by any prompt.
+    pub context: bool,
     /// Whisper's window is 30 s; chunks stay below that.
     pub max_chunk_ms: i64,
 }
@@ -26,6 +30,7 @@ impl Default for IngestOptions {
         Self {
             transcribe: TranscribeOptions::default(),
             vocabulary: String::new(),
+            context: false,
             paragraph_gap_ms: 1_500,
             max_chunk_ms: 25_000,
         }
@@ -103,6 +108,7 @@ pub fn ingest_file(
         };
 
     let vocabulary = Vocabulary::parse(&opts.vocabulary);
+    let context = opts.context.then(|| Context::new(""));
     for chunk in &chunks {
         if cancel.load(Ordering::Relaxed) {
             if let Some(p) = builder.finish() {
@@ -111,7 +117,20 @@ pub fn ingest_file(
             return Err(IngestError::Cancelled);
         }
         let offset = samples_to_ms(chunk.start);
-        let segments = models.engine.transcribe(&pcm[chunk.clone()], &opts.transcribe)?;
+        let mut t = opts.transcribe.clone();
+        if let Some(c) = &context {
+            t.initial_prompt = c.prompt();
+        }
+        let segments = models.engine.transcribe(&pcm[chunk.clone()], &t)?;
+        if let Some(c) = &context {
+            c.push(
+                &segments
+                    .iter()
+                    .map(|s| s.text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+        }
         // Engines may return empty segments for silence; they are not paragraphs.
         for mut seg in segments.into_iter().filter(|s| !s.text.trim().is_empty()) {
             (seg.text, seg.low_confidence) = vocabulary.correct(&seg.text, &seg.low_confidence);

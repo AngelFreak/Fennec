@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! fennec-bench --manifest set.tsv [--skip N] [--limit N] [--speed N] [--gpu]
-//!              [--prompt TEXT] [--fast] [--pairs] [--vocab TERMS] [--dump FILE] model.bin...
+//!              [--prompt TEXT] [--fast] [--pairs] [--context] [--vocab TERMS] [--dump FILE] model.bin...
 //! ```
 //!
 //! `--pairs` joins the clips two by two with a short pause, like dictating
@@ -33,6 +33,9 @@ struct Args {
     prompt: Option<String>,
     fast: bool,
     pairs: bool,
+    /// Prompts each clip with another clip's text, as live dictation would
+    /// with the sentence before.
+    context: bool,
     /// Corrects transcripts with this vocabulary, as the app does.
     vocab: Option<String>,
     /// Writes every `reference<TAB>hypothesis` here.
@@ -156,6 +159,10 @@ fn accuracy_of(model: &Path, args: &Args, clips: &[Clip], threads: usize) -> Res
         worst: Vec::new(),
     };
     for (i, clip) in clips.iter().enumerate() {
+        let mut opts = opts.clone();
+        if args.context {
+            opts.initial_prompt = Some(context_for(clips, i));
+        }
         let mut hyp = join_text(&engine.transcribe(&clip.pcm, &opts)?);
         if let Some(v) = &args.vocab {
             hyp = fennec::vocabulary::Vocabulary::parse(v).correct(&hyp, &[]).0;
@@ -205,6 +212,19 @@ fn join_text(segments: &[fennec::engine::Segment]) -> String {
         .map(|s| s.text.as_str())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The last 200 characters of a different sentence: neighbouring FLEURS
+/// clips are often the same sentence read again, which would leak the answer.
+fn context_for(clips: &[Clip], i: usize) -> String {
+    let n = clips.len();
+    let other = (1..n)
+        .map(|k| &clips[(i + n / 3 + k) % n].reference)
+        .find(|r| **r != clips[i].reference)
+        .cloned()
+        .unwrap_or_default();
+    let chars: Vec<char> = other.chars().collect();
+    chars[chars.len().saturating_sub(200)..].iter().collect()
 }
 
 /// Clip i joined with clip i + n/2 (neighbours are often the same
@@ -266,6 +286,7 @@ fn parse_args() -> Result<Args> {
         prompt: None,
         fast: false,
         pairs: false,
+        context: false,
         vocab: None,
         dump: None,
         models: Vec::new(),
@@ -281,6 +302,7 @@ fn parse_args() -> Result<Args> {
             "--prompt" => args.prompt = Some(it.next().context("--prompt needs a text")?),
             "--fast" => args.fast = true,
             "--pairs" => args.pairs = true,
+            "--context" => args.context = true,
             "--vocab" => args.vocab = Some(it.next().context("--vocab needs terms")?),
             "--dump" => args.dump = Some(it.next().context("--dump needs a path")?.into()),
             _ if a.starts_with("--") => bail!("unknown option {a}"),

@@ -33,15 +33,34 @@ pub struct CatalogModel {
     pub mean_wer: Option<&'static str>,
     pub file_name: &'static str,
     pub source: Source,
+    /// Trained to take the previous sentence as a prompt. For other models
+    /// a prompt does harm: Edda v0.1 loops (FLEURS WER 7.8% → 87.7%).
+    pub takes_context: bool,
 }
 
 pub fn catalog() -> Vec<CatalogModel> {
     vec![
         CatalogModel {
             id: "edda",
+            name: "Edda v0.2",
+            publisher: "Danish Foundation Models",
+            description: "Whisper large-v3-turbo, 0.8B parameters. Fast enough for live dictation, and hears the sentence before, which keeps its punctuation.",
+            license: "Apache 2.0",
+            non_commercial: false,
+            size: "q5_0 · ~550 MB",
+            mean_wer: Some("8.8%"),
+            file_name: "edda-v0.2-q5_0.bin",
+            source: Source::Convert {
+                repo: "danish-foundation-models/edda-v0.2",
+                quant: "q5_0",
+            },
+            takes_context: true,
+        },
+        CatalogModel {
+            id: "edda-v0.1",
             name: "Edda v0.1",
-            publisher: "Alexandra Institute",
-            description: "Whisper large-v3-turbo, 0.8B parameters. Fastest of the large models; a good fit for live dictation.",
+            publisher: "Danish Foundation Models",
+            description: "The first Edda. Leaves out punctuation in about half its sentences; v0.2 replaces it.",
             license: "Apache 2.0",
             non_commercial: false,
             size: "q5_0 · ~550 MB",
@@ -51,6 +70,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 repo: "danish-foundation-models/edda-v0.1",
                 quant: "q5_0",
             },
+            takes_context: false,
         },
         CatalogModel {
             id: "hviske-v3",
@@ -66,6 +86,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 repo: "syvai/hviske-v3-conversation",
                 quant: "q5_0",
             },
+            takes_context: false,
         },
         CatalogModel {
             id: "roest-v3",
@@ -81,6 +102,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 repo: "alfanova/roest-v3-whisper-ggml",
                 file: "roest-v3-q8_0.bin",
             },
+            takes_context: false,
         },
         CatalogModel {
             id: "hviske-v6",
@@ -95,8 +117,19 @@ pub fn catalog() -> Vec<CatalogModel> {
             source: Source::Snapshot {
                 repo: "syvai/hviske-v6",
             },
+            takes_context: false,
         },
     ]
+}
+
+/// Whether the model in this file (a catalogue file name or a path) takes
+/// the previous sentence as context.
+pub fn takes_context(model: &str) -> bool {
+    let name = Path::new(model)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(model);
+    catalog().iter().any(|m| m.file_name == name && m.takes_context)
 }
 
 pub fn path_of(model: &CatalogModel, paths: &Paths) -> PathBuf {
@@ -445,6 +478,16 @@ mod tests {
     }
 
     #[test]
+    fn only_models_trained_with_the_previous_sentence_take_context() {
+        assert!(takes_context("edda-v0.2-q5_0.bin"));
+        assert!(takes_context("/somewhere/models/edda-v0.2-q5_0.bin"));
+        // A prompt makes Edda v0.1 loop (FLEURS WER 7.8% → 87.7%).
+        assert!(!takes_context("edda-v0.1-q5_0.bin"));
+        assert!(!takes_context("roest-v3-q8_0.bin"));
+        assert!(!takes_context("min-model.bin"));
+    }
+
+    #[test]
     fn hviske_v6_counts_as_installed_only_with_its_weights() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
@@ -483,7 +526,7 @@ mod tests {
         let paths = Paths::under(dir.path());
         std::fs::create_dir_all(paths.models()).unwrap();
         for f in [
-            "edda-v0.1-q5_0.bin",
+            "edda-v0.2-q5_0.bin",
             "ggml-silero-v6.2.0.bin",
             "min-model.bin",
             "notes.txt",

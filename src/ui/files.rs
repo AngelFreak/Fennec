@@ -642,6 +642,7 @@ impl FilesPage {
                 };
                 let mut opts = IngestOptions {
                     vocabulary: settings.vocabulary.clone(),
+                    context: crate::models::takes_context(&settings.model),
                     ..Default::default()
                 };
                 for job in job_rx {

@@ -23,6 +23,9 @@ use support::{MockLlm, Recorded, Reply, Wire};
 
 static mut FAILURES: usize = 0;
 
+/// Every prompt the scripted engine was given.
+static PROMPTS: std::sync::Mutex<Vec<Option<String>>> = std::sync::Mutex::new(Vec::new());
+
 fn check(name: &str, ok: bool) {
     println!("{} {name}", if ok { "ok  " } else { "FAIL" });
     if !ok {
@@ -62,9 +65,10 @@ fn same_utterance(a: &[f32], b: &[f32]) -> bool {
 }
 
 impl Transcriber for Scripted {
-    fn transcribe(&mut self, pcm: &[f32], _: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
+    fn transcribe(&mut self, pcm: &[f32], o: &TranscribeOptions) -> Result<Vec<Segment>, EngineError> {
         // A real engine takes a while; the interface must not wait for it.
         std::thread::sleep(Duration::from_millis(200));
+        PROMPTS.lock().unwrap().push(o.initial_prompt.clone());
         let text = match &self.last {
             // A preview's audio is the start of its utterance's.
             Some((last, text)) if same_utterance(last, pcm) => text,
@@ -244,6 +248,15 @@ fn main() {
         .map(|p| p.text)
         .collect();
     check("dictated text is saved to the database", saved == texts);
+    let prompts = PROMPTS.lock().unwrap().clone();
+    check(
+        "Edda v0.2 hears the sentence before; spoken commands are not part of it",
+        prompts.iter().flatten().any(|p| p.contains("Første sætning"))
+            && !prompts
+                .iter()
+                .flatten()
+                .any(|p| p.contains("Punktum") || p.contains("optagelse")),
+    );
     w.window.present();
     screenshot(&w.window, "dictate");
     pump_until(Duration::from_millis(300), || w.sidebar.root.width() > 0);
@@ -615,7 +628,7 @@ fn main() {
     check("Settings opens", w.visible_page() == "settings");
     check(
         "the catalog lists Edda first",
-        w.settings.model_names().first().map(String::as_str) == Some("Edda v0.1"),
+        w.settings.model_names().first().map(String::as_str) == Some("Edda v0.2"),
     );
     let custom = tmp.path().join("min-model.bin");
     std::fs::write(&custom, b"not a real model").unwrap();
