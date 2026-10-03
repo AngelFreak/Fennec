@@ -68,6 +68,10 @@ pub type ConfirmCloud = Rc<dyn Fn(&gtk::Widget, &CloudSend, Box<dyn FnOnce(bool)
 /// Loads the punctuation model (slow: a few seconds), off the main thread.
 pub type PunctuatorFactory =
     Arc<dyn Fn(&Paths) -> Result<Arc<dyn crate::punctuation::Punctuate>, String> + Send + Sync>;
+/// Downloads what dictation is missing (first-run setup), off the main thread.
+pub type SetupFetch = Arc<
+    dyn Fn(&Paths, &Settings, &mut dyn FnMut(crate::models::Progress)) -> Result<(), String> + Send + Sync,
+>;
 pub type VadFactory = Arc<dyn Fn(&Settings, &Paths) -> Result<Box<dyn FrameVad>, String> + Send + Sync>;
 
 #[derive(Clone)]
@@ -81,6 +85,7 @@ pub struct Deps {
     /// Voice detection for whole files (import).
     pub file_vad: FileVadFactory,
     pub punctuator: PunctuatorFactory,
+    pub setup: SetupFetch,
     /// Where AI provider API keys live.
     pub secrets: Arc<dyn crate::ai::SecretStore>,
     pub confirm_cloud: ConfirmCloud,
@@ -132,6 +137,9 @@ impl Deps {
                 crate::punctuation::Punctuator::load(&p.models().join(crate::punctuation::DIR))
                     .map(|m| Arc::new(m) as Arc<dyn crate::punctuation::Punctuate>)
                     .map_err(|e| e.to_string())
+            }),
+            setup: Arc::new(|p, s, progress| {
+                crate::models::fetch_for_dictation(p, s, &std::sync::atomic::AtomicBool::new(false), progress)
             }),
             secrets: Arc::new(crate::ai::Keyring),
             confirm_cloud: Rc::new(ai::confirm_with_dialog),

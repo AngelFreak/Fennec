@@ -123,6 +123,9 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
     for f in fennec::punctuation::FILES {
         std::fs::write(punct.join(f), b"stand-in").unwrap();
     }
+    let models = Paths::under(root).models();
+    std::fs::write(models.join(&Settings::default().model), b"stand-in").unwrap();
+    std::fs::write(models.join(fennec::models::VAD_FILE), b"stand-in").unwrap();
     let n_tones = lines.len().max(3);
     let lines = Arc::new(lines);
     Deps {
@@ -143,6 +146,20 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(WholeAudio) as Box<dyn SpeechDetector>),
         punctuator: Arc::new(|_| Ok(Arc::new(EndsSentences) as Arc<dyn fennec::punctuation::Punctuate>)),
+        setup: Arc::new(|p, s, progress| {
+            // Stands in for the downloads: a few placeholder files.
+            progress(fennec::models::Progress::Bytes {
+                done: 1,
+                total: Some(2),
+            });
+            std::fs::create_dir_all(p.models().join(fennec::punctuation::DIR)).unwrap();
+            std::fs::write(s.model_path(p), b"stand-in").unwrap();
+            std::fs::write(p.models().join(fennec::models::VAD_FILE), b"stand-in").unwrap();
+            for f in fennec::punctuation::FILES {
+                std::fs::write(p.models().join(fennec::punctuation::DIR).join(f), b"stand-in").unwrap();
+            }
+            Ok(())
+        }),
         secrets: Arc::new(fennec::ai::MemorySecrets::default()),
         confirm_cloud: std::rc::Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -811,6 +828,33 @@ fn main() {
     screenshot(&w.window, "settings-storage");
     w.settings.audio_retention.set_selected(0);
     w.settings.show_section("model");
+
+    // --- first run: one download of everything dictation needs
+    let root_s = tmp.path().join("setup");
+    let d = deps(&root_s, vec![], true);
+    let models = d.paths.models();
+    std::fs::remove_file(models.join(&Settings::default().model)).unwrap();
+    std::fs::remove_file(models.join(fennec::models::VAD_FILE)).unwrap();
+    std::fs::remove_dir_all(models.join(fennec::punctuation::DIR)).unwrap();
+    let ws = ui::build_window(d);
+    check(
+        "a fresh install offers to download what dictation needs",
+        ws.dictation.setup_shown()
+            && ui::texts_in(&ws.dictation.root)
+                .iter()
+                .any(|t| t.contains("speech model") && t.contains("punctuation model")),
+    );
+    ws.dictation.start_setup();
+    check(
+        "after the download the offer goes and dictation is ready",
+        pump_until(Duration::from_secs(10), || {
+            !ws.dictation.setup_shown() && ws.dictation.model_loaded() && ws.dictation.punctuator_loaded()
+        }),
+    );
+    check(
+        "with everything installed there is no offer",
+        !w.dictation.setup_shown(),
+    );
 
     // --- a missing model explains itself instead of failing silently
     let root_b = tmp.path().join("b");

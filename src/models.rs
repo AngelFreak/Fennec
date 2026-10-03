@@ -254,6 +254,55 @@ pub fn ensure_vad(paths: &Paths, cancel: &AtomicBool, progress: impl FnMut(Progr
     download(&hf_url(VAD_REPO, VAD_FILE), &dest, cancel, progress)
 }
 
+/// What dictation still needs downloaded, as phrases for the setup prompt.
+pub fn missing_for_dictation(paths: &Paths, settings: &crate::config::Settings) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if !settings.model_path(paths).exists() {
+        missing.push("the Danish speech model");
+    }
+    if !paths.models().join(VAD_FILE).exists() {
+        missing.push("the voice detector");
+    }
+    if settings.punctuate && !crate::punctuation::installed(&paths.models().join(crate::punctuation::DIR)) {
+        missing.push("the punctuation model");
+    }
+    missing
+}
+
+/// Downloads everything dictation needs that is missing: the chosen speech
+/// model (if it can be downloaded ready to use), the voice detector and,
+/// if wanted, the punctuation model.
+pub fn fetch_for_dictation(
+    paths: &Paths,
+    settings: &crate::config::Settings,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> Result<(), String> {
+    let model = settings.model_path(paths);
+    if !model.exists() {
+        let name = model.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        match catalog()
+            .into_iter()
+            .find(|m| m.file_name == name)
+            .map(|m| m.source)
+        {
+            Some(Source::Ggml { repo, file }) => {
+                download(&hf_url(repo, file), &model, cancel, &mut progress)?
+            }
+            _ => {
+                return Err(format!(
+                    "{name} cannot be downloaded ready to use; choose a model in Settings"
+                ));
+            }
+        }
+    }
+    ensure_vad(paths, cancel, &mut progress)?;
+    if settings.punctuate {
+        ensure_punctuation(paths, cancel, &mut progress)?;
+    }
+    Ok(())
+}
+
 /// Downloads the Danish punctuation model if it is missing (about 440 MB).
 pub fn ensure_punctuation(
     paths: &Paths,
@@ -498,6 +547,20 @@ mod tests {
             crate::config::Settings::default().model,
             "the default setting names Edda"
         );
+    }
+
+    #[test]
+    fn setup_lists_what_dictation_still_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let mut s = crate::config::Settings::default();
+        assert_eq!(missing_for_dictation(&paths, &s).len(), 3);
+        std::fs::create_dir_all(paths.models()).unwrap();
+        std::fs::write(paths.models().join(&s.model), b"x").unwrap();
+        std::fs::write(paths.models().join(VAD_FILE), b"x").unwrap();
+        assert_eq!(missing_for_dictation(&paths, &s), ["the punctuation model"]);
+        s.punctuate = false;
+        assert!(missing_for_dictation(&paths, &s).is_empty());
     }
 
     #[test]

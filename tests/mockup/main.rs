@@ -194,6 +194,16 @@ viceværten været kendt siden sidste vinter.\n\n**Opfølgning**\n- Undersøg ne
 fn seed(root: &Path) -> (DocumentId, ProjectId, DocumentId) {
     std::fs::create_dir_all(root.join("data/models")).unwrap();
     std::fs::write(root.join("data/models/edda-v0.2-q5_0.bin"), b"stand-in").unwrap();
+    std::fs::write(
+        root.join("data/models").join(fennec::models::VAD_FILE),
+        b"stand-in",
+    )
+    .unwrap();
+    let punct = root.join("data/models").join(fennec::punctuation::DIR);
+    std::fs::create_dir_all(&punct).unwrap();
+    for f in fennec::punctuation::FILES {
+        std::fs::write(punct.join(f), b"stand-in").unwrap();
+    }
     let path = root.join("data/fennec.db");
     let store = Store::open(&path).unwrap();
     let db = rusqlite::Connection::open(&path).unwrap();
@@ -626,6 +636,20 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
         vad: Arc::new(|_, _| Ok(Box::new(EnergyVad::default()) as Box<dyn FrameVad>)),
         file_vad: Arc::new(|_, _| Box::new(files::EverySecond) as Box<dyn SpeechDetector>),
         punctuator: Arc::new(|_| Ok(Arc::new(EndsSentences) as Arc<dyn fennec::punctuation::Punctuate>)),
+        setup: Arc::new(|p, s, progress| {
+            // Stands in for the downloads: a few placeholder files.
+            progress(fennec::models::Progress::Bytes {
+                done: 1,
+                total: Some(2),
+            });
+            std::fs::create_dir_all(p.models().join(fennec::punctuation::DIR)).unwrap();
+            std::fs::write(s.model_path(p), b"stand-in").unwrap();
+            std::fs::write(p.models().join(fennec::models::VAD_FILE), b"stand-in").unwrap();
+            for f in fennec::punctuation::FILES {
+                std::fs::write(p.models().join(fennec::punctuation::DIR).join(f), b"stand-in").unwrap();
+            }
+            Ok(())
+        }),
         secrets: Arc::new(MemorySecrets::with("claude", "sk-ant-mockup")),
         confirm_cloud: Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),

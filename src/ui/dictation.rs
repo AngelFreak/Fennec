@@ -76,6 +76,10 @@ pub struct DictationPage {
     learn: RefCell<Option<(String, String)>>,
     learn_bar: gtk::Revealer,
     learn_label: gtk::Label,
+    /// First run: what dictation still needs downloaded.
+    setup_bar: gtk::Revealer,
+    setup_label: gtk::Label,
+    setup_button: gtk::Button,
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
     on_document_changed: super::Handler<()>,
@@ -171,6 +175,21 @@ impl DictationPage {
             .child(&learn_box)
             .reveal_child(false)
             .build();
+        let setup_label = label("", &["fx-learn-text"]);
+        setup_label.set_wrap(true);
+        setup_label.set_xalign(0.0);
+        setup_label.set_hexpand(true);
+        let setup_button = gtk::Button::with_label("Download");
+        setup_button.add_css_class("fx-primary");
+        let setup_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        setup_box.add_css_class("fx-learn");
+        setup_box.append(&setup_label);
+        setup_box.append(&setup_button);
+        let setup_bar = gtk::Revealer::builder()
+            .child(&setup_box)
+            .reveal_child(false)
+            .build();
+        column.append(&setup_bar);
         column.append(&learn_bar);
         column.append(&chips);
         column.append(&title);
@@ -260,6 +279,9 @@ impl DictationPage {
             learn: RefCell::default(),
             learn_bar,
             learn_label,
+            setup_bar,
+            setup_label,
+            setup_button: setup_button.clone(),
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
             on_document_changed: RefCell::default(),
@@ -278,6 +300,13 @@ impl DictationPage {
                 p.dismiss_learn();
             }
         });
+        let weak = Rc::downgrade(&page);
+        setup_button.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.start_setup();
+            }
+        });
+        page.refresh_setup();
         page.load_punctuator();
         page.wire();
         page.build_ai_menu();
@@ -645,6 +674,71 @@ impl DictationPage {
             };
             if let Some(open) = queued {
                 page.repunctuate(open);
+            }
+        });
+    }
+
+    /// Shows the first-run offer if dictation still needs downloads.
+    fn refresh_setup(&self) {
+        let missing = crate::models::missing_for_dictation(&self.deps.paths, &self.deps.settings());
+        let Some((last, rest)) = missing.split_last() else {
+            self.setup_bar.set_reveal_child(false);
+            return;
+        };
+        let list = if rest.is_empty() {
+            last.to_string()
+        } else {
+            format!("{} and {last}", rest.join(", "))
+        };
+        self.setup_label.set_text(&format!(
+            "To dictate, Fennec needs {list} (up to about 1 GB). They run on this computer; nothing you say leaves it."
+        ));
+        self.setup_button.set_label("Download");
+        self.setup_button.set_sensitive(true);
+        self.setup_bar.set_reveal_child(true);
+    }
+
+    pub fn setup_shown(&self) -> bool {
+        self.setup_bar.reveals_child()
+    }
+
+    /// Downloads what dictation needs, then loads the models.
+    pub fn start_setup(self: &Rc<Self>) {
+        self.setup_button.set_sensitive(false);
+        self.setup_label.set_text("Downloading…");
+        let (tx, rx) = async_channel::unbounded::<Result<crate::models::Progress, Result<(), String>>>();
+        let (fetch, paths, settings) = (
+            Arc::clone(&self.deps.setup),
+            self.deps.paths.clone(),
+            self.deps.settings(),
+        );
+        std::thread::spawn(move || {
+            let result = fetch(&paths, &settings, &mut |p| {
+                let _ = tx.send_blocking(Ok(p));
+            });
+            let _ = tx.send_blocking(Err(result));
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok(msg) = rx.recv().await {
+                let Some(page) = weak.upgrade() else { return };
+                match msg {
+                    Ok(crate::models::Progress::Bytes { done, .. }) => page
+                        .setup_label
+                        .set_text(&format!("Downloading… {} MB", done / 1_000_000)),
+                    Ok(crate::models::Progress::Line(l)) => page.setup_label.set_text(&l),
+                    Err(Ok(())) => {
+                        page.refresh_setup();
+                        page.engine.reset();
+                        page.engine.with_worker(|_| {});
+                        page.load_punctuator();
+                    }
+                    Err(Err(e)) => {
+                        page.setup_label.set_text(&format!("The download failed: {e}"));
+                        page.setup_button.set_label("Try again");
+                        page.setup_button.set_sensitive(true);
+                    }
+                }
             }
         });
     }
