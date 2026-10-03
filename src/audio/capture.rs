@@ -188,47 +188,16 @@ fn mic_thread(
         let config = device
             .default_input_config()
             .map_err(|e| CaptureError::Open(e.to_string()))?;
-        let channels = config.channels() as usize;
-        let rate = config.sample_rate();
-        let mut resampler = StreamResampler::new(rate).map_err(CaptureError::Open)?;
-        let data_tx = tx.clone();
-        let err_tx = tx.clone();
-        let mut settle = Settle::default();
-        let mut send = move |mut mono: Vec<f32>| {
-            apply_gain(&mut mono, gain);
-            let out = resampler.push(&mono);
-            if !out.is_empty() && settle.pass(&out) {
-                // A full channel means the consumer is gone or stalled; drop audio rather than block the callback.
-                let _ = data_tx.try_send(Ok(out));
+        // The sound server's default buffer is about 170 ms here, and
+        // starting it blocked for 2 s; 10 ms starts in about 40 ms.
+        let small = small_buffer(config.sample_rate(), config.buffer_size());
+        open_stream(&device, &config, small, gain, &tx).or_else(|e| {
+            if small == cpal::BufferSize::Default {
+                return Err(e);
             }
-        };
-        let err_fn = move |e: cpal::Error| {
-            let _ = err_tx.try_send(Err(CaptureError::Stream(e.to_string())));
-        };
-        let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => device.build_input_stream(
-                config.into(),
-                move |data: &[f32], _: &_| send(downmix(data, channels, |s| s)),
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::I16 => device.build_input_stream(
-                config.into(),
-                move |data: &[i16], _: &_| send(downmix(data, channels, |s| f32::from(s) / 32768.0)),
-                err_fn,
-                None,
-            ),
-            cpal::SampleFormat::I32 => device.build_input_stream(
-                config.into(),
-                move |data: &[i32], _: &_| send(downmix(data, channels, |s| s as f32 / 2_147_483_648.0)),
-                err_fn,
-                None,
-            ),
-            other => return Err(CaptureError::Open(format!("unsupported sample format {other}"))),
-        }
-        .map_err(|e| CaptureError::Open(e.to_string()))?;
-        stream.play().map_err(|e| CaptureError::Open(e.to_string()))?;
-        Ok(stream)
+            tracing::warn!("the microphone refused a 10 ms buffer ({e}); using its default");
+            open_stream(&device, &config, cpal::BufferSize::Default, gain, &tx)
+        })
     })();
     match opened {
         Ok(stream) => {
@@ -244,11 +213,96 @@ fn mic_thread(
     }
 }
 
-/// Holds microphone audio back until the input settles. This laptop's
-/// microphone (like many) starts pinned near -1 for half a second and
-/// drifts back to zero over the next; that read as clipping and as speech.
-/// The gate opens on the first 100 ms that averages near zero without
-/// clipping, or after 1.5 s at the latest.
+/// Buffers of about 10 ms, within what the device allows.
+fn small_buffer(rate: u32, supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+    match *supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            cpal::BufferSize::Fixed((rate / 100).clamp(min, max))
+        }
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+    }
+}
+
+/// Starts `device` delivering mono 16 kHz chunks to `tx`.
+fn open_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    buffer_size: cpal::BufferSize,
+    gain: f32,
+    tx: &Sender<Result<Vec<f32>, CaptureError>>,
+) -> Result<cpal::Stream, CaptureError> {
+    let channels = config.channels() as usize;
+    let mut resampler = StreamResampler::new(config.sample_rate()).map_err(CaptureError::Open)?;
+    let stream_config = cpal::StreamConfig {
+        buffer_size,
+        ..(*config).into()
+    };
+    let data_tx = tx.clone();
+    let err_tx = tx.clone();
+    let mut cleanup = MicCleanup::default();
+    let mut send = move |mut mono: Vec<f32>| {
+        apply_gain(&mut mono, gain);
+        let out = resampler.push(&mono);
+        if out.is_empty() {
+            return;
+        }
+        if let Some(out) = cleanup.process(out) {
+            // A full channel means the consumer is gone or stalled; drop audio rather than block the callback.
+            let _ = data_tx.try_send(Ok(out));
+        }
+    };
+    let err_fn = move |e: cpal::Error| {
+        let _ = err_tx.try_send(Err(CaptureError::Stream(e.to_string())));
+    };
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            stream_config,
+            move |data: &[f32], _: &_| send(downmix(data, channels, |s| s)),
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            stream_config,
+            move |data: &[i16], _: &_| send(downmix(data, channels, |s| f32::from(s) / 32768.0)),
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I32 => device.build_input_stream(
+            stream_config,
+            move |data: &[i32], _: &_| send(downmix(data, channels, |s| s as f32 / 2_147_483_648.0)),
+            err_fn,
+            None,
+        ),
+        other => return Err(CaptureError::Open(format!("unsupported sample format {other}"))),
+    }
+    .map_err(|e| CaptureError::Open(e.to_string()))?;
+    stream.play().map_err(|e| CaptureError::Open(e.to_string()))?;
+    Ok(stream)
+}
+
+/// What the microphone's audio goes through before anyone sees it.
+#[derive(Debug, Default)]
+pub struct MicCleanup {
+    settle: Settle,
+    high_pass: HighPass,
+}
+
+impl MicCleanup {
+    /// The block, or `None` while the microphone is still pinned.
+    pub fn process(&mut self, mut block: Vec<f32>) -> Option<Vec<f32>> {
+        let open = self.settle.pass(&block);
+        // Filtered from the first sample, so the filter has settled by the
+        // time the gate opens.
+        self.high_pass.process(&mut block);
+        open.then_some(block)
+    }
+}
+
+/// Holds microphone audio back while it is pinned. This laptop's
+/// microphone (like many) starts at -1 for about 350 ms, then carries an
+/// offset that fades over the next 800 ms; the high-pass filter removes the
+/// offset, so audio can come through as soon as it stops clipping, or after
+/// 1.5 s at the latest.
 #[derive(Debug, Default)]
 pub struct Settle {
     held: usize,
@@ -258,20 +312,51 @@ pub struct Settle {
 impl Settle {
     const MAX_HELD: usize = SAMPLE_RATE as usize * 3 / 2;
 
-    /// Whether `block` (16 kHz mono) should be used.
     pub fn pass(&mut self, block: &[f32]) -> bool {
         if self.open {
             return true;
         }
-        let n = block.len().max(1) as f32;
-        let mean = block.iter().sum::<f32>() / n;
         let peak = block.iter().fold(0f32, |a, s| a.max(s.abs()));
         self.held += block.len();
-        self.open = (mean.abs() < 0.02 && peak < 0.98) || self.held >= Self::MAX_HELD;
+        self.open = peak < 0.9 || self.held >= Self::MAX_HELD;
         if self.open {
             tracing::debug!(held_ms = self.held / 16, "microphone settled");
         }
         self.open
+    }
+}
+
+/// Second-order Butterworth high-pass at 60 Hz for 16 kHz audio: removes
+/// offsets and rumble, below the lowest voices.
+#[derive(Debug)]
+struct HighPass {
+    b: [f64; 3],
+    a: [f64; 2],
+    z: [f64; 2],
+}
+
+impl Default for HighPass {
+    fn default() -> Self {
+        let k = (std::f64::consts::PI * 60.0 / f64::from(SAMPLE_RATE)).tan();
+        let q = std::f64::consts::SQRT_2;
+        let norm = 1.0 / (1.0 + q * k + k * k);
+        Self {
+            b: [norm, -2.0 * norm, norm],
+            a: [2.0 * (k * k - 1.0) * norm, (1.0 - q * k + k * k) * norm],
+            z: [0.0; 2],
+        }
+    }
+}
+
+impl HighPass {
+    fn process(&mut self, block: &mut [f32]) {
+        for s in block {
+            let x = f64::from(*s);
+            let y = self.b[0] * x + self.z[0];
+            self.z[0] = self.b[1] * x - self.a[0] * y + self.z[1];
+            self.z[1] = self.b[2] * x - self.a[1] * y;
+            *s = y as f32;
+        }
     }
 }
 
@@ -358,6 +443,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_microphone_asks_for_ten_millisecond_buffers() {
+        let any = cpal::SupportedBufferSize::Range { min: 1, max: 524_288 };
+        assert_eq!(small_buffer(48_000, &any), cpal::BufferSize::Fixed(480));
+        assert_eq!(small_buffer(44_100, &any), cpal::BufferSize::Fixed(441));
+    }
+
+    #[test]
+    fn the_buffer_stays_inside_what_the_device_allows() {
+        let range = cpal::SupportedBufferSize::Range { min: 1024, max: 4096 };
+        assert_eq!(small_buffer(48_000, &range), cpal::BufferSize::Fixed(1024));
+        assert_eq!(
+            small_buffer(48_000, &cpal::SupportedBufferSize::Unknown),
+            cpal::BufferSize::Default
+        );
+    }
+
+    #[test]
     fn pcm_source_yields_all_samples_in_order_then_ends() {
         let pcm: Vec<f32> = (0..4000).map(|i| i as f32).collect();
         let mut src = PcmSource::new(pcm.clone());
@@ -378,23 +480,57 @@ mod tests {
         assert!((15_000..=16_000).contains(&out.len()), "{} samples", out.len());
     }
 
+    /// The first two seconds of this laptop's microphone: pinned at -1 for
+    /// 350 ms, then an offset that fades over the next 800 ms.
+    fn mic_start() -> Vec<f32> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/mic-start-16k.wav");
+        crate::audio::read_wav_16k_mono(&path).unwrap()
+    }
+
+    /// Feeds `pcm` in 344-sample blocks, as the resampler delivers them;
+    /// returns when audio started coming through, and what came through.
+    fn clean(pcm: &[f32]) -> (usize, Vec<f32>) {
+        let mut mic = MicCleanup::default();
+        let mut first = None;
+        let mut out = Vec::new();
+        for (i, block) in pcm.chunks(344).enumerate() {
+            if let Some(b) = mic.process(block.to_vec()) {
+                first.get_or_insert(i * 344);
+                out.extend(b);
+            }
+        }
+        (first.unwrap_or(pcm.len()), out)
+    }
+
     #[test]
-    fn audio_is_held_back_until_the_microphone_settles() {
-        let mut gate = Settle::default();
-        let pinned = vec![-0.95f32; 1600];
-        let drifting = vec![-0.15f32; 1600];
-        let speech: Vec<f32> = (0..1600).map(|i| (i as f32 * 0.3).sin() * 0.4).collect();
-        assert!(!gate.pass(&pinned));
-        assert!(!gate.pass(&drifting));
-        assert!(gate.pass(&speech));
-        // Once settled it stays open, even for loud or offset audio.
-        assert!(gate.pass(&pinned));
+    fn audio_comes_through_as_soon_as_the_microphone_stops_clipping() {
+        let (first, _) = clean(&mic_start());
+        assert!(first < SAMPLE_RATE as usize / 2, "after {} ms", first / 16);
+    }
+
+    #[test]
+    fn the_fading_offset_does_not_reach_the_meter_or_the_voice_detector() {
+        let (_, out) = clean(&mic_start());
+        for (i, w) in out.as_chunks::<800>().0.iter().enumerate() {
+            let rms = crate::utterance::rms(w);
+            // Room noise; speech is 0.03 and up.
+            assert!(rms < 0.02, "window {i}: {rms}");
+        }
+    }
+
+    #[test]
+    fn speech_passes_the_filter_unchanged_in_level() {
+        let speech: Vec<f32> = (0..16_000).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+        let (first, out) = clean(&speech);
+        assert_eq!(first, 0);
+        let rms = crate::utterance::rms(&out[1600..]);
+        assert!((rms - 0.3 / 2f32.sqrt()).abs() < 0.01, "{rms}");
     }
 
     #[test]
     fn a_microphone_that_never_settles_opens_after_a_second_and_a_half() {
         let mut gate = Settle::default();
-        let pinned = vec![-0.95f32; 1600];
+        let pinned = vec![-1.0f32; 1600];
         let opened = (0..20).position(|_| gate.pass(&pinned)).unwrap();
         assert_eq!(opened, 14, "the block that completes 1.5 s");
     }
