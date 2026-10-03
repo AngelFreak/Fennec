@@ -95,6 +95,16 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE action_items ADD COLUMN provider TEXT;
     "#,
+    // 4: words the user corrected in dictated text, to offer as vocabulary
+    r#"
+    CREATE TABLE corrections (
+        heard     TEXT NOT NULL,
+        wanted    TEXT NOT NULL,
+        count     INTEGER NOT NULL DEFAULT 0,
+        dismissed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (heard, wanted)
+    );
+    "#,
 ];
 
 pub(super) fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

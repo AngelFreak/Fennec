@@ -347,3 +347,21 @@ fn cloud_consents_are_remembered_per_scope_and_provider() {
     assert_eq!(store.clear_cloud_consents().unwrap(), 1);
     assert!(!store.has_cloud_consent("document:1", "claude").unwrap());
 }
+
+#[test]
+fn corrections_are_counted_and_a_dismissed_one_stays_quiet() {
+    let (_dir, s) = store();
+    assert_eq!(s.record_correction("tonelighter", "toneleje").unwrap(), 1);
+    assert_eq!(s.record_correction("tonelighter", "toneleje").unwrap(), 2);
+    assert_eq!(
+        s.record_correction("tonelighter", "tonelejet").unwrap(),
+        1,
+        "another wanted word"
+    );
+    s.dismiss_correction("tonelighter", "toneleje").unwrap();
+    assert_eq!(
+        s.record_correction("tonelighter", "toneleje").unwrap(),
+        0,
+        "dismissed: never offered again"
+    );
+}

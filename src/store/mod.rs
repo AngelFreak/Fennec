@@ -403,6 +403,30 @@ impl Store {
         Ok(())
     }
 
+    /// Counts one correction of `heard` to `wanted`; returns how often it
+    /// has been made, or 0 once the offer to learn it was dismissed.
+    pub fn record_correction(&self, heard: &str, wanted: &str) -> Result<u32> {
+        self.conn.execute(
+            "INSERT INTO corrections (heard, wanted, count) VALUES (?1, ?2, 1)
+             ON CONFLICT (heard, wanted) DO UPDATE SET count = count + 1",
+            params![heard, wanted],
+        )?;
+        Ok(self.conn.query_row(
+            "SELECT CASE WHEN dismissed THEN 0 ELSE count END FROM corrections WHERE heard = ?1 AND wanted = ?2",
+            params![heard, wanted],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Never offer to learn this correction again.
+    pub fn dismiss_correction(&self, heard: &str, wanted: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE corrections SET dismissed = 1 WHERE heard = ?1 AND wanted = ?2",
+            params![heard, wanted],
+        )?;
+        Ok(())
+    }
+
     pub fn set_audio_path(&self, id: DocumentId, path: Option<&Path>) -> Result<()> {
         self.conn.execute(
             "UPDATE documents SET audio_path = ?2 WHERE id = ?1",

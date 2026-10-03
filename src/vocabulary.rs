@@ -22,38 +22,67 @@ struct Term {
 #[derive(Debug, Clone, Default)]
 pub struct Vocabulary {
     terms: Vec<Term>,
+    /// "heard → wanted": a word the model keeps mishearing, by its
+    /// lower-case form, and what to write instead.
+    replacements: Vec<(String, String)>,
 }
 
+/// The arrows a replacement line may use.
+const ARROWS: [&str; 3] = ["→", "=>", "->"];
+
 impl Vocabulary {
-    /// Terms separated by commas or new lines.
+    /// Terms separated by commas or new lines; "heard → wanted" (or `=>`,
+    /// `->`) is a replacement.
     pub fn parse(text: &str) -> Self {
-        let terms = text
+        let mut v = Self::default();
+        for entry in text
             .split([',', '\n', ';'])
             .map(str::trim)
             .filter(|t| !t.is_empty())
-            .map(|t| Term {
-                text: t.to_string(),
-                key: key(t),
-            })
-            .filter(|t| !t.key.is_empty())
-            .collect();
-        Self { terms }
+        {
+            if let Some((heard, wanted)) = ARROWS.iter().find_map(|a| entry.split_once(a)) {
+                let (heard, wanted) = (heard.trim().to_lowercase(), wanted.trim().to_string());
+                if !heard.is_empty() && !wanted.is_empty() {
+                    v.replacements.push((heard, wanted));
+                }
+                continue;
+            }
+            let k = key(entry);
+            if !k.is_empty() {
+                v.terms.push(Term {
+                    text: entry.to_string(),
+                    key: k,
+                });
+            }
+        }
+        v
+    }
+
+    /// Whether `heard → wanted` is already a replacement.
+    pub fn has_replacement(&self, heard: &str, wanted: &str) -> bool {
+        let heard = heard.to_lowercase();
+        self.replacements.iter().any(|(h, w)| *h == heard && w == wanted)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty()
+        self.terms.is_empty() && self.replacements.is_empty()
     }
 
     /// `text` with near-misses of the terms replaced, and `spans` (byte
     /// ranges of unsure words) moved to match.
     pub fn correct(&self, text: &str, spans: &[Range<usize>]) -> (String, Vec<Range<usize>>) {
-        if self.terms.is_empty() {
+        if self.is_empty() {
             return (text.to_string(), spans.to_vec());
         }
         let words = words(text);
         let mut edits: Vec<(Range<usize>, String)> = Vec::new();
         let mut i = 0;
         while i < words.len() {
+            if let Some(wanted) = self.replacement(&text[words[i].clone()]) {
+                edits.push((words[i].clone(), wanted));
+                i += 1;
+                continue;
+            }
             // One word, or two heard for one term ("Nørre gade"), whichever
             // is closer; one word on a tie.
             let found = [1, 2]
@@ -91,6 +120,19 @@ impl Vocabulary {
         apply(text, spans, &edits)
     }
 
+    /// What to write for `word` if it is a learned replacement, with its
+    /// leading capital kept.
+    fn replacement(&self, word: &str) -> Option<String> {
+        let lower = word.to_lowercase();
+        let (_, wanted) = self.replacements.iter().find(|(h, _)| *h == lower)?;
+        let capital = word.chars().next().is_some_and(char::is_uppercase);
+        let mut c = wanted.chars();
+        Some(match c.next() {
+            Some(f) if capital && f.is_lowercase() => f.to_uppercase().chain(c).collect(),
+            _ => wanted.clone(),
+        })
+    }
+
     /// The term `heard` is a near-miss of, spelled the user's way and with
     /// the heard Danish ending, and how far off it was.
     fn best(&self, heard: &str, last_word_chars: usize) -> Option<(usize, String)> {
@@ -119,6 +161,28 @@ impl Vocabulary {
         }
         best
     }
+}
+
+/// Words the user replaced when editing `before` into `after`: one word for
+/// another (not just capitals or punctuation), both at least four letters
+/// and no digits, in an edit that kept most of the paragraph. As
+/// (heard in lower case, wanted as typed).
+pub fn corrections(before: &str, after: &str) -> Vec<(String, String)> {
+    let b: Vec<&str> = words(before).into_iter().map(|r| &before[r]).collect();
+    let a: Vec<&str> = words(after).into_iter().map(|r| &after[r]).collect();
+    let bk: Vec<String> = b.iter().map(|w| key(w)).collect();
+    let ak: Vec<String> = a.iter().map(|w| key(w)).collect();
+    let pairs = crate::eval::aligned_pairs(&bk, &ak);
+    let same = pairs.iter().filter(|(i, j)| bk[*i] == ak[*j]).count();
+    if b.is_empty() || same * 10 < b.len() * 6 {
+        return Vec::new();
+    }
+    let learnable = |w: &str| w.chars().count() >= 4 && w.chars().all(char::is_alphabetic);
+    pairs
+        .into_iter()
+        .filter(|(i, j)| bk[*i] != ak[*j] && learnable(b[*i]) && learnable(a[*j]))
+        .map(|(i, j)| (b[i].to_lowercase(), a[j].to_string()))
+        .collect()
 }
 
 /// Byte ranges of the words (letters, digits and inner hyphens).
@@ -232,6 +296,51 @@ mod tests {
     #[test]
     fn a_term_heard_as_two_words_is_joined() {
         assert_eq!(fix("Nørregade", "på Nørre gade i dag"), "på Nørregade i dag");
+    }
+
+    #[test]
+    fn a_learned_replacement_fixes_a_word_the_model_keeps_mishearing() {
+        let v = "Nørregade\ntonelighter → toneleje";
+        assert_eq!(
+            fix(v, "i et tonelighter ikke alt for højt"),
+            "i et toneleje ikke alt for højt"
+        );
+        assert_eq!(fix(v, "Tonelighter, sagde hun."), "Toneleje, sagde hun.");
+        assert_eq!(fix("a -> b, c => d", "a og c"), "b og d");
+    }
+
+    #[test]
+    fn a_replacement_only_takes_the_whole_word() {
+        assert_eq!(fix("ser → se", "hun ser serien"), "hun se serien");
+    }
+
+    #[test]
+    fn replacements_are_listed_apart_from_terms() {
+        let v = Vocabulary::parse("Nørregade\ntonelighter → toneleje");
+        assert!(v.has_replacement("Tonelighter", "toneleje"));
+        assert!(!v.has_replacement("Nørregade", "x"));
+    }
+
+    #[test]
+    fn a_word_swapped_for_another_is_a_correction() {
+        assert_eq!(
+            corrections(
+                "helt normalt i et tonelighter ikke alt for højt",
+                "helt normalt i et toneleje, ikke alt for højt."
+            ),
+            [("tonelighter".to_string(), "toneleje".to_string())]
+        );
+    }
+
+    #[test]
+    fn capitals_punctuation_and_rewrites_are_not_corrections() {
+        assert!(corrections("det regner i dag", "Det regner, i dag.").is_empty());
+        assert!(corrections("det regner i dag", "solen skinner over byen nu").is_empty());
+        assert!(corrections("vi tager 14 med", "vi tager 15 med").is_empty());
+        assert!(
+            corrections("han er her", "hun er her").is_empty(),
+            "too short to learn from"
+        );
     }
 
     #[test]

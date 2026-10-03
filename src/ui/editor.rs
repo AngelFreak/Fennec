@@ -32,6 +32,13 @@ pub struct Editor {
     /// Set while the editor itself changes the text, so autosave can tell
     /// dictation from typing if it needs to.
     programmatic: Cell<bool>,
+    /// The paragraphs as the last change by the editor itself left them;
+    /// the user's edits are measured against it.
+    baseline: RefCell<Vec<String>>,
+    /// The user typed since the baseline was taken.
+    user_edited: Cell<bool>,
+    /// Words the user corrected, waiting for [`Self::take_corrections`].
+    corrections: RefCell<Vec<(String, String)>>,
 }
 
 impl Editor {
@@ -63,7 +70,7 @@ impl Editor {
             .vexpand(true)
             .build();
         view.update_property(&[gtk::accessible::Property::Label("Document text")]);
-        Rc::new(Self {
+        let editor = Rc::new(Self {
             view,
             buffer,
             tag_preview,
@@ -74,7 +81,19 @@ impl Editor {
             last_end_ms: Cell::new(None),
             paragraph_gap_ms: Cell::new(3_000),
             programmatic: Cell::new(false),
-        })
+            baseline: RefCell::default(),
+            user_edited: Cell::new(false),
+            corrections: RefCell::default(),
+        });
+        let weak = Rc::downgrade(&editor);
+        editor.buffer.connect_changed(move |_| {
+            if let Some(e) = weak.upgrade()
+                && !e.programmatic.get()
+            {
+                e.user_edited.set(true);
+            }
+        });
+        editor
     }
 
     pub fn buffer(&self) -> &gtk::TextBuffer {
@@ -85,10 +104,46 @@ impl Editor {
         self.programmatic.get()
     }
 
+    /// Runs a change by the editor itself (dictation, punctuation, AI), not
+    /// the user. The user's edits since the last such change are compared
+    /// first, so they are not mixed up with it.
     fn quietly(&self, f: impl FnOnce()) {
+        let outer = !self.programmatic.get();
+        if outer {
+            self.collect_corrections();
+        }
         self.programmatic.set(true);
         f();
-        self.programmatic.set(false);
+        if outer {
+            self.programmatic.set(false);
+            *self.baseline.borrow_mut() = self.paragraph_texts();
+        }
+    }
+
+    fn paragraph_texts(&self) -> Vec<String> {
+        self.paragraphs().into_iter().map(|p| p.text).collect()
+    }
+
+    /// Notes the words the user corrected since the baseline.
+    fn collect_corrections(&self) {
+        if !self.user_edited.replace(false) {
+            return;
+        }
+        let now = self.paragraph_texts();
+        let before = std::mem::replace(&mut *self.baseline.borrow_mut(), now.clone());
+        // Paragraphs added or joined: no telling which was which.
+        if before.len() == now.len() {
+            let mut found = self.corrections.borrow_mut();
+            for (b, a) in before.iter().zip(&now) {
+                found.extend(crate::vocabulary::corrections(b, a));
+            }
+        }
+    }
+
+    /// Words the user replaced by hand since last asked, as (heard, wanted).
+    pub fn take_corrections(&self) -> Vec<(String, String)> {
+        self.collect_corrections();
+        std::mem::take(&mut *self.corrections.borrow_mut())
     }
 
     /// Replaces the text with `paragraphs`.
@@ -180,10 +235,13 @@ impl Editor {
                 return false;
             }
             let offset = start.offset();
-            self.buffer.delete(&mut start, &mut end);
-            let mut at = self.buffer.iter_at_offset(offset);
-            self.buffer
-                .insert(&mut at, &new.replace('\n', &LINE_BREAK.to_string()));
+            // An accepted AI change, not the user's typing.
+            self.quietly(|| {
+                self.buffer.delete(&mut start, &mut end);
+                let mut at = self.buffer.iter_at_offset(offset);
+                self.buffer
+                    .insert(&mut at, &new.replace('\n', &LINE_BREAK.to_string()));
+            });
             return true;
         }
         false

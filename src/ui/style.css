@@ -692,3 +692,7 @@ menubutton.fx-tag arrow, menubutton.fx-chip arrow { min-width: 0; min-height: 0;
 
 /* A value Fennec fills in itself (the date). */
 window.fennec entry.fx-field.auto { background-color: @fx_chip; }
+
+/* An offer above the document: learn a correction as vocabulary. */
+.fx-learn { border: 1px solid @fx_border; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; background-color: @fx_chip; }
+.fx-learn-text { font-size: 13px; color: @fx_text; }

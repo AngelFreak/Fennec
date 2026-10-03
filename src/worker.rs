@@ -46,6 +46,15 @@ impl Context {
         (!chars.is_empty()).then(|| chars[chars.len().saturating_sub(Self::KEEP)..].iter().collect())
     }
 
+    /// Replaces the committed text, e.g. with the document after the
+    /// punctuation model has run: the model then hears punctuated text,
+    /// which keeps it punctuating.
+    pub fn set(&self, text: &str) {
+        let chars: Vec<char> = text.trim().chars().collect();
+        *self.0.lock().expect("context poisoned") =
+            chars[chars.len().saturating_sub(Self::KEEP)..].iter().collect();
+    }
+
     /// Adds committed text.
     pub fn push(&self, text: &str) {
         let text = text.trim();

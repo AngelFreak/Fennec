@@ -283,6 +283,10 @@ fn main() {
     check("dictated text is saved to the database", saved == texts);
     let prompts = PROMPTS.lock().unwrap().clone();
     check(
+        "the model hears the text as it reads in the editor, with its marks",
+        prompts.iter().flatten().any(|p| p.contains("Første sætning.")),
+    );
+    check(
         "Edda v0.2 hears the sentence before; spoken commands are not part of it",
         prompts.iter().flatten().any(|p| p.contains("Første sætning"))
             && !prompts
@@ -426,6 +430,61 @@ fn main() {
         !e.punctuate_paragraph(0, heard, fixed),
     );
     e.set_preview(None);
+
+    // --- learning from corrections: the second identical fix is offered
+    let before_learning = e.paragraphs();
+    let fix_by_hand = |e: &fennec::ui::editor::Editor| {
+        let b = e.buffer();
+        let text = b.text(&b.start_iter(), &b.end_iter(), false).to_string();
+        let at = text.find("tonelighter").unwrap();
+        let from = text[..at].chars().count() as i32;
+        let mut s = b.iter_at_offset(from);
+        let mut t = b.iter_at_offset(from + "tonelighter".chars().count() as i32);
+        b.delete(&mut s, &mut t);
+        let mut s = b.iter_at_offset(from);
+        b.insert(&mut s, "toneleje");
+    };
+    let heard = "vi taler i et tonelighter ikke alt for højt";
+    e.load(&[Paragraph::new(heard)]);
+    fix_by_hand(e);
+    w.dictation.save_now();
+    check(
+        "one correction is not offered yet",
+        w.dictation.learn_offer().is_none(),
+    );
+    e.load(&[Paragraph::new(heard)]);
+    // A machine change in between must not hide the user's fix.
+    fix_by_hand(e);
+    e.insert_final("Mere tekst.", 9_000, 9_500, &[]);
+    w.dictation.save_now();
+    check(
+        "the second identical correction is offered as vocabulary",
+        w.dictation.learn_offer() == Some(("tonelighter".into(), "toneleje".into())),
+    );
+    w.dictation.accept_learn();
+    let saved = Settings::load(&root.join("config/settings.toml")).unwrap();
+    check(
+        "accepting adds a replacement that dictation then applies",
+        w.dictation.learn_offer().is_none()
+            && fennec::vocabulary::Vocabulary::parse(&saved.vocabulary)
+                .correct("et tonelighter", &[])
+                .0
+                == "et toneleje",
+    );
+    // An accepted AI change is not the user's correction.
+    e.load(&[Paragraph::new("han siger øh at det er fint")]);
+    w.dictation.save_now();
+    for _ in 0..2 {
+        e.load(&[Paragraph::new("han siger øh at det er fint")]);
+        e.replace_paragraph(0, "han siger øh at det er fint", "han fortæller at det er fint");
+        w.dictation.save_now();
+    }
+    check(
+        "AI clean-up is never learned as a correction",
+        w.dictation.learn_offer().is_none(),
+    );
+    e.load(&before_learning);
+    w.dictation.save_now();
 
     // --- file import through the real ingest thread and the shared engine
     let wav = tmp.path().join("interview.wav");

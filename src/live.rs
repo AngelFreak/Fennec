@@ -91,6 +91,7 @@ enum Pending {
 
 pub struct LiveSession {
     stop: Arc<AtomicBool>,
+    context: Option<Context>,
     capture: Option<JoinHandle<()>>,
     results: Option<JoinHandle<()>>,
 }
@@ -107,7 +108,9 @@ impl LiveSession {
         let (pending_tx, pending_rx) = unbounded::<Pending>();
         let started = Instant::now();
 
+        let context = cfg.context.as_deref().map(Context::new);
         let capture = {
+            let context = context.clone();
             let worker = Arc::clone(&worker);
             let stop = Arc::clone(&stop);
             let on_event = Arc::clone(&on_event);
@@ -124,7 +127,6 @@ impl LiveSession {
                         }
                     });
                     let opts_for = |fast: bool| options(&cfg, fast);
-                    let context = cfg.context.as_deref().map(Context::new);
                     let context = context.as_ref();
                     let handle = |events: Vec<UtteranceEvent>| {
                         for ev in events {
@@ -281,6 +283,7 @@ impl LiveSession {
 
         Self {
             stop,
+            context,
             capture: Some(capture),
             results: Some(results),
         }
@@ -288,6 +291,12 @@ impl LiveSession {
 
     /// Stops listening. Speech in progress is still transcribed; this
     /// returns after the last result has been delivered.
+    /// The text each utterance is prompted with, for models that take
+    /// context; the app replaces it with the punctuated document.
+    pub fn context(&self) -> Option<Context> {
+        self.context.clone()
+    }
+
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.join();

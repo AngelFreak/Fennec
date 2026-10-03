@@ -72,6 +72,10 @@ pub struct DictationPage {
     engine: Rc<EngineHolder>,
     state: RefCell<State>,
     punctuation: RefCell<Punctuation>,
+    /// A correction offered as vocabulary: (heard, wanted).
+    learn: RefCell<Option<(String, String)>>,
+    learn_bar: gtk::Revealer,
+    learn_label: gtk::Label,
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
     on_document_changed: super::Handler<()>,
@@ -150,6 +154,24 @@ impl DictationPage {
             .tightening_threshold(760)
             .child(&column)
             .build();
+        let learn_label = label("", &["fx-learn-text"]);
+        learn_label.set_wrap(true);
+        learn_label.set_xalign(0.0);
+        learn_label.set_hexpand(true);
+        let learn_add = gtk::Button::with_label("Add");
+        learn_add.add_css_class("fx-primary");
+        let learn_skip = gtk::Button::with_label("Not now");
+        learn_skip.add_css_class("fx-secondary");
+        let learn_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        learn_box.add_css_class("fx-learn");
+        learn_box.append(&learn_label);
+        learn_box.append(&learn_skip);
+        learn_box.append(&learn_add);
+        let learn_bar = gtk::Revealer::builder()
+            .child(&learn_box)
+            .reveal_child(false)
+            .build();
+        column.append(&learn_bar);
         column.append(&chips);
         column.append(&title);
         column.append(&editor.view);
@@ -235,12 +257,27 @@ impl DictationPage {
             engine,
             state: RefCell::default(),
             punctuation: RefCell::default(),
+            learn: RefCell::default(),
+            learn_bar,
+            learn_label,
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
             on_document_changed: RefCell::default(),
             on_navigate: RefCell::default(),
         });
         page.editor.paragraph_gap_ms.set(3_000);
+        let weak = Rc::downgrade(&page);
+        learn_add.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.accept_learn();
+            }
+        });
+        let weak = Rc::downgrade(&page);
+        learn_skip.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.dismiss_learn();
+            }
+        });
         page.load_punctuator();
         page.wire();
         page.build_ai_menu();
@@ -542,6 +579,7 @@ impl DictationPage {
             tracing::error!("saving document {id}: {e}");
         }
         self.refresh_review();
+        self.learn_corrections();
         if let Some(f) = self.on_saved.borrow().clone() {
             f(&message);
         }
@@ -609,6 +647,82 @@ impl DictationPage {
                 page.repunctuate(open);
             }
         });
+    }
+
+    /// Counts the words the user corrected by hand; the second time the
+    /// same one is corrected, offers to add it to the vocabulary.
+    fn learn_corrections(&self) {
+        for (heard, wanted) in self.editor.take_corrections() {
+            let count = match self.store.record_correction(&heard, &wanted) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!("could not record a correction: {e}");
+                    continue;
+                }
+            };
+            let known = crate::vocabulary::Vocabulary::parse(&self.deps.settings().vocabulary)
+                .has_replacement(&heard, &wanted);
+            if count >= 2 && !known {
+                self.learn_label.set_text(&format!(
+                    "You corrected «{heard}» to «{wanted}» twice. Add it to your vocabulary, so dictation writes it that way?"
+                ));
+                *self.learn.borrow_mut() = Some((heard, wanted));
+                self.learn_bar.set_reveal_child(true);
+            }
+        }
+    }
+
+    /// The correction currently offered as vocabulary.
+    pub fn learn_offer(&self) -> Option<(String, String)> {
+        self.learn.borrow().clone()
+    }
+
+    /// Adds the offered correction to the vocabulary as `heard → wanted`.
+    pub fn accept_learn(&self) {
+        let Some((heard, wanted)) = self.learn.borrow_mut().take() else {
+            return;
+        };
+        self.learn_bar.set_reveal_child(false);
+        {
+            let mut s = self.deps.settings.borrow_mut();
+            let mut v = s.vocabulary.trim_end().to_string();
+            if !v.is_empty() {
+                v.push('\n');
+            }
+            v.push_str(&format!("{heard} → {wanted}"));
+            s.vocabulary = v;
+        }
+        if let Err(e) = self.deps.save_settings() {
+            self.dock.set_status(&format!("Vocabulary not saved: {e}"), true);
+        }
+    }
+
+    /// Never offers the current correction again.
+    pub fn dismiss_learn(&self) {
+        if let Some((heard, wanted)) = self.learn.borrow_mut().take()
+            && let Err(e) = self.store.dismiss_correction(&heard, &wanted)
+        {
+            tracing::warn!("{e}");
+        }
+        self.learn_bar.set_reveal_child(false);
+    }
+
+    /// Gives a model that takes context the document as it reads now:
+    /// punctuated, commands applied. Its own raw output is often without
+    /// punctuation, and hearing that kept it so.
+    fn sync_context(&self) {
+        let Some(context) = self
+            .state
+            .borrow()
+            .session
+            .as_ref()
+            .and_then(LiveSession::context)
+        else {
+            return;
+        };
+        let paragraphs = self.editor.paragraphs();
+        let text: Vec<&str> = paragraphs.iter().map(|p| p.text.as_str()).collect();
+        context.set(&text.join(" "));
     }
 
     pub fn punctuator_loaded(&self) -> bool {
@@ -680,6 +794,7 @@ impl DictationPage {
             }
             if changed {
                 page.save_now();
+                page.sync_context();
             }
             let queued = {
                 let mut p = page.punctuation.borrow_mut();
@@ -862,11 +977,13 @@ impl DictationPage {
             } => {
                 self.editor.insert_final(&text, start_ms, end_ms, &low_confidence);
                 self.save_now();
+                self.sync_context();
                 self.repunctuate(true);
             }
             LiveEvent::Command(crate::commands::Command::StopDictation) => self.stop_recording(),
             LiveEvent::Command(c) => {
                 self.editor.apply(c);
+                self.sync_context();
                 self.dock.set_status(&format!("Command: {}", c.label()), false);
             }
             LiveEvent::Lag(ms) => {

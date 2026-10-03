@@ -496,3 +496,39 @@ fn a_model_that_takes_context_hears_the_sentence_before_each_utterance() {
         ]
     );
 }
+
+#[test]
+fn the_app_can_replace_the_context_with_punctuated_text() {
+    let mut audio = Vec::new();
+    for _ in 0..2 {
+        audio.extend(tone(1.0));
+        audio.extend(silence(1.5));
+    }
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let session = LiveSession::start(
+        Box::new(PcmSource::new(audio).realtime()),
+        Box::new(EnergyVad::default()),
+        Arc::new(EngineWorker::spawn(Box::new(Recording(
+            Arc::clone(&calls),
+            "det regner",
+        )))),
+        LiveConfig {
+            show_preview: false,
+            context: Some(String::new()),
+            ..Default::default()
+        },
+        Arc::new(move |e| {
+            if matches!(e, LiveEvent::Final { .. }) {
+                let _ = tx.send(());
+            }
+        }),
+    );
+    let context = session.context().expect("a model that takes context");
+    rx.recv().unwrap();
+    // What the punctuation pass made of it.
+    context.set("Det regner.");
+    session.wait();
+    let last = calls.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(last.initial_prompt.as_deref(), Some("Det regner."));
+}

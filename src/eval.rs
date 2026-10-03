@@ -170,7 +170,7 @@ pub fn punctuation(reference: &str, hypothesis: &str) -> Punctuation {
 }
 
 /// Index pairs of matched or substituted words in a minimal alignment.
-fn aligned_pairs<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(usize, usize)> {
+pub(crate) fn aligned_pairs<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(usize, usize)> {
     let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
     for (i, row) in d.iter_mut().enumerate() {
         row[0] = i;
