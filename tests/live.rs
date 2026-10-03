@@ -311,3 +311,28 @@ fn a_normal_level_never_warns() {
     );
     assert!(!events.contains(&LiveEvent::Clipping));
 }
+
+#[test]
+fn the_level_meter_gets_a_steady_twenty_readings_a_second() {
+    // PcmSource delivers 100 ms chunks; a microphone may deliver 10 ms or 170 ms.
+    let mut audio = tone(1.0);
+    audio.extend(silence(1.0));
+    let events = run(
+        PcmSource::new(audio),
+        Box::new(EnergyVad::default()),
+        Box::new(Scripted(vec!["Hej."])),
+        LiveConfig {
+            show_preview: false,
+            ..Default::default()
+        },
+    );
+    let levels: Vec<f32> = events
+        .iter()
+        .filter_map(|e| match e {
+            LiveEvent::Level(l) => Some(*l),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels.len(), 40, "{levels:?}");
+    assert!(levels[5] > 0.1 && levels[35] < 0.001, "{levels:?}");
+}

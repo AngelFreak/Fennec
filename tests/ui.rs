@@ -1076,4 +1076,36 @@ fn audio_checks(root: &std::path::Path) {
     });
     check("dictating with a clipping microphone warns in the dock", warned);
     pump_until(Duration::from_secs(10), || !w.dictation.is_recording());
+
+    // --- the level meter: room noise low, speech high
+    let dock = &w.dictation.dock;
+    dock.set_state(ui::DockState::Recording);
+    for _ in 0..40 {
+        dock.push_level(0.012);
+    }
+    dock.push_level(0.045);
+    let bars = dock.bar_heights();
+    check(
+        "the level meter shows room noise low and speech clearly higher",
+        bars[bars.len() - 2] < 0.15 && bars[bars.len() - 1] > 0.4,
+    );
+    if !(bars[bars.len() - 2] < 0.15 && bars[bars.len() - 1] > 0.4) {
+        println!("     bars: {bars:?}");
+    }
+    dock.set_state(ui::DockState::Idle);
+
+    // --- stopping shows at once, while the last sentence is transcribed
+    w.dictation.start_recording();
+    pump_until(Duration::from_secs(5), || w.dictation.is_recording());
+    w.dictation.stop_recording();
+    check(
+        "pressing stop shows Finishing at once",
+        w.dictation.dock.state_text() == "Finishing…",
+    );
+    check(
+        "the dock is Ready once the last sentence is in",
+        pump_until(Duration::from_secs(10), || {
+            w.dictation.dock.state_text() == "Ready"
+        }),
+    );
 }

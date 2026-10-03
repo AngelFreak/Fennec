@@ -143,14 +143,17 @@ impl LiveSession {
                     // Audio time of the last clipping warning.
                     let mut warned_at: Option<usize> = None;
                     let mut heard = 0usize;
+                    let mut levels = crate::audio::level::LevelWindow::default();
                     loop {
                         if stop.load(Ordering::Relaxed) {
                             break;
                         }
                         match source.next_chunk() {
                             Ok(Some(chunk)) => {
-                                let (peak, level) = crate::audio::level::measure(&chunk);
-                                on_event(LiveEvent::Level(level));
+                                let (peak, _) = crate::audio::level::measure(&chunk);
+                                for level in levels.push(&chunk) {
+                                    on_event(LiveEvent::Level(level));
+                                }
                                 heard += chunk.len();
                                 if peak >= crate::audio::level::CLIP
                                     && warned_at

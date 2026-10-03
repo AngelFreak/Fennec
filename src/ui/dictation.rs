@@ -686,8 +686,11 @@ impl DictationPage {
     pub fn stop_recording(self: &Rc<Self>) {
         let session = self.state.borrow_mut().session.take();
         if let Some(s) = session {
+            if let Some(t) = self.state.borrow_mut().tick.take() {
+                t.remove();
+            }
+            self.dock.set_state(DockState::Finishing);
             self.dock.set_status("Finishing the last sentence…", false);
-            self.dock.record.set_sensitive(false);
             // Joining waits for the engine; keep that off the UI thread.
             std::thread::spawn(move || s.stop());
         }

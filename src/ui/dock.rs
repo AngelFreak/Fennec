@@ -7,6 +7,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 
 use super::label;
+use crate::audio::level::Meter;
 
 const BARS: usize = 16;
 
@@ -17,7 +18,9 @@ pub struct Dock {
     timer: gtk::Label,
     status: gtk::Label,
     meter: gtk::DrawingArea,
+    /// Bar heights, oldest first.
     levels: Rc<RefCell<VecDeque<f32>>>,
+    meter_scale: RefCell<Meter>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +28,8 @@ pub enum DockState {
     Idle,
     Loading,
     Recording,
+    /// Stop was pressed; the last sentence is still being transcribed.
+    Finishing,
 }
 
 impl Dock {
@@ -66,10 +71,8 @@ impl Dock {
                 )
             };
             cr.set_source_rgba(r, g, b, if recording { 1.0 } else { 0.25 });
-            for (i, level) in draw_levels.borrow().iter().enumerate() {
-                // Speech sits around 0.01–0.1 RMS; a log scale makes it visible.
-                let v = ((f64::from(*level).max(1e-4).log10() + 4.0) / 3.0).clamp(0.08, 1.0);
-                let bar_h = (f64::from(h) * v).max(4.0);
+            for (i, height) in draw_levels.borrow().iter().enumerate() {
+                let bar_h = (f64::from(h) * f64::from(*height)).max(4.0);
                 let x = i as f64 * 7.0;
                 let y = (f64::from(h) - bar_h) / 2.0;
                 cr.rectangle(x, y, 4.0, bar_h);
@@ -107,6 +110,7 @@ impl Dock {
             status,
             meter,
             levels,
+            meter_scale: RefCell::default(),
         };
         dock.set_state(DockState::Idle);
         dock
@@ -122,6 +126,12 @@ impl Dock {
                 false,
             ),
             DockState::Recording => ("Recording", "fennec-stop-symbolic", "Stop dictation", true),
+            DockState::Finishing => (
+                "Finishing…",
+                "fennec-mic-symbolic",
+                "Finishing the last sentence",
+                false,
+            ),
         };
         self.state.set_text(text);
         self.record.set_icon_name(icon);
@@ -131,6 +141,8 @@ impl Dock {
         self.record.set_sensitive(sensitive);
         if s == DockState::Recording {
             self.record.add_css_class("recording");
+            // A new session may use another microphone in another room.
+            *self.meter_scale.borrow_mut() = Meter::default();
         } else {
             self.record.remove_css_class("recording");
             self.levels.borrow_mut().iter_mut().for_each(|l| *l = 0.0);
@@ -157,6 +169,11 @@ impl Dock {
         self.status.has_css_class("error")
     }
 
+    /// Bar heights from 0 to 1, oldest first.
+    pub fn bar_heights(&self) -> Vec<f32> {
+        self.levels.borrow().iter().copied().collect()
+    }
+
     pub fn status_text(&self) -> String {
         self.status.text().to_string()
     }
@@ -166,9 +183,10 @@ impl Dock {
     }
 
     pub fn push_level(&self, level: f32) {
+        let height = self.meter_scale.borrow_mut().height(level);
         let mut l = self.levels.borrow_mut();
         l.pop_front();
-        l.push_back(level);
+        l.push_back(height);
         drop(l);
         self.meter.queue_draw();
     }
