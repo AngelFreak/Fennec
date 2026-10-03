@@ -183,6 +183,10 @@ fn main() {
         true,
     ));
     check("opens on the Dictate screen", w.visible_page() == "dictate");
+    check(
+        "the speech model loads at launch, so the first recording starts at once",
+        pump_until(Duration::from_secs(5), || w.dictation.model_loaded()),
+    );
     let store = Store::open(&root.join("data/fennec.db")).unwrap();
     let docs = store.documents(&Default::default()).unwrap();
     check("first launch creates one document", docs.len() == 1);

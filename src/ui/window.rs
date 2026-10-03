@@ -123,6 +123,13 @@ impl MainWindow {
 
         let sidebar = Sidebar::new(Rc::clone(&store));
         let engine = EngineHolder::new(deps.clone());
+        // Load the model in the background now, so the first recording
+        // starts at once. A failure shows when recording is tried.
+        engine.with_worker(|r| {
+            if let Err(e) = r {
+                tracing::info!("the speech model is not ready: {e}");
+            }
+        });
         let dictation = DictationPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let files = FilesPage::new(Rc::clone(&store), deps.clone(), Rc::clone(&engine));
         let export = ExportPage::new(Rc::clone(&store), deps.clone());

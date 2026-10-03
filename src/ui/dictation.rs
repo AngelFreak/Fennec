@@ -557,6 +557,10 @@ impl DictationPage {
         }
     }
 
+    pub fn model_loaded(&self) -> bool {
+        self.engine.is_loaded()
+    }
+
     pub fn start_recording(self: &Rc<Self>) {
         if self.is_recording() {
             return;
