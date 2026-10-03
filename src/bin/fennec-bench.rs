@@ -1,7 +1,7 @@
 //! Compares Whisper models on a Danish test set.
 //!
 //! ```text
-//! fennec-bench --manifest set.tsv [--limit N] [--speed N] [--gpu]
+//! fennec-bench --manifest set.tsv [--skip N] [--limit N] [--speed N] [--gpu]
 //!              [--prompt TEXT] [--fast] [--pairs] [--vocab TERMS] [--dump FILE] model.bin...
 //! ```
 //!
@@ -25,6 +25,8 @@ use fennec::eval::{ErrorCount, Punctuation, char_errors, punctuation, word_error
 
 struct Args {
     manifest: PathBuf,
+    /// Clips skipped from the start, for a held-out set.
+    skip: usize,
     limit: Option<usize>,
     speed_clips: usize,
     gpu: bool,
@@ -57,7 +59,7 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let args = parse_args()?;
-    let mut clips = load_manifest(&args.manifest, args.limit)?;
+    let mut clips = load_manifest(&args.manifest, args.skip, args.limit)?;
     if args.pairs {
         clips = pairs(clips);
     }
@@ -226,11 +228,16 @@ fn pairs(clips: Vec<Clip>) -> Vec<Clip> {
         .collect()
 }
 
-fn load_manifest(path: &Path, limit: Option<usize>) -> Result<Vec<Clip>> {
+fn load_manifest(path: &Path, skip: usize, limit: Option<usize>) -> Result<Vec<Clip>> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let base = path.parent().unwrap_or(Path::new("."));
     let mut clips = Vec::new();
-    for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+    for (n, line) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .skip(skip)
+    {
         let Some((wav, reference)) = line.split_once('\t') else {
             bail!("{}:{}: expected `wav_path<TAB>reference`", path.display(), n + 1);
         };
@@ -252,6 +259,7 @@ fn load_manifest(path: &Path, limit: Option<usize>) -> Result<Vec<Clip>> {
 fn parse_args() -> Result<Args> {
     let mut args = Args {
         manifest: PathBuf::new(),
+        skip: 0,
         limit: None,
         speed_clips: 10,
         gpu: false,
@@ -266,6 +274,7 @@ fn parse_args() -> Result<Args> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--manifest" => args.manifest = it.next().context("--manifest needs a path")?.into(),
+            "--skip" => args.skip = it.next().context("--skip needs a number")?.parse()?,
             "--limit" => args.limit = Some(it.next().context("--limit needs a number")?.parse()?),
             "--speed" => args.speed_clips = it.next().context("--speed needs a number")?.parse()?,
             "--gpu" => args.gpu = true,
