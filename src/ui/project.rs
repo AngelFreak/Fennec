@@ -7,7 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use super::ai_panels::{ActionsPanel, SummaryPanel};
@@ -15,7 +17,7 @@ use super::{Deps, Handler, label};
 use crate::ai::Locality;
 use crate::ai::actions::{Answer, Citation};
 use crate::ai::service::Scope as AiScope;
-use crate::store::{DocumentFilter, DocumentId, DocumentSummary, ProjectFilter, Source, Store};
+use crate::store::{DocumentFilter, DocumentId, DocumentSummary, ProjectFilter, ProjectId, Source, Store};
 use crate::template::load_dir;
 use crate::text::{duration, hours_minutes, short_date};
 
@@ -31,11 +33,28 @@ const LENGTH_WIDTH: i32 = 64;
 
 const SUGGESTIONS: [&str; 2] = ["What changed since last week?", "Open questions"];
 
+/// How long Undo is offered after a delete.
+const UNDO_TIME: Duration = Duration::from_secs(10);
+
+/// Documents deleted but kept until Undo is no longer offered.
+struct PendingDelete {
+    ids: Vec<DocumentId>,
+    timer: glib::SourceId,
+    /// The document in the editor when the delete started.
+    open_at_start: Option<DocumentId>,
+}
+
+/// The editor's document and whether dictation is recording into it.
+type EditorState = Rc<dyn Fn() -> (Option<DocumentId>, bool)>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scope {
     Project(ProjectFilter),
     Tag(String),
 }
+
+/// What a row menu item does, given the page and the row's ⋯ button.
+type MenuAction = Rc<dyn Fn(&Rc<ProjectPage>, &gtk::Button)>;
 
 pub struct ProjectPage {
     pub root: gtk::Box,
@@ -75,6 +94,25 @@ pub struct ProjectPage {
     empty: gtk::Label,
     shown: RefCell<Vec<DocumentId>>,
     in_scope: RefCell<Vec<DocumentId>>,
+    /// The table head, or the bulk bar while documents are selected.
+    head: gtk::Stack,
+    head_check: gtk::CheckButton,
+    bulk_check: gtk::CheckButton,
+    bulk_count: gtk::Label,
+    bulk_tags: gtk::Button,
+    selected: RefCell<Vec<DocumentId>>,
+    /// Each row's checkbox and row, to show the selection.
+    row_checks: RefCell<Vec<(DocumentId, gtk::CheckButton, gtk::Widget)>>,
+    row_menus: RefCell<Vec<gtk::Button>>,
+    /// Set while the checkboxes are updated from the selection.
+    syncing: Cell<bool>,
+    pending_delete: RefCell<Option<PendingDelete>>,
+    /// The row or bulk menu that is open.
+    menu: RefCell<Option<gtk::Popover>>,
+    toast: gtk::Box,
+    toast_label: gtk::Label,
+    toast_undo: gtk::Button,
+    editor: RefCell<Option<EditorState>>,
     side: gtk::ScrolledWindow,
     project_fields: gtk::Box,
     name: gtk::Entry,
@@ -91,6 +129,7 @@ pub struct ProjectPage {
     on_changed: Handler<()>,
     on_new_dictation: Handler<Option<i64>>,
     on_import: Handler<()>,
+    on_deleted: Handler<Vec<DocumentId>>,
     new_dictation: gtk::Button,
 }
 
@@ -159,16 +198,52 @@ impl ProjectPage {
         let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
         table.add_css_class("fx-table");
         table.set_overflow(gtk::Overflow::Hidden);
-        let head_row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        // Columns as in a row: checkbox, the document's cells, its ⋯ menu.
+        let head_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         head_row.add_css_class("fx-table-head");
-        head_row.append(&sized(gtk::Box::new(gtk::Orientation::Horizontal, 0), 28));
+        let head_check = gtk::CheckButton::new();
+        head_check.set_valign(gtk::Align::Center);
+        head_check.update_property(&[gtk::accessible::Property::Label("Select all")]);
+        head_row.append(&head_check);
+        let columns = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        columns.set_hexpand(true);
+        columns.append(&sized(gtk::Box::new(gtk::Orientation::Horizontal, 0), 28));
         let doc_head = label("DOCUMENT", &[]);
         doc_head.set_hexpand(true);
-        head_row.append(&doc_head);
-        head_row.append(&sized(label("TAGS", &[]), TAGS_WIDTH));
-        head_row.append(&sized(label("DATE", &[]), DATE_WIDTH));
-        head_row.append(&sized(label("LENGTH", &[]), LENGTH_WIDTH));
-        table.append(&head_row);
+        columns.append(&doc_head);
+        columns.append(&sized(label("TAGS", &[]), TAGS_WIDTH));
+        columns.append(&sized(label("DATE", &[]), DATE_WIDTH));
+        columns.append(&sized(label("LENGTH", &[]), LENGTH_WIDTH));
+        head_row.append(&columns);
+        head_row.append(&sized(gtk::Box::new(gtk::Orientation::Horizontal, 0), 28));
+
+        // The bulk bar replaces the head while documents are selected.
+        let bulk = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        bulk.add_css_class("fx-table-head");
+        bulk.add_css_class("fx-bulk-bar");
+        let bulk_check = gtk::CheckButton::new();
+        bulk_check.set_valign(gtk::Align::Center);
+        bulk_check.update_property(&[gtk::accessible::Property::Label("Select all")]);
+        let bulk_count = label("", &["fx-bulk-count"]);
+        bulk_count.set_valign(gtk::Align::Center);
+        bulk_count.set_margin_start(4);
+        bulk_count.set_margin_end(8);
+        bulk.append(&bulk_check);
+        bulk.append(&bulk_count);
+        let bulk_move = bulk_button("Move to…", &[]);
+        let bulk_tags = bulk_button("Tags", &[]);
+        let bulk_export = bulk_button("Export…", &[]);
+        let bulk_delete = bulk_button("Delete", &["danger"]);
+        let bulk_clear = bulk_button("Clear selection", &["flat"]);
+        bulk_clear.set_hexpand(true);
+        bulk_clear.set_halign(gtk::Align::End);
+        for b in [&bulk_move, &bulk_tags, &bulk_export, &bulk_delete, &bulk_clear] {
+            bulk.append(b);
+        }
+        let table_head = gtk::Stack::new();
+        table_head.add_named(&head_row, Some("head"));
+        table_head.add_named(&bulk, Some("bulk"));
+        table.append(&table_head);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
         table.append(&list);
         let empty = label("", &["fx-body"]);
@@ -349,8 +424,26 @@ impl ProjectPage {
             .build();
         side.add_css_class("fx-inspector-scroll");
 
+        // "Deleted …  Undo", over the bottom of the page.
+        let toast = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        toast.add_css_class("fx-toast");
+        toast.set_halign(gtk::Align::Center);
+        toast.set_valign(gtk::Align::End);
+        toast.set_margin_bottom(24);
+        toast.set_visible(false);
+        let toast_label = label("", &[]);
+        toast_label.set_valign(gtk::Align::Center);
+        let undo = gtk::Button::with_label("Undo");
+        undo.set_valign(gtk::Align::Center);
+        toast.append(&toast_label);
+        toast.append(&undo);
+        let overlay = gtk::Overlay::new();
+        overlay.set_hexpand(true);
+        overlay.set_child(Some(&main_scroll));
+        overlay.add_overlay(&toast);
+
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&main_scroll);
+        root.append(&overlay);
         root.append(&side);
 
         let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -395,6 +488,21 @@ impl ProjectPage {
             empty,
             shown: RefCell::default(),
             in_scope: RefCell::default(),
+            head: table_head,
+            head_check,
+            bulk_check,
+            bulk_count,
+            bulk_tags,
+            selected: RefCell::default(),
+            row_checks: RefCell::default(),
+            row_menus: RefCell::default(),
+            syncing: Cell::new(false),
+            pending_delete: RefCell::default(),
+            menu: RefCell::default(),
+            toast,
+            toast_label,
+            toast_undo: undo.clone(),
+            editor: RefCell::default(),
             side,
             project_fields,
             name,
@@ -411,6 +519,7 @@ impl ProjectPage {
             on_changed: RefCell::default(),
             on_new_dictation: RefCell::default(),
             on_import: RefCell::default(),
+            on_deleted: RefCell::default(),
             new_dictation: new_dictation.clone(),
         });
         let weak = Rc::downgrade(&page);
@@ -429,6 +538,7 @@ impl ProjectPage {
             });
         }
         page.wire();
+        page.wire_selection(&bulk_move, &bulk_export, &bulk_delete, &bulk_clear, &undo);
         let weak = Rc::downgrade(&page);
         new_dictation.connect_clicked(move |_| {
             let Some(p) = weak.upgrade() else { return };
@@ -831,6 +941,7 @@ impl ProjectPage {
         self.loading.set(true);
         *self.scope.borrow_mut() = scope.clone();
         *self.tag_filter.borrow_mut() = None;
+        self.selected.borrow_mut().clear();
         self.search.set_text("");
         let project = self
             .project_id()
@@ -944,7 +1055,12 @@ impl ProjectPage {
 
     /// Re-reads documents and redraws the list and tag chips.
     pub fn render_list(self: &Rc<Self>) {
-        let all = self.store.documents(&self.base_filter()).unwrap_or_default();
+        // A menu hangs from a row's ⋯ button; it goes before the rows do.
+        self.close_menu();
+        // Documents waiting for Undo are already gone from the list.
+        let hidden = self.hidden_ids();
+        let mut all = self.store.documents(&self.base_filter()).unwrap_or_default();
+        all.retain(|d| !hidden.contains(&d.id));
         let mut filter = self.base_filter();
         let text = self.search.text().trim().to_string();
         if !text.is_empty() {
@@ -978,6 +1094,8 @@ impl ProjectPage {
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
         }
+        self.row_checks.borrow_mut().clear();
+        self.row_menus.borrow_mut().clear();
         for d in &docs {
             self.list.append(&self.row(d));
         }
@@ -990,6 +1108,10 @@ impl ProjectPage {
         });
         *self.shown.borrow_mut() = docs.iter().map(|d| d.id).collect();
         *self.in_scope.borrow_mut() = all.iter().map(|d| d.id).collect();
+        // Only documents in the list stay selected.
+        let shown = self.shown.borrow().clone();
+        self.selected.borrow_mut().retain(|id| shown.contains(id));
+        self.sync_selection();
         self.update_export_button();
     }
 
@@ -1061,10 +1183,17 @@ impl ProjectPage {
         }
     }
 
-    fn row(&self, d: &DocumentSummary) -> gtk::Widget {
+    fn row(self: &Rc<Self>, d: &DocumentSummary) -> gtk::Widget {
+        // A checkbox, the document (a button that opens it) and its ⋯ menu.
+        let outer = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        outer.add_css_class("fx-project-doc-row");
+        let check = gtk::CheckButton::new();
+        check.set_valign(gtk::Align::Center);
+        check.update_property(&[gtk::accessible::Property::Label(&format!("Select {}", d.title))]);
+        outer.append(&check);
         let b = gtk::Button::new();
-        b.add_css_class("fx-row-button");
-        b.add_css_class("fx-project-doc-row");
+        b.add_css_class("fx-doc-open");
+        b.set_hexpand(true);
         b.set_tooltip_text(Some("Open the document"));
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
         let tile = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1126,7 +1255,37 @@ impl ProjectPage {
                 f(id);
             }
         });
-        b.upcast()
+        outer.append(&b);
+        let more = gtk::Button::with_label("⋯");
+        more.add_css_class("fx-icon-button");
+        more.add_css_class("fx-doc-more");
+        more.set_valign(gtk::Align::Center);
+        more.set_size_request(28, 28);
+        more.set_tooltip_text(Some("More actions"));
+        more.update_property(&[gtk::accessible::Property::Label(&format!(
+            "More actions for {}",
+            d.title
+        ))]);
+        outer.append(&more);
+        let weak = Rc::downgrade(self);
+        check.connect_toggled(move |c| {
+            if let Some(p) = weak.upgrade()
+                && !p.syncing.get()
+            {
+                p.select_document(id, c.is_active());
+            }
+        });
+        let weak = Rc::downgrade(self);
+        more.connect_clicked(move |m| {
+            if let Some(p) = weak.upgrade() {
+                p.row_menu(m, id);
+            }
+        });
+        self.row_checks
+            .borrow_mut()
+            .push((id, check, outer.clone().upcast()));
+        self.row_menus.borrow_mut().push(more);
+        outer.upcast()
     }
 
     /// Titles of the documents shown, in order (tests).
@@ -1164,6 +1323,722 @@ impl ProjectPage {
     pub fn press_export(&self) {
         self.export_button.emit_clicked();
     }
+}
+
+/// Selecting documents, and moving, tagging, exporting and deleting them.
+impl ProjectPage {
+    fn wire_selection(
+        self: &Rc<Self>,
+        bulk_move: &gtk::Button,
+        bulk_export: &gtk::Button,
+        bulk_delete: &gtk::Button,
+        bulk_clear: &gtk::Button,
+        undo: &gtk::Button,
+    ) {
+        let weak = Rc::downgrade(self);
+        self.head_check.connect_toggled(move |c| {
+            if let Some(p) = weak.upgrade()
+                && !p.syncing.get()
+                && c.is_active()
+            {
+                p.select_all();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.bulk_check.connect_toggled(move |_| {
+            let Some(p) = weak.upgrade() else { return };
+            if p.syncing.get() {
+                return;
+            }
+            if p.selected.borrow().len() == p.shown.borrow().len() {
+                p.clear_selection();
+            } else {
+                p.select_all();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        bulk_move.connect_clicked(move |b| {
+            if let Some(p) = weak.upgrade() {
+                let ids = p.selected_ids();
+                p.move_menu(b, ids);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.bulk_tags.connect_clicked(move |b| {
+            if let Some(p) = weak.upgrade() {
+                let ids = p.selected_ids();
+                p.tags_menu(b, ids);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        bulk_export.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                let ids = p.selected_ids();
+                p.export_documents(p.title.text().to_string(), ids);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        bulk_delete.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.delete_selected();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        bulk_clear.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.clear_selection();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        undo.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.undo_delete();
+            }
+        });
+    }
+
+    /// Documents were deleted for good (the editor closes them if open).
+    pub fn connect_deleted(&self, f: impl Fn(Vec<DocumentId>) + 'static) {
+        *self.on_deleted.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn select_document(&self, id: DocumentId, on: bool) {
+        {
+            let mut selected = self.selected.borrow_mut();
+            selected.retain(|s| *s != id);
+            if on && self.shown.borrow().contains(&id) {
+                selected.push(id);
+            }
+        }
+        self.sync_selection();
+    }
+
+    pub fn select_all(&self) {
+        *self.selected.borrow_mut() = self.shown.borrow().clone();
+        self.sync_selection();
+    }
+
+    pub fn clear_selection(&self) {
+        self.selected.borrow_mut().clear();
+        self.sync_selection();
+    }
+
+    /// Selected documents, in list order.
+    pub fn selected_ids(&self) -> Vec<DocumentId> {
+        let selected = self.selected.borrow();
+        self.shown
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|id| selected.contains(id))
+            .collect()
+    }
+
+    /// Whether the bulk bar is in place of the table head (tests).
+    pub fn bulk_bar_shown(&self) -> bool {
+        self.head.visible_child_name().as_deref() == Some("bulk")
+    }
+
+    /// Checkboxes, row highlights and the head follow the selection.
+    fn sync_selection(&self) {
+        self.syncing.set(true);
+        let selected = self.selected.borrow().clone();
+        for (id, check, row) in self.row_checks.borrow().iter() {
+            let on = selected.contains(id);
+            check.set_active(on);
+            if on {
+                row.add_css_class("selected");
+            } else {
+                row.remove_css_class("selected");
+            }
+        }
+        let (n, shown) = (selected.len(), self.shown.borrow().len());
+        self.head
+            .set_visible_child_name(if n > 0 { "bulk" } else { "head" });
+        self.bulk_count.set_text(&format!("{n} selected"));
+        self.bulk_check.set_active(n > 0 && n == shown);
+        self.bulk_check.set_inconsistent(n > 0 && n < shown);
+        self.head_check.set_active(false);
+        self.syncing.set(false);
+    }
+
+    /// Redraws the list and lets the sidebar update its counts and tags.
+    fn changed(self: &Rc<Self>) {
+        self.render_list();
+        self.notify_changed();
+    }
+
+    fn notify_changed(&self) {
+        if let Some(f) = self.on_changed.borrow().clone() {
+            f(());
+        }
+    }
+
+    fn export_documents(&self, title: String, ids: Vec<DocumentId>) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(f) = self.on_export.borrow().clone() {
+            f((title, ids));
+        }
+    }
+
+    /// Moves documents to a project (`None`: Unsorted).
+    pub fn move_documents(self: &Rc<Self>, ids: &[DocumentId], project: Option<ProjectId>) {
+        let hidden = self.hidden_ids();
+        for id in ids.iter().filter(|id| !hidden.contains(id)) {
+            if let Err(e) = self.store.move_document(*id, project) {
+                tracing::error!("moving document {id}: {e}");
+            }
+        }
+        self.changed();
+    }
+
+    pub fn move_selected(self: &Rc<Self>, project: Option<ProjectId>) {
+        let ids = self.selected_ids();
+        self.move_documents(&ids, project);
+    }
+
+    /// Adds `tag` to the documents, or takes it off. Only the store changes;
+    /// the list redraws when the tag menu closes.
+    fn tag_documents(&self, ids: &[DocumentId], tag: &str, on: bool) {
+        let tag = tag.trim().trim_start_matches('#').to_lowercase();
+        if tag.is_empty() {
+            return;
+        }
+        let hidden = self.hidden_ids();
+        for id in ids.iter().filter(|id| !hidden.contains(id)) {
+            let Ok(doc) = self.store.document(*id) else {
+                continue;
+            };
+            let mut tags = doc.tags;
+            tags.retain(|t| *t != tag);
+            if on {
+                tags.push(tag.clone());
+            }
+            if let Err(e) = self.store.set_tags(*id, &tags) {
+                tracing::error!("tagging document {id}: {e}");
+            }
+        }
+    }
+
+    pub fn set_tag_on_selected(self: &Rc<Self>, tag: &str, on: bool) {
+        self.tag_documents(&self.selected_ids(), tag, on);
+        self.changed();
+    }
+
+    pub fn rename_document(self: &Rc<Self>, id: DocumentId, title: &str) {
+        let title = title.trim();
+        let Ok(doc) = self.store.document(id) else { return };
+        if title.is_empty() || title == doc.title {
+            return;
+        }
+        if let Err(e) = self
+            .store
+            .update_document(id, title, doc.template_id.as_deref(), &doc.fields)
+        {
+            tracing::error!("renaming document {id}: {e}");
+        }
+        self.changed();
+    }
+
+    pub fn delete_selected(self: &Rc<Self>) {
+        let ids = self.selected_ids();
+        self.delete_documents(ids);
+    }
+
+    /// Hides the documents and offers Undo; they are deleted when the offer
+    /// runs out, another delete starts, or the window closes.
+    pub fn delete_documents(self: &Rc<Self>, mut ids: Vec<DocumentId>) {
+        if ids.is_empty() {
+            return;
+        }
+        self.finish_delete();
+        let (open, recording) = self.editor_state();
+        // The document being dictated into cannot go; the text still lands in it.
+        if recording && let Some(busy) = open.filter(|o| ids.contains(o)) {
+            ids.retain(|id| *id != busy);
+            if ids.is_empty() {
+                let title = self.store.document(busy).map(|d| d.title).unwrap_or_default();
+                self.notice(&format!(
+                    "«{title}» is being dictated into. Stop dictation to delete it."
+                ));
+                return;
+            }
+        }
+        let text = match ids.as_slice() {
+            [id] => format!(
+                "Deleted «{}»",
+                self.store.document(*id).map(|d| d.title).unwrap_or_default()
+            ),
+            _ => format!("Deleted {}", plural(ids.len(), "document")),
+        };
+        self.selected.borrow_mut().retain(|s| !ids.contains(s));
+        let weak = Rc::downgrade(self);
+        // The timer's own run takes the pending delete, so it is never removed twice.
+        let timer = glib::timeout_add_local_once(UNDO_TIME, move || {
+            if let Some(p) = weak.upgrade() {
+                p.commit_delete(false);
+            }
+        });
+        *self.pending_delete.borrow_mut() = Some(PendingDelete {
+            ids,
+            timer,
+            open_at_start: open,
+        });
+        self.toast_label.set_text(&text);
+        self.toast_undo.set_visible(true);
+        self.toast.set_visible(true);
+        self.render_list();
+    }
+
+    pub fn undo_delete(self: &Rc<Self>) {
+        let Some(pending) = self.pending_delete.borrow_mut().take() else {
+            return;
+        };
+        pending.timer.remove();
+        self.toast.set_visible(false);
+        self.render_list();
+    }
+
+    /// Deletes the documents waiting for Undo now.
+    pub fn finish_delete(&self) {
+        self.commit_delete(true);
+    }
+
+    /// Deletes the text, and audio that Fennec recorded; imported originals
+    /// belong to the user and stay.
+    fn commit_delete(&self, cancel_timer: bool) {
+        let Some(pending) = self.pending_delete.borrow_mut().take() else {
+            return;
+        };
+        if cancel_timer {
+            pending.timer.remove();
+        }
+        self.toast.set_visible(false);
+        // A document opened in the editor since, or being dictated into, is kept:
+        // deleting it would lose what was written there meanwhile.
+        let (open, recording) = self.editor_state();
+        let keep = open.filter(|o| recording || Some(*o) != pending.open_at_start);
+        let audio_dir = self.deps.paths.audio();
+        let mut deleted = Vec::new();
+        for id in pending.ids {
+            if Some(id) == keep {
+                continue;
+            }
+            let audio = self.store.document(id).ok().and_then(|d| d.audio_path);
+            if let Err(e) = self.store.delete_document(id) {
+                tracing::error!("deleting document {id}: {e}");
+                continue;
+            }
+            deleted.push(id);
+            // Only Fennec's own recordings; a path that climbs out with ".." is not one.
+            if let Some(path) = audio
+                && path.starts_with(&audio_dir)
+                && !path.components().any(|c| c == std::path::Component::ParentDir)
+                && let Err(e) = std::fs::remove_file(&path)
+            {
+                tracing::warn!("could not delete the audio {}: {e}", path.display());
+            }
+        }
+        if let Some(f) = self.on_deleted.borrow().clone() {
+            f(deleted);
+        }
+        self.notify_changed();
+    }
+
+    /// Tells the page which document the editor holds and whether dictation
+    /// is recording into it.
+    pub fn connect_editor_state(&self, f: impl Fn() -> (Option<DocumentId>, bool) + 'static) {
+        *self.editor.borrow_mut() = Some(Rc::new(f));
+    }
+
+    fn editor_state(&self) -> (Option<DocumentId>, bool) {
+        self.editor.borrow().clone().map_or((None, false), |f| f())
+    }
+
+    /// A message in the bottom bar, without Undo, for a few seconds.
+    fn notice(self: &Rc<Self>, text: &str) {
+        self.toast_label.set_text(text);
+        self.toast_undo.set_visible(false);
+        self.toast.set_visible(true);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || {
+            if let Some(p) = weak.upgrade()
+                && p.pending_delete.borrow().is_none()
+            {
+                p.toast.set_visible(false);
+            }
+        });
+    }
+
+    fn hidden_ids(&self) -> Vec<DocumentId> {
+        self.pending_delete
+            .borrow()
+            .as_ref()
+            .map(|p| p.ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// The Undo bar's text while it shows (tests).
+    pub fn toast_text(&self) -> Option<String> {
+        self.toast
+            .get_visible()
+            .then(|| self.toast_label.text().to_string())
+    }
+
+    fn menu(&self, anchor: &gtk::Button, content: &gtk::Box, width: i32) -> gtk::Popover {
+        self.close_menu();
+        let pop = popover(anchor, content, width);
+        *self.menu.borrow_mut() = Some(pop.clone());
+        pop
+    }
+
+    /// Closes the open row or bulk menu, if any.
+    pub fn close_menu(&self) {
+        if let Some(pop) = self.menu.borrow_mut().take() {
+            pop.popdown();
+            // The page keeps one menu at a time; it leaves when the next opens.
+            if pop.parent().is_some() {
+                pop.unparent();
+            }
+        }
+    }
+
+    /// Whether a row or bulk menu is open (tests).
+    pub fn menu_open(&self) -> bool {
+        self.menu.borrow().is_some()
+    }
+
+    /// Ids of the documents shown, in order (tests).
+    pub fn shown_ids(&self) -> Vec<DocumentId> {
+        self.shown.borrow().clone()
+    }
+
+    /// Opens the bulk bar's Tags menu (screenshots).
+    pub fn open_bulk_tags(&self) {
+        self.bulk_tags.emit_clicked();
+    }
+
+    /// Opens the ⋯ menu of the `index`th row (screenshots).
+    pub fn open_row_menu(&self, index: usize) {
+        let more = self.row_menus.borrow().get(index).cloned();
+        if let Some(m) = more {
+            m.emit_clicked();
+        }
+    }
+
+    /// A row's ⋯ menu: Open, Rename, Move to, Tags, Export, Delete.
+    fn row_menu(self: &Rc<Self>, anchor: &gtk::Button, id: DocumentId) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let open = menu_item("Open", None);
+        let rename = menu_item("Rename…", None);
+        let move_to = menu_item("Move to", Some("›"));
+        let tags = menu_item("Tags…", None);
+        let export = menu_item("Export…", None);
+        let delete = menu_item("Delete", None);
+        delete.add_css_class("danger");
+        for b in [&open, &rename, &move_to, &tags, &export] {
+            content.append(b);
+        }
+        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        content.append(&delete);
+        let pop = self.menu(anchor, &content, 220);
+
+        // Each item closes the menu first; the work runs once it is gone.
+        let item = |b: &gtk::Button, run: MenuAction| {
+            let weak = Rc::downgrade(self);
+            let pop = pop.downgrade();
+            let anchor = anchor.clone();
+            b.connect_clicked(move |_| {
+                if let Some(pop) = pop.upgrade() {
+                    pop.popdown();
+                }
+                let weak = weak.clone();
+                let run = Rc::clone(&run);
+                let anchor = anchor.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(p) = weak.upgrade() {
+                        run(&p, &anchor);
+                    }
+                });
+            });
+        };
+        item(
+            &open,
+            Rc::new(move |p: &Rc<Self>, _: &gtk::Button| {
+                if let Some(f) = p.on_open.borrow().clone() {
+                    f(id);
+                }
+            }),
+        );
+        item(
+            &rename,
+            Rc::new(move |p: &Rc<Self>, a: &gtk::Button| p.rename_menu(a, id)),
+        );
+        item(
+            &move_to,
+            Rc::new(move |p: &Rc<Self>, a: &gtk::Button| p.move_menu(a, vec![id])),
+        );
+        item(
+            &tags,
+            Rc::new(move |p: &Rc<Self>, a: &gtk::Button| p.tags_menu(a, vec![id])),
+        );
+        item(
+            &export,
+            Rc::new(move |p: &Rc<Self>, _: &gtk::Button| {
+                let title = p.store.document(id).map(|d| d.title).unwrap_or_default();
+                p.export_documents(title, vec![id]);
+            }),
+        );
+        item(
+            &delete,
+            Rc::new(move |p: &Rc<Self>, _: &gtk::Button| p.delete_documents(vec![id])),
+        );
+    }
+
+    fn rename_menu(self: &Rc<Self>, anchor: &gtk::Button, id: DocumentId) {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let entry = gtk::Entry::builder()
+            .text(self.store.document(id).map(|d| d.title).unwrap_or_default())
+            .build();
+        entry.update_property(&[gtk::accessible::Property::Label("Document title")]);
+        let save = gtk::Button::with_label("Rename");
+        save.add_css_class("fx-primary");
+        content.append(&entry);
+        content.append(&save);
+        let pop = self.menu(anchor, &content, 260);
+        entry.grab_focus();
+        let weak = Rc::downgrade(self);
+        let pop = pop.downgrade();
+        let done = Rc::new(move |text: String| {
+            if let Some(pop) = pop.upgrade() {
+                pop.popdown();
+            }
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(p) = weak.upgrade() {
+                    p.rename_document(id, &text);
+                }
+            });
+        });
+        let d = Rc::clone(&done);
+        let e = entry.clone();
+        save.connect_clicked(move |_| d(e.text().to_string()));
+        entry.connect_activate(move |e| done(e.text().to_string()));
+    }
+
+    /// The projects (and Unsorted) to move `ids` to; the current one is ticked.
+    fn move_menu(self: &Rc<Self>, anchor: &gtk::Button, ids: Vec<DocumentId>) {
+        if ids.is_empty() {
+            return;
+        }
+        let current: Vec<Option<ProjectId>> = ids
+            .iter()
+            .filter_map(|id| self.store.document(*id).ok().map(|d| d.project_id))
+            .collect();
+        let shared = current
+            .first()
+            .copied()
+            .filter(|c| current.iter().all(|x| x == c));
+        let mut targets: Vec<(String, String, Option<ProjectId>)> = self
+            .store
+            .projects()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (p.name, p.color, Some(p.id)))
+            .collect();
+        targets.push(("Unsorted".into(), "#C9CED6".into(), None));
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        content.append(&label("MOVE TO", &["fx-section-title", "fx-menu-head"]));
+        let pop = self.menu(anchor, &content, 220);
+        for (name, color, target) in targets {
+            let b = gtk::Button::new();
+            b.add_css_class("fx-menu-item");
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let square = color_area(10, 2.0, move || Some(color.clone()));
+            square.set_valign(gtk::Align::Center);
+            row.append(&square);
+            let l = label(&name, &["fx-menu-title"]);
+            l.set_hexpand(true);
+            row.append(&l);
+            if shared == Some(target) {
+                row.append(&gtk::Image::from_icon_name("fennec-check-symbolic"));
+            }
+            b.set_child(Some(&row));
+            b.update_property(&[gtk::accessible::Property::Label(&format!("Move to {name}"))]);
+            let weak = Rc::downgrade(self);
+            let ids = ids.clone();
+            let pop = pop.downgrade();
+            b.connect_clicked(move |_| {
+                if let Some(pop) = pop.upgrade() {
+                    pop.popdown();
+                }
+                let weak = weak.clone();
+                let ids = ids.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(p) = weak.upgrade() {
+                        p.move_documents(&ids, target);
+                    }
+                });
+            });
+            content.append(&b);
+        }
+    }
+
+    /// Every tag, ticked when all of `ids` have it and mixed when some do;
+    /// the entry finds a tag or, with Enter, creates and adds it.
+    fn tags_menu(self: &Rc<Self>, anchor: &gtk::Button, ids: Vec<DocumentId>) {
+        if ids.is_empty() {
+            return;
+        }
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let entry = gtk::Entry::builder()
+            .placeholder_text("Find or create a tag")
+            .build();
+        entry.update_property(&[gtk::accessible::Property::Label("Find or create a tag")]);
+        content.append(&entry);
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&list);
+        let pop = self.menu(anchor, &content, 260);
+        let ids = Rc::new(ids);
+        let fill: Rc<dyn Fn()> = {
+            let weak = Rc::downgrade(self);
+            let list = list.clone();
+            let ids = Rc::clone(&ids);
+            Rc::new(move || {
+                let Some(p) = weak.upgrade() else { return };
+                p.fill_tags(&list, &ids);
+            })
+        };
+        fill();
+        let l = list.clone();
+        entry.connect_changed(move |e| {
+            let find = e.text().trim().trim_start_matches('#').to_lowercase();
+            let mut row = l.first_child();
+            while let Some(r) = row {
+                r.set_visible(r.widget_name().contains(find.as_str()));
+                row = r.next_sibling();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        let i = Rc::clone(&ids);
+        entry.connect_activate(move |e| {
+            let Some(p) = weak.upgrade() else { return };
+            p.tag_documents(&i, &e.text(), true);
+            e.set_text("");
+            fill();
+        });
+        // The list and sidebar catch up once the menu closes.
+        let weak = Rc::downgrade(self);
+        pop.connect_closed(move |_| {
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(p) = weak.upgrade() {
+                    p.changed();
+                }
+            });
+        });
+    }
+
+    fn fill_tags(self: &Rc<Self>, list: &gtk::Box, ids: &Rc<Vec<DocumentId>>) {
+        while let Some(c) = list.first_child() {
+            list.remove(&c);
+        }
+        let docs: Vec<Vec<String>> = ids
+            .iter()
+            .filter_map(|id| self.store.document(*id).ok().map(|d| d.tags))
+            .collect();
+        let n = docs.len();
+        let tags = self.store.tags().unwrap_or_default();
+        if tags.is_empty() {
+            list.append(&label(
+                "No tags yet. Type one and press Enter.",
+                &["fx-menu-note"],
+            ));
+        }
+        for (tag, _) in tags {
+            let have = docs.iter().filter(|t| t.contains(&tag)).count();
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            row.add_css_class("fx-tag-choice");
+            row.set_widget_name(&tag);
+            let check = gtk::CheckButton::with_label(&tag);
+            check.set_hexpand(true);
+            check.set_active(have == n);
+            check.set_inconsistent(have > 0 && have < n);
+            let count = label(
+                &if n > 1 && have > 0 {
+                    format!("{have} of {n}")
+                } else {
+                    String::new()
+                },
+                &["fx-tag-count"],
+            );
+            count.set_valign(gtk::Align::Center);
+            row.append(&check);
+            row.append(&count);
+            let weak = Rc::downgrade(self);
+            let ids = Rc::clone(ids);
+            check.connect_toggled(move |c| {
+                let Some(p) = weak.upgrade() else { return };
+                c.set_inconsistent(false);
+                p.tag_documents(&ids, &tag, c.is_active());
+                count.set_text(&if n > 1 && c.is_active() {
+                    format!("{n} of {n}")
+                } else {
+                    String::new()
+                });
+            });
+            list.append(&row);
+        }
+    }
+}
+
+impl Drop for ProjectPage {
+    /// A delete waiting for Undo is carried out when the window closes.
+    fn drop(&mut self) {
+        self.commit_delete(true);
+    }
+}
+
+/// A small button in the bulk bar.
+fn bulk_button(text: &str, classes: &[&str]) -> gtk::Button {
+    let b = gtk::Button::with_label(text);
+    b.add_css_class("fx-secondary");
+    b.add_css_class("small");
+    for c in classes {
+        b.add_css_class(c);
+    }
+    b.set_valign(gtk::Align::Center);
+    b
+}
+
+/// A menu row with its text and, optionally, a mark at the right.
+fn menu_item(text: &str, mark: Option<&str>) -> gtk::Button {
+    let b = gtk::Button::new();
+    b.add_css_class("fx-menu-item");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let l = label(text, &["fx-menu-title"]);
+    l.set_hexpand(true);
+    row.append(&l);
+    if let Some(m) = mark {
+        row.append(&label(m, &["fx-menu-note"]));
+    }
+    b.set_child(Some(&row));
+    b
+}
+
+/// A popover on `anchor` holding `child`, taken down again once closed.
+fn popover(anchor: &impl IsA<gtk::Widget>, child: &impl IsA<gtk::Widget>, width: i32) -> gtk::Popover {
+    let pop = gtk::Popover::new();
+    pop.add_css_class("fx-doc-menu");
+    pop.set_has_arrow(false);
+    pop.set_position(gtk::PositionType::Bottom);
+    child.set_size_request(width, -1);
+    pop.set_child(Some(child));
+    pop.set_parent(anchor);
+    pop.popup();
+    pop
 }
 
 /// The short word for where a provider runs, as in "Workstation · network".

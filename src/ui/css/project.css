@@ -13,7 +13,39 @@
 .fx-project-main searchentry > image { color: @fx_muted; }
 
 /* Documents table */
-.fx-project-doc-row { min-height: 60px; padding: 0 16px; }
+.fx-project-doc-row { min-height: 60px; padding: 0 16px; border-top: 1px solid @fx_divider; }
+.fx-project-doc-row.selected { background-color: @fx_accent_tint; }
+button.fx-doc-open { background: none; box-shadow: none; border: none; border-radius: 0; padding: 0; min-height: 60px; }
+button.fx-doc-more { font-size: 16px; color: @fx_muted; }
+
+/* Selection: the bulk bar in place of the table head */
+.fx-bulk-bar { background-color: @fx_accent_soft; padding: 6px 16px; }
+.fx-bulk-bar label.fx-bulk-count { font-size: 13px; font-weight: 600; letter-spacing: 0; color: @fx_text; }
+.fx-bulk-bar button label { font-size: 12px; font-weight: 500; letter-spacing: 0; color: @fx_text; }
+.fx-bulk-bar button.danger label { color: @fx_error; }
+.fx-bulk-bar button.flat { background: none; border: none; box-shadow: none; }
+.fx-bulk-bar button.flat label { color: @fx_muted; }
+
+/* Row and bulk menus */
+popover.fx-doc-menu > contents { padding: 6px; }
+popover.fx-doc-menu button.fx-menu-item.danger label { color: @fx_error; }
+popover.fx-doc-menu separator { margin: 4px 0; background-color: @fx_divider; }
+.fx-menu-head { padding: 4px 12px 2px; }
+.fx-tag-choice { padding: 0 8px; }
+window.fennec .fx-tag-choice checkbutton { min-height: 34px; color: @fx_text; }
+.fx-tag-count { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: @fx_muted; }
+
+/* "Deleted …  Undo" */
+.fx-toast {
+  background-color: @fx_ink;
+  border-radius: 10px;
+  padding: 4px 6px 4px 16px;
+  min-height: 36px;
+  box-shadow: 0 8px 24px alpha(black, 0.2);
+}
+.fx-toast label { color: @fx_ink_fg; font-size: 13px; }
+.fx-toast button { background: none; border: none; box-shadow: none; min-height: 32px; padding: 0 10px; }
+.fx-toast button label { color: @fx_accent_soft; font-weight: 600; }
 .fx-doc-row-title { font-size: 14px; font-weight: 500; color: @fx_text; }
 .fx-doc-date { font-size: 13px; color: @fx_text_soft; }
 .fx-doc-length { color: @fx_text_soft; }

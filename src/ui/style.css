@@ -68,7 +68,8 @@ window.fennec checkbutton check {
   background-color: @fx_surface;
   box-shadow: none;
 }
-window.fennec checkbutton check:checked {
+window.fennec checkbutton check:checked,
+window.fennec checkbutton check:indeterminate {
   background-color: @fx_accent;
   border-color: @fx_accent;
   color: white;

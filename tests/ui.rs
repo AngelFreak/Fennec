@@ -924,12 +924,178 @@ fn main() {
     // --- microphone: level test, input volume, clipping warning
     audio_checks(&tmp.path().join("d"));
 
+    // --- documents in a project: select, move, tag, delete with Undo
+    document_checks(&tmp.path().join("e"));
+
     let failures = unsafe { FAILURES };
     if failures > 0 {
         println!("\n{failures} UI check(s) failed");
         std::process::exit(1);
     }
     println!("\nall UI checks passed");
+}
+
+/// Selects documents in a project, then moves, tags and deletes them the
+/// way the bulk bar and row menus do.
+fn document_checks(root: &std::path::Path) {
+    use fennec::store::{NewDocument, ProjectFilter};
+    use fennec::ui::Nav;
+    let w = ui::build_window(deps(root, vec![], true));
+    let store = Store::open(&root.join("data/fennec.db")).unwrap();
+    let vendor = store.create_project("Leverandør", "#1D4ED8").unwrap();
+    let meetings = store.create_project("Møder", "#0F766E").unwrap();
+    let ids: Vec<_> = ["Møde om tilbud", "Prisforhandling", "Telefon med Jens"]
+        .iter()
+        .map(|t| {
+            store
+                .create_document(&NewDocument {
+                    project_id: Some(vendor),
+                    ..NewDocument::dictation(t)
+                })
+                .unwrap()
+        })
+        .collect();
+    let count = |id| {
+        store
+            .projects()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|p| p.document_count)
+            .unwrap_or(0)
+    };
+    w.sidebar.refresh();
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    check(
+        "nothing selected shows the table head",
+        !w.project.bulk_bar_shown(),
+    );
+    w.project.select_document(ids[0], true);
+    w.project.select_document(ids[1], true);
+    check(
+        "selecting documents shows the bulk bar",
+        w.project.bulk_bar_shown() && w.project.selected_ids().len() == 2,
+    );
+    w.project.move_selected(Some(meetings));
+    check(
+        "Move to moves every selected document",
+        store.document(ids[0]).unwrap().project_id == Some(meetings)
+            && store.document(ids[1]).unwrap().project_id == Some(meetings),
+    );
+    check(
+        "moved documents leave the list and the selection",
+        w.project.shown_titles() == ["Telefon med Jens"] && !w.project.bulk_bar_shown(),
+    );
+    check(
+        "project counts follow the move",
+        count(vendor) == 1 && count(meetings) == 2,
+    );
+
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(meetings)));
+    w.project.select_all();
+    w.project.set_tag_on_selected("Tilbud", true);
+    check(
+        "a tag added in bulk lands on every selected document",
+        store.document(ids[0]).unwrap().tags == ["tilbud"]
+            && store.document(ids[1]).unwrap().tags == ["tilbud"],
+    );
+    w.project.clear_selection();
+    w.project.select_document(ids[1], true);
+    w.project.set_tag_on_selected("tilbud", false);
+    check(
+        "a tag can be taken off again",
+        store.document(ids[1]).unwrap().tags.is_empty() && store.document(ids[0]).unwrap().tags == ["tilbud"],
+    );
+
+    let audio = Paths::under(root).audio();
+    std::fs::create_dir_all(&audio).unwrap();
+    let recording = audio.join("tilbud.wav");
+    std::fs::write(&recording, b"stand-in").unwrap();
+    store.set_audio_path(ids[0], Some(&recording)).unwrap();
+    w.project.clear_selection();
+    w.project.select_document(ids[0], true);
+    w.project.delete_selected();
+    check(
+        "Delete hides the document and offers Undo",
+        !w.project.shown_titles().contains(&"Møde om tilbud".to_string())
+            && w.project.toast_text().as_deref() == Some("Deleted «Møde om tilbud»")
+            && store.document(ids[0]).is_ok(),
+    );
+    w.project.undo_delete();
+    check(
+        "Undo brings the document back",
+        w.project.shown_titles().contains(&"Møde om tilbud".to_string()) && w.project.toast_text().is_none(),
+    );
+    w.project.select_document(ids[0], true);
+    w.project.delete_selected();
+    w.project.finish_delete();
+    check(
+        "without Undo the document is deleted, with its recording",
+        store.document(ids[0]).is_err() && !recording.exists() && count(meetings) == 1,
+    );
+
+    // Closing the window (or quitting) carries out a delete waiting for Undo.
+    w.project.select_document(ids[1], true);
+    w.project.delete_selected();
+    w.before_close();
+    check(
+        "closing the window carries out a delete waiting for Undo",
+        store.document(ids[1]).is_err() && w.project.toast_text().is_none(),
+    );
+
+    // A row menu hangs from its row; redrawing the rows closes it first.
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.open_row_menu(0);
+    let opened = w.project.menu_open();
+    w.project.render_list();
+    check(
+        "redrawing the list closes an open row menu",
+        opened && !w.project.menu_open(),
+    );
+
+    // The document being dictated into stays.
+    w.dictation.open_document(ids[2]).unwrap();
+    w.dictation.start_recording();
+    let recording_started = pump_until(Duration::from_secs(5), || w.dictation.is_recording());
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.delete_documents(vec![ids[2]]);
+    w.project.finish_delete();
+    check(
+        "the document being dictated into is not deleted, and says why",
+        recording_started
+            && store.document(ids[2]).is_ok()
+            && w.project
+                .toast_text()
+                .is_some_and(|t| t.contains("Stop dictation")),
+    );
+    w.dictation.stop_recording();
+    pump_until(Duration::from_secs(10), || !w.dictation.is_recording());
+
+    // A document opened in the editor during the Undo time is kept.
+    let late = store
+        .create_document(&NewDocument {
+            project_id: Some(vendor),
+            ..NewDocument::dictation("Opfølgning")
+        })
+        .unwrap();
+    w.project.render_list();
+    w.project.delete_documents(vec![late]);
+    w.dictation.open_document(late).unwrap();
+    w.project.finish_delete();
+    check(
+        "a document opened in the editor while Undo shows is kept",
+        store.document(late).is_ok(),
+    );
+
+    // Moving or tagging skips documents waiting to be deleted.
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.delete_documents(vec![ids[2]]);
+    w.project.move_documents(&[ids[2]], Some(meetings));
+    check(
+        "a document waiting for Undo is not moved",
+        store.document(ids[2]).unwrap().project_id == Some(vendor),
+    );
+    w.project.undo_delete();
 }
 
 /// Answers like a model would, by recognising each action's instructions.

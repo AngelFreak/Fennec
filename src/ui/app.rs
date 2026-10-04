@@ -23,6 +23,12 @@ pub fn application(app_id: &str, deps: impl Fn() -> Deps + 'static) -> adw::Appl
     });
     // The one window; the application owns its controller for its lifetime.
     let current: Rc<RefCell<Option<Rc<MainWindow>>>> = Rc::default();
+    let on_quit = Rc::clone(&current);
+    app.connect_shutdown(move |_| {
+        if let Some(win) = on_quit.borrow().as_ref() {
+            win.before_close();
+        }
+    });
     app.connect_activate(move |app| {
         if let Some(win) = current.borrow().as_ref() {
             win.window.present();
