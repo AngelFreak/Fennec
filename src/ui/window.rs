@@ -313,6 +313,14 @@ impl MainWindow {
                 w.update_header();
             }
         });
+        // The editor must not keep a document that was just deleted.
+        let weak = Rc::downgrade(self);
+        self.project.connect_deleted(move |ids| {
+            let Some(w) = weak.upgrade() else { return };
+            if w.dictation.document().is_some_and(|d| ids.contains(&d)) {
+                w.open_initial_document();
+            }
+        });
         let weak = Rc::downgrade(self);
         self.files.connect_open_in_editor(move |doc| {
             if let Some(w) = weak.upgrade() {
