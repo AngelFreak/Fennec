@@ -95,7 +95,6 @@ button.fx-vocab-remove {
   -gtk-icon-size: 12px;
 }
 button.fx-vocab-remove:hover { color: @fx_accent_text; }
-.fx-test-box levelbar.fx-meter trough,
 .fx-set-box levelbar.fx-meter trough,
 .fx-set-box levelbar.fx-meter block { min-height: 8px; }
 

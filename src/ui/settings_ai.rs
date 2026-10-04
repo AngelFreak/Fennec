@@ -40,6 +40,7 @@ pub struct AiSettingsUi {
     editing: RefCell<HashSet<String>>,
     projects_box: gtk::Box,
     on_changed: Handler<()>,
+    on_local_only_changed: Handler<()>,
 }
 
 impl AiSettingsUi {
@@ -77,6 +78,7 @@ impl AiSettingsUi {
             editing: RefCell::default(),
             projects_box: gtk::Box::new(gtk::Orientation::Vertical, 0),
             on_changed: RefCell::default(),
+            on_local_only_changed: RefCell::default(),
         });
         ui.enabled
             .update_property(&[gtk::accessible::Property::Label("Use AI")]);
@@ -136,6 +138,11 @@ impl AiSettingsUi {
 
     pub fn connect_changed(&self, f: impl Fn(()) + 'static) {
         *self.on_changed.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// A project was marked local-only, or no longer is.
+    pub fn connect_local_only_changed(&self, f: impl Fn(()) + 'static) {
+        *self.on_local_only_changed.borrow_mut() = Some(Rc::new(f));
     }
 
     /// Changes the AI settings, saves them and tells the window.
@@ -868,7 +875,10 @@ impl AiSettingsUi {
             ),
         ] {
             let on = label("ALWAYS ON", &["fx-badge", "plain"]);
-            rows.append(&row(title, Some(note), &on));
+            let r = row(title, Some(note), &on);
+            // Read as one setting and its state.
+            r.update_property(&[gtk::accessible::Property::Label(&format!("{title}: always on"))]);
+            rows.append(&r);
         }
         b.append(&always);
 
@@ -986,8 +996,10 @@ impl AiSettingsUi {
                 let Some(u) = weak.upgrade() else { return };
                 match Store::open(&db).and_then(|s| s.set_project_local_only(id, c.is_active())) {
                     Ok(()) => {
-                        if let Some(cb) = u.on_changed.borrow().clone() {
-                            cb(());
+                        for slot in [&u.on_changed, &u.on_local_only_changed] {
+                            if let Some(cb) = slot.borrow().clone() {
+                                cb(());
+                            }
                         }
                     }
                     Err(e) => u.message.set_text(&format!("Could not save: {e}")),

@@ -827,6 +827,16 @@ fn main() {
             .vocabulary_entries()
             .contains(&"Leverandør A/S".to_string()),
     );
+    let before = w.settings.vocabulary_entries().len();
+    w.settings.add_vocabulary("Ærø, Fennec Kommune");
+    w.settings.add_vocabulary("ærø");
+    let entries = w.settings.vocabulary_entries();
+    check(
+        "typing two words adds two; a Danish case-only duplicate is left out",
+        entries.len() == before + 2 && entries.iter().filter(|e| e.to_lowercase() == "ærø").count() == 1,
+    );
+    w.settings.remove_vocabulary("Ærø");
+    w.settings.remove_vocabulary("Fennec Kommune");
     screenshot(&w.window, "settings");
     w.settings.show_section("dictation");
     let settings_text = ui::texts_in(&w.settings.root);
@@ -1251,8 +1261,15 @@ fn ai_checks(root: &std::path::Path) {
     w.settings.ai.render_projects();
     w.settings.ai.set_local_only(&name, true);
     check(
-        "the Privacy checkbox marks the project local only",
+        "the Privacy switch marks the project local only",
         store.projects().unwrap()[0].local_only,
+    );
+    check(
+        "the sidebar line under Privacy counts it at once",
+        w.settings
+            .nav_summaries()
+            .iter()
+            .any(|(id, line)| id == "privacy" && line == "1 project local-only"),
     );
     let local_before = local.count();
     w.dictation.ai_summarize();

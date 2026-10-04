@@ -107,17 +107,6 @@ window.fennec popover > contents {
   padding: 6px;
 }
 
-window.fennec textview.fx-boxed,
-window.fennec textview.fx-boxed text {
-  background-color: @fx_surface;
-  color: @fx_text;
-}
-window.fennec .fx-boxed {
-  border: 1px solid @fx_border;
-  border-radius: 8px;
-  padding: 10px 12px;
-}
-
 window.fennec separator { background-color: @fx_border; min-height: 1px; min-width: 1px; }
 
 /* ---- Buttons ---- */
@@ -342,7 +331,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
 .fx-mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 .fx-mono.accent { color: @fx_accent_text; }
 .fx-h1 { font-size: 20px; font-weight: 600; }
-.fx-h2 { font-size: 15px; font-weight: 600; }
 .fx-h3 { font-size: 14px; font-weight: 600; }
 .fx-project-title { font-size: 24px; font-weight: 600; }
 .fx-body { font-size: 13px; color: @fx_text_soft; }
@@ -385,7 +373,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
   color: @fx_accent_text;
   font-size: 12px;
 }
-.fx-callout.neutral { background-color: @fx_chip; color: @fx_text; font-size: 13px; border-radius: 10px; padding: 12px 14px; }
 
 /* Bordered tables and cards. */
 .fx-table { border: 1px solid @fx_border; border-radius: 10px; background-color: @fx_surface; }
@@ -408,8 +395,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
   min-height: 40px;
 }
 .fx-row-button:hover { background-color: alpha(@fx_text, 0.03); }
-.fx-card { border: 1px solid @fx_border; border-radius: 12px; padding: 16px 18px; background-color: @fx_surface; }
-.fx-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
 
 /* ---- Dictate: document tabs, editor, record dock ---- */
 

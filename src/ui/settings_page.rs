@@ -232,12 +232,19 @@ impl SettingsPage {
         page.root.append(&page.stack);
         page.root.append(&page.inspector_scroll);
 
-        // The lines under the section names follow every change.
+        // The lines under the section names follow every change. The project
+        // list is read from the database only when it can have changed.
         let weak = Rc::downgrade(&page);
         page.ai.connect_changed(move |()| {
             if let Some(p) = weak.upgrade() {
                 p.refresh_nav();
+            }
+        });
+        let weak = Rc::downgrade(&page);
+        page.ai.connect_local_only_changed(move |()| {
+            if let Some(p) = weak.upgrade() {
                 p.refresh_local_projects();
+                p.refresh_nav();
             }
         });
         let weak = Rc::downgrade(&page);
@@ -259,7 +266,6 @@ impl SettingsPage {
         self.ai.connect_changed(move |()| {
             if let Some(p) = weak.upgrade() {
                 p.refresh_nav();
-                p.refresh_local_projects();
             }
             f(());
         });
@@ -581,6 +587,13 @@ impl SettingsPage {
         };
         b.add_css_class("fx-secondary");
         b.set_halign(gtk::Align::End);
+        // Screen readers hear which model the button is for.
+        let name = entry.as_ref().map_or(file, |e| e.name);
+        b.update_property(&[gtk::accessible::Property::Label(&if installed {
+            format!("Use {name}")
+        } else {
+            format!("Download {name}")
+        })]);
         if !installed && matches!(entry.as_ref().map(|e| &e.source), Some(Source::Convert { .. })) {
             b.set_tooltip_text(Some(
                 "Downloads the model and converts it to GGML (needs Python with torch)",
@@ -657,13 +670,30 @@ impl SettingsPage {
             let send = |p| {
                 let _ = tx.send_blocking(Ok(p));
             };
-            // The voice detector comes with the first model.
+            // The voice detector (and the punctuation model) come with the first model.
+            send(Progress::Line("Fetching the voice detector".into()));
             if let Err(e) = models::ensure_vad(&paths, &cancel, send) {
                 tracing::warn!("could not fetch the voice detector: {e}");
             }
-            if punctuate && let Err(e) = models::ensure_punctuation(&paths, &cancel, send) {
-                tracing::warn!("could not fetch the punctuation model: {e}");
+            if punctuate && !cancel.load(Ordering::Relaxed) {
+                send(Progress::Line("Fetching the punctuation model".into()));
+                if let Err(e) = models::ensure_punctuation(&paths, &cancel, send) {
+                    tracing::warn!("could not fetch the punctuation model: {e}");
+                }
             }
+            // A cancel before the model starts must not touch its partial file.
+            if cancel.load(Ordering::Relaxed) {
+                let _ = tx.send_blocking(Err(Err("cancelled".into())));
+                return;
+            }
+            send(Progress::Line(
+                if matches!(m.source, Source::Convert { .. }) {
+                    "Converting to GGML"
+                } else {
+                    "Downloading"
+                }
+                .into(),
+            ));
             let result = match &m.source {
                 Source::Ggml { repo, file } => models::download(
                     &models::hf_url(repo, file),
@@ -1141,16 +1171,19 @@ impl SettingsPage {
         split_vocabulary(&self.deps.settings().vocabulary)
     }
 
-    pub fn add_vocabulary(self: &Rc<Self>, entry: &str) {
-        if entry.is_empty() {
-            return;
-        }
+    /// Adds what was typed; "a, b" adds two entries. Entries already there
+    /// (in any case, "Ærø" or "ærø") are left out.
+    pub fn add_vocabulary(self: &Rc<Self>, text: &str) {
         let mut entries = self.vocabulary_entries();
-        if entries.iter().any(|e| e.eq_ignore_ascii_case(entry)) {
-            return;
+        let before = entries.len();
+        for entry in split_vocabulary(text) {
+            if !entries.iter().any(|e| e.to_lowercase() == entry.to_lowercase()) {
+                entries.push(entry);
+            }
         }
-        entries.push(entry.to_string());
-        self.set_vocabulary(&entries);
+        if entries.len() != before {
+            self.set_vocabulary(&entries);
+        }
     }
 
     pub fn remove_vocabulary(self: &Rc<Self>, entry: &str) {
@@ -1292,15 +1325,19 @@ impl SettingsPage {
         });
         local.append(&link);
         b.append(&local);
-        self.refresh_local_projects();
         b
     }
 
     fn refresh_local_projects(&self) {
-        let names: Vec<String> = Store::open(&self.deps.paths.database())
-            .and_then(|s| s.projects())
-            .map(|ps| ps.into_iter().filter(|p| p.local_only).map(|p| p.name).collect())
-            .unwrap_or_default();
+        let names: Vec<String> = match Store::open(&self.deps.paths.database()).and_then(|s| s.projects()) {
+            Ok(ps) => ps.into_iter().filter(|p| p.local_only).map(|p| p.name).collect(),
+            Err(e) => {
+                // Keep the last count; claiming "none" would be a wrong privacy statement.
+                self.local_projects
+                    .set_text(&format!("Could not read the projects: {e}"));
+                return;
+            }
+        };
         self.local_count.set(names.len());
         self.local_projects.set_text(&match names.as_slice() {
             [] => "None. Mark a project local-only in Privacy to keep it off cloud providers.".to_string(),
@@ -1331,9 +1368,13 @@ impl SettingsPage {
             ("Templates & prompts", p.config_dir.clone()),
             ("Exports", p.exports()),
         ] {
-            let mut shown =
-                path.to_string_lossy()
-                    .replacen(&std::env::var("HOME").unwrap_or_default(), "~", 1);
+            let mut shown = path.to_string_lossy().into_owned();
+            if let Ok(home) = std::env::var("HOME")
+                && !home.is_empty()
+                && let Some(rest) = shown.strip_prefix(&home)
+            {
+                shown = format!("~{rest}");
+            }
             if path.extension().is_none() {
                 shown.push('/');
             }
@@ -1550,9 +1591,15 @@ fn rounded(cr: &gtk::cairo::Context, x: f64, w: f64, h: f64) {
     cr.close_path();
 }
 
-/// Bytes used by a file, or by everything under a folder.
+/// Bytes used by a file, or by everything under a folder. A folder that is
+/// a link (models moved to another disk) is measured where it points; links
+/// inside it are not followed.
 fn disk_size(path: &Path) -> u64 {
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
+    size_of(path, std::fs::metadata(path))
+}
+
+fn size_of(path: &Path, meta: std::io::Result<std::fs::Metadata>) -> u64 {
+    let Ok(meta) = meta else {
         return 0;
     };
     if !meta.is_dir() {
@@ -1564,7 +1611,15 @@ fn disk_size(path: &Path) -> u64 {
         return meta.len() + std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0);
     }
     std::fs::read_dir(path)
-        .map(|entries| entries.flatten().map(|e| disk_size(&e.path())).sum())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| {
+                    let p = e.path();
+                    size_of(&p, std::fs::symlink_metadata(&p))
+                })
+                .sum()
+        })
         .unwrap_or(0)
 }
 
@@ -1866,7 +1921,7 @@ pub(super) fn field(name: &str, w: &impl IsA<gtk::Widget>) -> gtk::Box {
 
 #[cfg(test)]
 mod tests {
-    use super::{download_size, human_size, split_description, split_vocabulary};
+    use super::{disk_size, download_size, human_size, split_description, split_vocabulary};
 
     #[test]
     fn catalog_text_splits_into_architecture_and_description() {
@@ -1891,6 +1946,21 @@ mod tests {
         assert_eq!(human_size(1_500_000), "1.5 MB");
         assert_eq!(human_size(550_000_000), "550 MB");
         assert_eq!(human_size(2_800_000_000), "2.8 GB");
+    }
+
+    #[test]
+    fn a_linked_folder_is_measured_where_it_points_but_inner_links_are_not_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("disk2/models");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("model.bin"), vec![0u8; 5000]).unwrap();
+        let link = tmp.path().join("models");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(disk_size(&link), 5000);
+        // A link inside counts as the link, not what it points to.
+        std::os::unix::fs::symlink(&real, real.join("loop")).unwrap();
+        assert!(disk_size(&link) < 5100);
+        assert_eq!(disk_size(&tmp.path().join("missing")), 0);
     }
 
     #[test]
