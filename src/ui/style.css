@@ -635,27 +635,9 @@ textview.fx-summary-text, textview.fx-summary-text text {
 .fx-handle { color: @fx_faint; font-size: 14px; }
 .fx-logo-slot { border: 1px dashed @fx_faint; border-radius: 6px; min-width: 72px; min-height: 40px; font-size: 10px; color: @fx_muted; }
 
-/* ---- Settings ---- */
+/* ---- Settings (more in css/settings.css) ---- */
 
-.fx-settings-nav { padding: 20px 12px; border-right: 1px solid @fx_border; }
-.fx-settings-tab {
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: none;
-  box-shadow: none;
-  font-size: 13px;
-  color: @fx_text_soft;
-}
-.fx-settings-tab:hover { background-color: alpha(@fx_text, 0.05); }
-.fx-settings-tab.active { background-color: @fx_accent_soft; color: @fx_text; }
-.fx-settings-tab.active label { font-weight: 600; }
-.fx-settings-section { padding: 28px 36px; }
-.fx-model-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
-.fx-model-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
-.fx-model-name { font-size: 15px; font-weight: 600; }
-.fx-storage-row { min-height: 56px; padding: 0 16px; border-top: 1px solid @fx_divider; }
-.fx-storage-row.first { border-top: none; }
+.fx-settings-section { padding: 32px 40px; }
 
 levelbar.fx-meter trough { background-color: @fx_track; border-radius: 3px; min-height: 8px; }
 levelbar.fx-meter block.filled,

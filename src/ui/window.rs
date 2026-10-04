@@ -16,7 +16,7 @@ use super::engine::EngineHolder;
 use super::export_page::{ExportPage, Target};
 use super::files::FilesPage;
 use super::project::{ProjectPage, Scope};
-use super::settings_page::SettingsPage;
+use super::settings_page::{SettingsPage, model_label};
 use super::sidebar::{Nav, Sidebar};
 use super::templates_page::TemplatesPage;
 use super::{Deps, icon_button, label};
@@ -137,6 +137,7 @@ impl MainWindow {
         let templates = TemplatesPage::new(deps.paths.templates());
         sidebar.add_context("templates", &templates.list_panel);
         let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine));
+        sidebar.add_context("settings", &settings.nav_panel);
 
         // Header actions per screen; the model chip appears on two of them.
         let text = model_label(&deps.settings());
@@ -269,6 +270,12 @@ impl MainWindow {
                 for chip in &w.model_chips {
                     set_chip_text(chip, &text);
                 }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.settings.connect_section_changed(move |()| {
+            if let Some(w) = weak.upgrade() {
+                w.update_header();
             }
         });
         let weak = Rc::downgrade(self);
@@ -509,7 +516,11 @@ impl MainWindow {
                 Some(String::new()),
             ),
             "templates" => (None, "Templates".to_string(), Some(String::new())),
-            "settings" => (None, "Settings".to_string(), Some(String::new())),
+            "settings" => (
+                Some("Settings".to_string()),
+                self.settings.section_title(),
+                Some("Changes save as you make them".to_string()),
+            ),
             _ => (None, String::new(), Some(String::new())),
         };
         self.crumb_project.set_visible(project.is_some());
@@ -542,11 +553,11 @@ impl MainWindow {
     }
 
     /// As in the mockup: Templates lists its templates in the sidebar,
-    /// Settings has its own section list, the rest show projects and tags.
+    /// Settings its sections, the rest show projects and tags.
     fn update_sidebar_context(&self) {
         let context = match self.visible_page_in_stack().as_str() {
             "templates" => "templates",
-            "settings" => "none",
+            "settings" => "settings",
             _ => "projects",
         };
         self.sidebar.show_context(context);
@@ -663,23 +674,4 @@ fn new_export_button() -> gtk::Button {
     row.append(&label("Export", &[]));
     b.set_child(Some(&row));
     b
-}
-
-/// "Edda v0.2 · Vulkan": the model's catalog name where known, and the
-/// compute it will use.
-fn model_label(settings: &crate::config::Settings) -> String {
-    let name = crate::models::catalog()
-        .into_iter()
-        .find(|m| m.file_name == settings.model)
-        .map(|m| m.name.to_string())
-        .unwrap_or_else(|| settings.model.trim_end_matches(".bin").to_string());
-    let gpu = crate::models::wants_gpu(settings.backend);
-    let backend = match settings.backend {
-        crate::config::Backend::Cuda if gpu => "CUDA",
-        crate::config::Backend::Vulkan if gpu => "Vulkan",
-        crate::config::Backend::Auto if gpu && cfg!(feature = "cuda") => "CUDA",
-        crate::config::Backend::Auto if gpu => "Vulkan",
-        _ => "CPU",
-    };
-    format!("{name} · {backend}")
 }

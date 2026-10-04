@@ -795,8 +795,37 @@ fn main() {
     });
     check("the speed test reports a real-time factor", measured);
     check(
-        "Settings shows only the screens in the sidebar",
-        w.sidebar.context() == "none",
+        "Settings lists its sections in the sidebar",
+        w.sidebar.context() == "settings",
+    );
+    check(
+        "each section shows its state under its name",
+        w.settings
+            .nav_summaries()
+            .iter()
+            .any(|(id, line)| id == "model" && line.starts_with("Edda v0.1")),
+    );
+    check(
+        "the header names the open section",
+        w.header_crumbs() == (Some("Settings".to_string()), "Speech model".to_string()),
+    );
+    w.settings.add_vocabulary("Leverandør A/S");
+    check(
+        "a vocabulary word is added as a chip and saved",
+        w.settings
+            .vocabulary_entries()
+            .contains(&"Leverandør A/S".to_string())
+            && Settings::load(&root.join("config/settings.toml"))
+                .unwrap()
+                .vocabulary
+                .contains("Leverandør A/S"),
+    );
+    w.settings.remove_vocabulary("Leverandør A/S");
+    check(
+        "and removed again",
+        !w.settings
+            .vocabulary_entries()
+            .contains(&"Leverandør A/S".to_string()),
     );
     screenshot(&w.window, "settings");
     w.settings.show_section("dictation");
