@@ -74,8 +74,16 @@ The interface is in English; transcripts and AI answers are in Danish.
 
 ## Quick start
 
-Fennec needs Linux with GTK 4.14+ and libadwaita 1.5+ (Ubuntu 24.04 or newer)
-and Rust 1.88+.
+The easiest way in is a ready-made package from
+[Releases](https://github.com/AngelFreak/Fennec/releases) (Ubuntu 24.04 or
+newer): take the `_vulkan` one to use the GPU, the other for the CPU only.
+
+```sh
+sudo apt install ./fennec_*.deb
+```
+
+To build it yourself, Fennec needs Linux with GTK 4.14+ and libadwaita 1.5+
+(Ubuntu 24.04 or newer) and Rust 1.88+.
 
 ```sh
 sudo apt install libgtk-4-dev libadwaita-1-dev libasound2-dev cmake clang

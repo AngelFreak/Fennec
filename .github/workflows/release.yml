@@ -1,0 +1,116 @@
+# Builds the Debian packages and, for a version tag (v0.1.0), publishes
+# them as a GitHub release. Built on Ubuntu 24.04, the oldest release Fennec
+# supports, so the packages install there and on anything newer.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in Cargo.toml. Pull requests that change
+# the packaging build the packages (kept as workflow artifacts) without
+# releasing anything; "Run workflow" does the same by hand.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-deb.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: deb (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            features: ""
+            packages: ""
+            suffix: ""
+          - variant: vulkan
+            features: vulkan
+            packages: glslc libvulkan-dev
+            suffix: _vulkan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libasound2-dev cmake clang dpkg-dev \
+            ${{ matrix.packages }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.variant }}
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(cargo pkgid | sed 's/.*[#@]//')
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
+            exit 1
+          fi
+
+      - name: Build the package
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          deb=$(scripts/build-deb.sh | tail -n1)
+          # The CPU and Vulkan packages would otherwise share a file name.
+          named="${deb%.deb}${{ matrix.suffix }}.deb"
+          [[ "$deb" == "$named" ]] || mv "$deb" "$named"
+          dpkg-deb --info "$named"
+          echo "DEB=$named" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.variant }}
+          path: ${{ env.DEB }}
+          if-no-files-found: error
+
+  release:
+    needs: deb
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes=$(cat <<'EOF'
+          Install on Ubuntu 24.04 or newer (or Debian with GTK 4.14+ and libadwaita 1.5+):
+
+              sudo apt install ./fennec_*.deb
+
+          - `fennec_<version>_amd64.deb`: runs the speech model on the CPU.
+          - `fennec_<version>_amd64_vulkan.deb`: uses the GPU through Vulkan (AMD, Intel and NVIDIA); falls back to the CPU if the GPU fails to start.
+
+          Install one of them; they replace each other.
+          EOF
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.deb \
+              --title "Fennec ${GITHUB_REF_NAME#v}" --notes "$notes" --generate-notes
+          fi
