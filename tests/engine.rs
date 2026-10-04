@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use fennec::audio::read_wav_16k_mono;
-use fennec::engine::{EngineError, SAMPLE_RATE, TranscribeOptions, Transcriber, WhisperEngine};
+use fennec::engine::{EngineError, SAMPLE_RATE, TranscribeOptions, Transcriber, WhisperEngine, load_engine};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -54,6 +54,27 @@ fn transcribes_danish_clip_into_ordered_segments_within_the_audio() {
             );
         }
     }
+}
+
+/// The released package is the Vulkan build, also for computers without a
+/// GPU. Asked for the GPU there, the engine must still transcribe: whisper.cpp
+/// uses the CPU when it finds no Vulkan device, and the app retries on the
+/// CPU when loading fails (as `Deps::real` does).
+#[test]
+fn asking_for_the_gpu_without_one_still_transcribes() {
+    let pcm = read_wav_16k_mono(&fixture("da_fleurs_0.wav")).unwrap();
+    let mut engine = load_engine(&tiny_model(), true)
+        .or_else(|e| {
+            eprintln!("GPU engine did not load ({e}); retrying on the CPU");
+            load_engine(&tiny_model(), false)
+        })
+        .unwrap();
+    let segments = engine.transcribe(&pcm, &TranscribeOptions::default()).unwrap();
+    let text: String = segments.iter().map(|s| s.text.as_str()).collect();
+    assert!(
+        text.chars().filter(|c| c.is_alphabetic()).count() > 10,
+        "too little text: {text:?}"
+    );
 }
 
 #[test]

@@ -1,0 +1,105 @@
+# Builds the Debian package and, for a version tag (v0.1.0), publishes it
+# as a GitHub release. Built on Ubuntu 24.04, the oldest release Fennec
+# supports, so the package installs there and on anything newer.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# One package for every computer: the Vulkan build uses the GPU (AMD, Intel
+# or NVIDIA) when there is one and the CPU otherwise, which the engine test
+# below checks on GitHub's GPU-less machines before anything is published.
+#
+# The tag must match the version in Cargo.toml. Pull requests that change
+# the packaging build the package (kept as a workflow artifact) without
+# releasing anything; "Run workflow" does the same by hand.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-deb.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libasound2-dev cmake clang dpkg-dev \
+            glslc libvulkan-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(cargo pkgid | sed 's/.*[#@]//')
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
+            exit 1
+          fi
+
+      - name: Build the package
+        env:
+          FEATURES: vulkan
+        run: |
+          deb=$(scripts/build-deb.sh | tail -n1)
+          dpkg-deb --info "$deb"
+          echo "DEB=$deb" >> "$GITHUB_ENV"
+
+      - name: Check it transcribes without a GPU
+        run: |
+          mkdir -p tests/fixtures/models
+          curl -sSfL -o tests/fixtures/models/ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          cargo test --release --locked --features vulkan --test engine -- --nocapture
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: ${{ env.DEB }}
+          if-no-files-found: error
+
+  release:
+    needs: deb
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes=$(cat <<'EOF'
+          Install on Ubuntu 24.04 or newer (or Debian with GTK 4.14+ and libadwaita 1.5+):
+
+              sudo apt install ./fennec_*.deb
+
+          The speech model runs on the GPU through Vulkan (AMD, Intel and NVIDIA) when there is one, and on the CPU otherwise. Settings → Speech model → Compute shows which, and can force the CPU.
+          EOF
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.deb \
+              --title "Fennec ${GITHUB_REF_NAME#v}" --notes "$notes" --generate-notes
+          fi
