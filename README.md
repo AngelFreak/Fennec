@@ -74,9 +74,10 @@ The interface is in English; transcripts and AI answers are in Danish.
 
 ## Quick start
 
-The easiest way in is a ready-made package from
+The easiest way in is the ready-made package from
 [Releases](https://github.com/AngelFreak/Fennec/releases) (Ubuntu 24.04 or
-newer): take the `_vulkan` one to use the GPU, the other for the CPU only.
+newer). It uses the GPU through Vulkan when there is one, and the CPU
+otherwise.
 
 ```sh
 sudo apt install ./fennec_*.deb

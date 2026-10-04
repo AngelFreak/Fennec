@@ -1,11 +1,15 @@
-# Builds the Debian packages and, for a version tag (v0.1.0), publishes
-# them as a GitHub release. Built on Ubuntu 24.04, the oldest release Fennec
-# supports, so the packages install there and on anything newer.
+# Builds the Debian package and, for a version tag (v0.1.0), publishes it
+# as a GitHub release. Built on Ubuntu 24.04, the oldest release Fennec
+# supports, so the package installs there and on anything newer.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
+# One package for every computer: the Vulkan build uses the GPU (AMD, Intel
+# or NVIDIA) when there is one and the CPU otherwise, which the engine test
+# below checks on GitHub's GPU-less machines before anything is published.
+#
 # The tag must match the version in Cargo.toml. Pull requests that change
-# the packaging build the packages (kept as workflow artifacts) without
+# the packaging build the package (kept as a workflow artifact) without
 # releasing anything; "Run workflow" does the same by hand.
 name: Release
 
@@ -23,20 +27,7 @@ permissions:
 
 jobs:
   deb:
-    name: deb (${{ matrix.variant }})
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: cpu
-            features: ""
-            packages: ""
-            suffix: ""
-          - variant: vulkan
-            features: vulkan
-            packages: glslc libvulkan-dev
-            suffix: _vulkan
     steps:
       - uses: actions/checkout@v4
 
@@ -45,13 +36,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libasound2-dev cmake clang dpkg-dev \
-            ${{ matrix.packages }}
+            glslc libvulkan-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.variant }}
 
       - name: Check the tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')
@@ -64,18 +53,22 @@ jobs:
 
       - name: Build the package
         env:
-          FEATURES: ${{ matrix.features }}
+          FEATURES: vulkan
         run: |
           deb=$(scripts/build-deb.sh | tail -n1)
-          # The CPU and Vulkan packages would otherwise share a file name.
-          named="${deb%.deb}${{ matrix.suffix }}.deb"
-          [[ "$deb" == "$named" ]] || mv "$deb" "$named"
-          dpkg-deb --info "$named"
-          echo "DEB=$named" >> "$GITHUB_ENV"
+          dpkg-deb --info "$deb"
+          echo "DEB=$deb" >> "$GITHUB_ENV"
+
+      - name: Check it transcribes without a GPU
+        run: |
+          mkdir -p tests/fixtures/models
+          curl -sSfL -o tests/fixtures/models/ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          cargo test --release --locked --features vulkan --test engine -- --nocapture
 
       - uses: actions/upload-artifact@v4
         with:
-          name: deb-${{ matrix.variant }}
+          name: deb
           path: ${{ env.DEB }}
           if-no-files-found: error
 
@@ -88,8 +81,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: deb-*
-          merge-multiple: true
+          name: deb
           path: dist
 
       - name: Publish the release
@@ -102,10 +94,7 @@ jobs:
 
               sudo apt install ./fennec_*.deb
 
-          - `fennec_<version>_amd64.deb`: runs the speech model on the CPU.
-          - `fennec_<version>_amd64_vulkan.deb`: uses the GPU through Vulkan (AMD, Intel and NVIDIA); falls back to the CPU if the GPU fails to start.
-
-          Install one of them; they replace each other.
+          The speech model runs on the GPU through Vulkan (AMD, Intel and NVIDIA) when there is one, and on the CPU otherwise. Settings → Speech model → Compute shows which, and can force the CPU.
           EOF
           )
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
