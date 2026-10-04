@@ -9,7 +9,7 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 
-use super::settings_page::{field, narrow, page};
+use super::settings_page::{field, group, page, row};
 use super::{Deps, Handler, label};
 use crate::ai::{AiError, AiJob, Locality, Protocol, ProviderConfig, connect, presets};
 use crate::store::Store;
@@ -40,6 +40,7 @@ pub struct AiSettingsUi {
     editing: RefCell<HashSet<String>>,
     projects_box: gtk::Box,
     on_changed: Handler<()>,
+    on_local_only_changed: Handler<()>,
 }
 
 impl AiSettingsUi {
@@ -63,7 +64,7 @@ impl AiSettingsUi {
                 .valign(gtk::Align::Center)
                 .build(),
             deps,
-            providers_box: gtk::Box::new(gtk::Orientation::Vertical, 16),
+            providers_box: gtk::Box::new(gtk::Orientation::Vertical, 0),
             default_choice: gtk::DropDown::from_strings(&[]),
             job_choices,
             loading_default: Cell::new(false),
@@ -77,6 +78,7 @@ impl AiSettingsUi {
             editing: RefCell::default(),
             projects_box: gtk::Box::new(gtk::Orientation::Vertical, 0),
             on_changed: RefCell::default(),
+            on_local_only_changed: RefCell::default(),
         });
         ui.enabled
             .update_property(&[gtk::accessible::Property::Label("Use AI")]);
@@ -138,6 +140,11 @@ impl AiSettingsUi {
         *self.on_changed.borrow_mut() = Some(Rc::new(f));
     }
 
+    /// A project was marked local-only, or no longer is.
+    pub fn connect_local_only_changed(&self, f: impl Fn(()) + 'static) {
+        *self.on_local_only_changed.borrow_mut() = Some(Rc::new(f));
+    }
+
     /// Changes the AI settings, saves them and tells the window.
     fn edit(&self, f: impl FnOnce(&mut crate::ai::AiSettings)) {
         f(&mut self.deps.settings.borrow_mut().ai);
@@ -161,11 +168,18 @@ impl AiSettingsUi {
     // ---- AI providers ----
 
     pub fn providers_section(self: &Rc<Self>) -> gtk::Box {
-        let (outer, b) = page(Some(760), 16);
-        let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let title = label("AI providers", &["fx-h1"]);
-        title.set_hexpand(true);
-        head.append(&title);
+        let (outer, b) = page(Some(760), 28);
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        text.set_hexpand(true);
+        text.append(&label("AI providers", &["fx-h1"]));
+        let lede = label(
+            "Summaries, clean-up, action items and questions. Optional, and off until you turn it on.",
+            &["fx-status"],
+        );
+        lede.set_wrap(true);
+        text.append(&lede);
+        head.append(&text);
 
         let add_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         add_content.append(&gtk::Image::from_icon_name("fennec-add-symbolic"));
@@ -174,7 +188,7 @@ impl AiSettingsUi {
             .child(&add_content)
             .always_show_arrow(false)
             .css_classes(["fx-add"])
-            .valign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
             .build();
         add.update_property(&[gtk::accessible::Property::Label("Add provider")]);
         let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -196,33 +210,25 @@ impl AiSettingsUi {
         }
         add.set_popover(Some(&pop));
         head.append(&add);
-        let intro = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        intro.append(&head);
-        let note = label(
-            "Presets: Claude, ChatGPT, Ollama, llama.cpp / LM Studio / vLLM, network server, other \
-             OpenAI-compatible cloud.",
-            &["fx-status"],
-        );
-        note.set_wrap(true);
-        intro.append(&note);
-        b.append(&intro);
+        b.append(&head);
 
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.add_css_class("fx-switch-row");
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        text.set_hexpand(true);
-        text.append(&label("Use AI", &["fx-h3"]));
-        let use_note = label(
-            "Off by default: nothing is sent anywhere until you turn this on and start an action yourself.",
-            &["fx-field-note"],
+        let banner = row(
+            "Use AI",
+            Some(
+                "Nothing is sent anywhere until you start an action yourself. Each action names where it runs.",
+            ),
+            &self.enabled,
         );
-        use_note.set_wrap(true);
-        text.append(&use_note);
-        row.append(&text);
-        row.append(&self.enabled);
-        b.append(&row);
+        banner.add_css_class("fx-ai-banner");
+        let lock = gtk::Image::from_icon_name("fennec-lock-symbolic");
+        lock.add_css_class("fx-banner-icon");
+        lock.set_valign(gtk::Align::Center);
+        banner.prepend(&lock);
+        b.append(&banner);
 
-        b.append(&self.providers_box);
+        let (providers, list) = group("Providers", None);
+        list.append(&self.providers_box);
+        b.append(&providers);
         b.append(&self.message);
         self.render_providers();
         outer
@@ -255,6 +261,7 @@ impl AiSettingsUi {
                 &["fx-field-note"],
             );
             empty.set_wrap(true);
+            empty.add_css_class("fx-set-empty");
             self.providers_box.append(&empty);
         }
         let active = ai.active().map(|p| p.id.clone());
@@ -301,12 +308,14 @@ impl AiSettingsUi {
 
     fn provider_card(self: &Rc<Self>, p: &ProviderConfig, is_default: bool) -> gtk::Box {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        card.add_css_class("fx-card");
-        let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let info = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        card.add_css_class("fx-provider");
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        top.add_css_class("fx-provider-row");
+        let info = gtk::Box::new(gtk::Orientation::Vertical, 3);
         info.set_hexpand(true);
+        info.set_valign(gtk::Align::Center);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let title = label(&p.name, &["fx-h2"]);
+        let title = label(&p.name, &["fx-model-name"]);
         head.append(&title);
         let (badge, kind) = match p.locality {
             Locality::Cloud => ("CLOUD", "cloud"),
@@ -316,29 +325,34 @@ impl AiSettingsUi {
         let badge = label(badge, &["fx-badge", kind]);
         badge.set_valign(gtk::Align::Center);
         head.append(&badge);
-        let mut proto = match p.protocol {
-            Protocol::Anthropic => "Anthropic · native API".to_string(),
-            Protocol::OpenAi if p.base_url.contains("api.openai.com") => "OpenAI API".to_string(),
-            Protocol::OpenAi => "OpenAI-compatible".to_string(),
-        };
         if is_default {
-            proto.push_str(" · default");
+            let d = label("DEFAULT", &["fx-badge", "default"]);
+            d.set_valign(gtk::Align::Center);
+            head.append(&d);
         }
-        head.append(&label(&proto, &["fx-provider-proto"]));
         info.append(&head);
+        let proto = match p.protocol {
+            Protocol::Anthropic => "Anthropic · native API",
+            Protocol::OpenAi if p.base_url.contains("api.openai.com") => "OpenAI API",
+            Protocol::OpenAi => "OpenAI-compatible",
+        };
+        info.append(&label(proto, &["fx-provider-proto"]));
         let address = label(&address_text(p), &["fx-mono", "fx-provider-addr"]);
-        address.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        address.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        address.set_tooltip_text(Some(&address_text(p)));
         info.append(&address);
-        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+        status_row.set_size_request(200, -1);
+        status_row.set_valign(gtk::Align::Center);
         let dot = gtk::Box::builder()
             .css_classes(["fx-dot"])
             .valign(gtk::Align::Center)
             .build();
         let status = label("", &[]);
         status.set_wrap(true);
+        status.set_max_width_chars(26);
         status_row.append(&dot);
         status_row.append(&status);
-        info.append(&status_row);
         let show_status = {
             let row = status_row.clone();
             let status = status.clone();
@@ -349,12 +363,14 @@ impl AiSettingsUi {
         };
         show_status(&self.initial_status(p));
         top.append(&info);
+        top.append(&status_row);
 
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         buttons.set_valign(gtk::Align::Center);
         let needs_key = p.locality == Locality::Cloud && self.deps.secrets.get(&p.id).is_none();
         let test = gtk::Button::with_label("Test");
         test.add_css_class("fx-secondary");
+        test.add_css_class("small");
         test.update_property(&[gtk::accessible::Property::Label(&format!("Test {}", p.name))]);
         let editing = self.editing.borrow().contains(&p.id);
         let edit = gtk::Button::with_label(if editing {
@@ -364,7 +380,11 @@ impl AiSettingsUi {
         } else {
             "Edit"
         });
-        edit.add_css_class("fx-secondary");
+        edit.add_css_class(if editing { "fx-primary" } else { "fx-secondary" });
+        edit.add_css_class("small");
+        if editing {
+            card.add_css_class("editing");
+        }
         test.set_visible(!needs_key);
         buttons.append(&test);
         buttons.append(&edit);
@@ -452,7 +472,7 @@ impl AiSettingsUi {
         title: &gtk::Label,
         address: &gtk::Label,
     ) -> gtk::Box {
-        let card = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 14);
         card.add_css_class("fx-provider-editor");
         let grid = gtk::Grid::builder()
             .column_homogeneous(true)
@@ -536,7 +556,8 @@ impl AiSettingsUi {
         spacer.set_hexpand(true);
         actions.append(&spacer);
         let remove = gtk::Button::with_label("Remove provider");
-        remove.add_css_class("fx-secondary");
+        remove.add_css_class("fx-quiet");
+        remove.add_css_class("danger");
         actions.append(&remove);
         card.append(&actions);
 
@@ -745,33 +766,40 @@ impl AiSettingsUi {
     // ---- AI defaults ----
 
     pub fn defaults_section(self: &Rc<Self>) -> gtk::Box {
-        let (outer, b) = page(Some(720), 16);
-        let intro = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let (outer, b) = page(Some(760), 28);
+        let intro = gtk::Box::new(gtk::Orientation::Vertical, 4);
         intro.append(&label("AI defaults", &["fx-h1"]));
         intro.append(&label("Which provider handles each job.", &["fx-status"]));
         b.append(&intro);
 
-        let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        table.add_css_class("fx-table");
+        let (jobs, table) = group("Jobs", None);
         self.default_choice
             .update_property(&[gtk::accessible::Property::Label("Default provider")]);
         table.append(&job_row(
             "Default provider",
             "Used by every job left on “Default provider”",
             &self.default_choice,
-            true,
         ));
         for (job, dd) in &self.job_choices {
-            table.append(&job_row(job.label(), job.note(), dd, false));
+            table.append(&job_row(job.label(), job.note(), dd));
         }
-        b.append(&table);
+        b.append(&jobs);
+        self.local_note.set_xalign(0.0);
+        b.append(&self.local_note);
 
+        let (answers, rows) = group("Answers", None);
         let language = gtk::Entry::builder()
             .text(self.deps.settings().ai.language.as_str())
             .placeholder_text("dansk")
+            .width_request(300)
             .build();
-        let lang = field("Language of AI answers", &language);
-        b.append(&narrow(&lang, 320));
+        language.update_property(&[gtk::accessible::Property::Label("Language of AI answers")]);
+        rows.append(&row(
+            "Language of AI answers",
+            Some("Summaries, action items and answers are written in it."),
+            &language,
+        ));
+        b.append(&answers);
         let weak = Rc::downgrade(self);
         language.connect_changed(move |e| {
             if let Some(u) = weak.upgrade() {
@@ -779,7 +807,6 @@ impl AiSettingsUi {
                 u.edit(|ai| ai.language = if v.is_empty() { "dansk".into() } else { v });
             }
         });
-        b.append(&self.local_note);
         self.render_default_choice();
         outer
     }
@@ -824,50 +851,46 @@ impl AiSettingsUi {
     // ---- Privacy ----
 
     pub fn privacy_section(self: &Rc<Self>) -> gtk::Box {
-        let (outer, b) = page(Some(720), 18);
-        b.append(&label("Privacy", &["fx-h1"]));
-        let callout = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        callout.add_css_class("fx-callout");
-        callout.add_css_class("neutral");
-        callout.append(&gtk::Image::from_icon_name("fennec-lock-symbolic"));
-        let text = label(
-            "Audio and transcription never leave this computer. Only text is sent, and only to an AI \
+        let (outer, b) = page(Some(760), 28);
+        let intro = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        intro.append(&label("Privacy", &["fx-h1"]));
+        let lede = label(
+            "Audio and transcripts never leave this computer. Only text is sent, and only to an AI \
              provider you choose, when you press an AI action.",
-            &[],
+            &["fx-status"],
         );
-        text.set_wrap(true);
-        text.set_hexpand(true);
-        callout.append(&text);
-        b.append(&callout);
+        lede.set_wrap(true);
+        intro.append(&lede);
+        b.append(&intro);
 
-        let ask = gtk::CheckButton::builder()
-            .label("Ask before a document is sent to a cloud provider for the first time")
-            .active(true)
-            .sensitive(false)
-            .tooltip_text("Always on: Fennec never sends to a cloud provider without asking first.")
-            .build();
-        let destination = gtk::CheckButton::builder()
-            .label("Show the destination on every AI action")
-            .active(true)
-            .sensitive(false)
-            .tooltip_text("Always on: every AI action names the provider and where it runs.")
-            .build();
-        let checks = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        checks.append(&ask);
-        checks.append(&destination);
-        b.append(&checks);
+        let (always, rows) = group("Always on", None);
+        for (title, note) in [
+            (
+                "Ask before a document goes to a cloud provider the first time",
+                "Fennec never sends to a cloud provider without asking first.",
+            ),
+            (
+                "Show the destination on every AI action",
+                "Every AI action names the provider and where it runs.",
+            ),
+        ] {
+            let on = label("ALWAYS ON", &["fx-badge", "plain"]);
+            let r = row(title, Some(note), &on);
+            // Read as one setting and its state.
+            r.update_property(&[gtk::accessible::Property::Label(&format!("{title}: always on"))]);
+            rows.append(&r);
+        }
+        b.append(&always);
 
-        let local = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        local.append(&label("Local-only projects", &["fx-h2"]));
+        let (local, list) = group("Local-only projects", None);
         let note = label(
             "Cloud providers are disabled for these projects. Local and network providers still work.",
             &["fx-field-note"],
         );
         note.set_wrap(true);
-        local.append(&note);
-        self.projects_box.add_css_class("fx-table");
-        self.projects_box.set_overflow(gtk::Overflow::Hidden);
-        local.append(&self.projects_box);
+        note.set_xalign(0.0);
+        local.insert_child_after(&note, local.first_child().as_ref());
+        list.append(&self.projects_box);
         b.append(&local);
         // Projects change elsewhere; list them afresh each time this shows.
         let weak = Rc::downgrade(self);
@@ -877,14 +900,22 @@ impl AiSettingsUi {
             }
         });
 
-        let forget_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let forget = gtk::Button::with_label("Forget my cloud confirmations");
+        let (consents, rows) = group("Cloud confirmations", None);
+        let forget = gtk::Button::with_label("Forget");
         forget.add_css_class("fx-secondary");
-        let status = label("", &["fx-field-note"]);
-        status.set_wrap(true);
-        status.set_hexpand(true);
-        forget_row.append(&forget);
-        forget_row.append(&status);
+        forget.add_css_class("small");
+        let forget_row = row(
+            "Forget my cloud confirmations",
+            Some("Fennec asks again before the next document goes to a cloud provider."),
+            &forget,
+        );
+        rows.append(&forget_row);
+        b.append(&consents);
+        let status = forget_row
+            .first_child()
+            .and_then(|t| t.last_child())
+            .and_downcast::<gtk::Label>()
+            .expect("the row has a note");
         let db = self.deps.paths.database();
         forget.connect_clicked(glib::clone!(
             #[strong]
@@ -898,12 +929,11 @@ impl AiSettingsUi {
                 }
             }
         ));
-        b.append(&forget_row);
         self.render_projects();
         outer
     }
 
-    /// One row per project with its Local only checkbox.
+    /// One row per project with its Local only switch.
     pub fn render_projects(self: &Rc<Self>) {
         while let Some(c) = self.projects_box.first_child() {
             self.projects_box.remove(&c);
@@ -912,7 +942,7 @@ impl AiSettingsUi {
         let projects = match Store::open(&db).and_then(|s| s.projects()) {
             Ok(p) => p,
             Err(e) => {
-                let row = project_row_box(true);
+                let row = project_row_box();
                 row.append(&label(
                     &format!("Could not read the projects: {e}"),
                     &["fx-field-error"],
@@ -922,12 +952,12 @@ impl AiSettingsUi {
             }
         };
         if projects.is_empty() {
-            let row = project_row_box(true);
+            let row = project_row_box();
             row.append(&label("No projects yet.", &["fx-field-note"]));
             self.projects_box.append(&row);
         }
-        for (i, p) in projects.into_iter().enumerate() {
-            let row = project_row_box(i == 0);
+        for p in projects {
+            let row = project_row_box();
             let swatch = gtk::DrawingArea::builder()
                 .content_width(10)
                 .content_height(10)
@@ -951,7 +981,10 @@ impl AiSettingsUi {
             name.set_hexpand(true);
             name.set_ellipsize(gtk::pango::EllipsizeMode::End);
             row.append(&name);
-            let check = gtk::CheckButton::builder().active(p.local_only).build();
+            let check = gtk::Switch::builder()
+                .active(p.local_only)
+                .valign(gtk::Align::Center)
+                .build();
             check.update_property(&[gtk::accessible::Property::Label(&format!(
                 "{} local only",
                 p.name
@@ -959,12 +992,14 @@ impl AiSettingsUi {
             let db = db.clone();
             let id = p.id;
             let weak = Rc::downgrade(self);
-            check.connect_toggled(move |c| {
+            check.connect_active_notify(move |c| {
                 let Some(u) = weak.upgrade() else { return };
                 match Store::open(&db).and_then(|s| s.set_project_local_only(id, c.is_active())) {
                     Ok(()) => {
-                        if let Some(cb) = u.on_changed.borrow().clone() {
-                            cb(());
+                        for slot in [&u.on_changed, &u.on_local_only_changed] {
+                            if let Some(cb) = slot.borrow().clone() {
+                                cb(());
+                            }
                         }
                     }
                     Err(e) => u.message.set_text(&format!("Could not save: {e}")),
@@ -984,7 +1019,7 @@ impl AiSettingsUi {
                 .first_child()
                 .and_then(|w| w.next_sibling())
                 .and_downcast::<gtk::Label>();
-            let check = r.last_child().and_downcast::<gtk::CheckButton>();
+            let check = r.last_child().and_downcast::<gtk::Switch>();
             if let (Some(n), Some(c)) = (name, check) {
                 out.push((n.text().to_string(), c.is_active()));
             }
@@ -1002,7 +1037,7 @@ impl AiSettingsUi {
                 .and_then(|w| w.next_sibling())
                 .and_downcast::<gtk::Label>()
                 .is_some_and(|l| l.text() == name);
-            if is_it && let Some(c) = r.last_child().and_downcast::<gtk::CheckButton>() {
+            if is_it && let Some(c) = r.last_child().and_downcast::<gtk::Switch>() {
                 c.set_active(on);
             }
             row = r.next_sibling();
@@ -1010,12 +1045,9 @@ impl AiSettingsUi {
     }
 }
 
-fn project_row_box(first: bool) -> gtk::Box {
+fn project_row_box() -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.add_css_class("fx-project-check");
-    if first {
-        row.add_css_class("first");
-    }
+    row.add_css_class("fx-set-row");
     row
 }
 
@@ -1039,22 +1071,7 @@ fn address_text(p: &ProviderConfig) -> String {
 }
 
 /// A row in the AI defaults table: job name and note, then its dropdown.
-fn job_row(title: &str, note: &str, dd: &gtk::DropDown, first: bool) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-    row.add_css_class("fx-job-row");
-    if first {
-        row.add_css_class("first");
-    }
-    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    text.set_hexpand(true);
-    text.set_valign(gtk::Align::Center);
-    text.append(&label(title, &["fx-job-title"]));
-    let n = label(note, &["fx-field-note"]);
-    n.set_wrap(true);
-    text.append(&n);
-    row.append(&text);
+fn job_row(title: &str, note: &str, dd: &gtk::DropDown) -> gtk::Box {
     dd.set_size_request(300, -1);
-    dd.set_valign(gtk::Align::Center);
-    row.append(dd);
-    row
+    row(title, Some(note), dd)
 }

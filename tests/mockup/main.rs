@@ -51,14 +51,76 @@ impl Scene {
     /// Lets GTK lay out and draw, then captures the whole display (popovers
     /// included) as `<name>.png`.
     pub fn shot(&self, name: &str) {
+        reopen_popovers(self.w.window.upcast_ref());
         pump(Duration::from_millis(600));
         let path = self.out.join(format!("{name}.png"));
+        // grim needs a wlroots compositor; elsewhere (a headless Weston)
+        // GTK draws the window itself, open menus on top.
         let ok = std::process::Command::new("grim")
             .arg(&path)
+            .stderr(std::process::Stdio::null())
             .status()
-            .is_ok_and(|s| s.success());
+            .is_ok_and(|s| s.success())
+            || render_window(&self.w.window, &path);
         println!("{} {name}", if ok { "shot" } else { "FAILED" });
     }
+}
+
+/// A headless compositor has no pointer, so it refuses popovers that grab
+/// input; open ones are shown again without the grab.
+fn reopen_popovers(window: &gtk::Widget) {
+    let mut stack = vec![window.clone()];
+    while let Some(widget) = stack.pop() {
+        if let Some(pop) = widget.downcast_ref::<gtk::Popover>()
+            && pop.is_visible()
+            && !pop.is_mapped()
+        {
+            pop.set_autohide(false);
+            pop.popdown();
+            pop.popup();
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            stack.push(c);
+        }
+    }
+}
+
+/// Draws the window and its open popovers into a PNG, as on screen.
+fn render_window(window: &impl IsA<gtk::Widget>, path: &Path) -> bool {
+    let window = window.as_ref();
+    let snapshot = gtk::Snapshot::new();
+    let (w, h) = (window.width() as f64, window.height() as f64);
+    gtk::WidgetPaintable::new(Some(window)).snapshot(&snapshot, w, h);
+    let mut stack = vec![window.clone()];
+    while let Some(widget) = stack.pop() {
+        if let Some(pop) = widget.downcast_ref::<gtk::Popover>()
+            && pop.is_mapped()
+            && let Some(bounds) = pop.compute_bounds(window)
+        {
+            snapshot.save();
+            snapshot.translate(&gtk::graphene::Point::new(bounds.x(), bounds.y()));
+            gtk::WidgetPaintable::new(Some(pop)).snapshot(&snapshot, pop.width() as f64, pop.height() as f64);
+            snapshot.restore();
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            stack.push(c);
+        }
+    }
+    let (Some(node), Some(renderer)) = (snapshot.to_node(), window.native().and_then(|n| n.renderer()))
+    else {
+        return false;
+    };
+    renderer
+        .render_texture(
+            &node,
+            Some(&gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32)),
+        )
+        .save_to_png(path)
+        .is_ok()
 }
 
 pub fn pump(d: Duration) {

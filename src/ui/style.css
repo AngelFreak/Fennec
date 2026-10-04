@@ -107,17 +107,6 @@ window.fennec popover > contents {
   padding: 6px;
 }
 
-window.fennec textview.fx-boxed,
-window.fennec textview.fx-boxed text {
-  background-color: @fx_surface;
-  color: @fx_text;
-}
-window.fennec .fx-boxed {
-  border: 1px solid @fx_border;
-  border-radius: 8px;
-  padding: 10px 12px;
-}
-
 window.fennec separator { background-color: @fx_border; min-height: 1px; min-width: 1px; }
 
 /* ---- Buttons ---- */
@@ -342,7 +331,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
 .fx-mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 .fx-mono.accent { color: @fx_accent_text; }
 .fx-h1 { font-size: 20px; font-weight: 600; }
-.fx-h2 { font-size: 15px; font-weight: 600; }
 .fx-h3 { font-size: 14px; font-weight: 600; }
 .fx-project-title { font-size: 24px; font-weight: 600; }
 .fx-body { font-size: 13px; color: @fx_text_soft; }
@@ -385,7 +373,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
   color: @fx_accent_text;
   font-size: 12px;
 }
-.fx-callout.neutral { background-color: @fx_chip; color: @fx_text; font-size: 13px; border-radius: 10px; padding: 12px 14px; }
 
 /* Bordered tables and cards. */
 .fx-table { border: 1px solid @fx_border; border-radius: 10px; background-color: @fx_surface; }
@@ -408,8 +395,6 @@ menubutton.fx-header-chip.strong > button label { font-weight: 600; color: @fx_t
   min-height: 40px;
 }
 .fx-row-button:hover { background-color: alpha(@fx_text, 0.03); }
-.fx-card { border: 1px solid @fx_border; border-radius: 12px; padding: 16px 18px; background-color: @fx_surface; }
-.fx-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
 
 /* ---- Dictate: document tabs, editor, record dock ---- */
 
@@ -635,27 +620,9 @@ textview.fx-summary-text, textview.fx-summary-text text {
 .fx-handle { color: @fx_faint; font-size: 14px; }
 .fx-logo-slot { border: 1px dashed @fx_faint; border-radius: 6px; min-width: 72px; min-height: 40px; font-size: 10px; color: @fx_muted; }
 
-/* ---- Settings ---- */
+/* ---- Settings (more in css/settings.css) ---- */
 
-.fx-settings-nav { padding: 20px 12px; border-right: 1px solid @fx_border; }
-.fx-settings-tab {
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: none;
-  box-shadow: none;
-  font-size: 13px;
-  color: @fx_text_soft;
-}
-.fx-settings-tab:hover { background-color: alpha(@fx_text, 0.05); }
-.fx-settings-tab.active { background-color: @fx_accent_soft; color: @fx_text; }
-.fx-settings-tab.active label { font-weight: 600; }
-.fx-settings-section { padding: 28px 36px; }
-.fx-model-card { padding: 16px; border-radius: 12px; border: 1px solid @fx_border; background-color: @fx_surface; }
-.fx-model-card.active { border: 1.5px solid @fx_accent; background-color: @fx_accent_tint; }
-.fx-model-name { font-size: 15px; font-weight: 600; }
-.fx-storage-row { min-height: 56px; padding: 0 16px; border-top: 1px solid @fx_divider; }
-.fx-storage-row.first { border-top: none; }
+.fx-settings-section { padding: 32px 40px; }
 
 levelbar.fx-meter trough { background-color: @fx_track; border-radius: 3px; min-height: 8px; }
 levelbar.fx-meter block.filled,

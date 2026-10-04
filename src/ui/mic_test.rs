@@ -34,9 +34,10 @@ pub struct MicTest {
 
 impl MicTest {
     pub fn new(deps: Deps) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let button = gtk::Button::with_label("Test microphone");
+        button.set_hexpand(true);
         button.add_css_class("fx-secondary");
         let meter = gtk::LevelBar::for_interval(0.0, 1.0);
         meter.set_hexpand(true);
@@ -51,15 +52,15 @@ impl MicTest {
         play.add_css_class("fx-secondary");
         play.set_sensitive(false);
         row.append(&button);
-        row.append(&meter);
         row.append(&play);
         let verdict = label(
             "Speak normally for five seconds to check the level.",
             &["fx-status-line", "idle"],
         );
         verdict.set_wrap(true);
-        root.append(&row);
+        root.append(&meter);
         root.append(&verdict);
+        root.append(&row);
         let t = Rc::new(Self {
             root,
             button,

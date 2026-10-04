@@ -1,49 +1,113 @@
 /* Settings screen. Shared classes live in style.css; these are its own. */
 
-.fx-settings-nav { padding: 20px 12px; }
-.fx-settings-tab label { font-weight: 400; }
-.fx-settings-section .fx-h1 { margin-bottom: 0; }
+/* Sections in the sidebar: name and a line on the section's state. */
+.fx-settings-list { padding: 0; }
+.fx-settings-list .fx-section-title { margin: 0 0 0 12px; }
+.fx-settings-item {
+  background: none;
+  box-shadow: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 0;
+}
+.fx-settings-item:hover { background-color: alpha(@fx_text, 0.05); }
+.fx-settings-item.active { background-color: @fx_accent_soft; }
+.fx-settings-item-name { font-size: 13px; font-weight: 500; color: @fx_text; }
+window.fennec button.fx-settings-item label.fx-settings-item-name { font-weight: 500; }
+window.fennec button.fx-settings-item.active label.fx-settings-item-name { font-weight: 600; }
+.fx-settings-item .fx-stats { font-size: 11.5px; }
 
-/* Speech model cards */
+.fx-settings-inspector { padding: 24px 20px; }
+.fx-bignum { font-family: "IBM Plex Mono", monospace; font-size: 26px; font-weight: 500; color: @fx_text; }
+
+/* A group of rows in a bordered box, one setting per row. */
+.fx-set-box { border: 1px solid @fx_border; border-radius: 10px; background-color: @fx_surface; }
+.fx-set-box.padded { padding: 14px 16px; }
+.fx-set-row { padding: 12px 16px; min-height: 36px; border-top: 1px solid @fx_divider; }
+.fx-set-box > .fx-set-row:first-child,
+.fx-set-box > box > .fx-set-row:first-child { border-top: none; }
+.fx-set-title { font-size: 13.5px; font-weight: 500; color: @fx_text; }
+.fx-set-empty { padding: 16px; }
+.fx-settings-section .fx-h3 { font-size: 14px; }
+.fx-settings-section .fx-status { line-height: 1.4; }
+
+/* Speech model rows */
+.fx-model-row { padding: 16px; border-top: 1px solid @fx_divider; }
+.fx-set-box > .fx-model-row:first-child { border-top: none; }
+.fx-model-row.active { background-color: @fx_accent_tint; }
+.fx-model-name { font-size: 14px; font-weight: 600; color: @fx_text; }
 .fx-model-publisher { font-size: 12px; color: @fx_muted; }
-.fx-model-desc { font-size: 13px; line-height: 1.15; color: @fx_text_soft; }
-.fx-model-card .fx-badge { min-height: 22px; }
-.fx-model-card .fx-badge.active { min-height: 24px; }
-.fx-model-card button.fx-secondary { min-height: 40px; color: @fx_text; }
-.fx-model-card button.fx-secondary label { font-weight: 500; }
+.fx-model-desc { font-size: 13px; color: @fx_text_soft; margin: 6px 0 8px 0; }
+.fx-model-row .fx-badge { min-height: 20px; }
+.fx-badge.default { background-color: @fx_accent_soft; color: @fx_accent_text; }
+.fx-badge.local { background-color: @fx_chip; color: @fx_text_soft; }
+.fx-wer-value { font-size: 15px; font-weight: 600; color: @fx_text; font-feature-settings: "tnum"; }
+.fx-wer-caption { font-size: 10.5px; letter-spacing: 0.6px; color: @fx_muted; }
+.fx-model-action button.fx-secondary { min-height: 36px; color: @fx_text; }
 .fx-install-text { font-size: 12px; color: @fx_muted; }
 
-/* Compute: a 2x2 segmented grid with a device line under each option.
-   (A GTK 4 toggle button's CSS node is `button`, with the `.toggle` class.) */
-.fx-segmented.grid > button { min-height: 52px; padding: 0 8px; }
-.fx-segmented.grid > button label { color: @fx_text; font-weight: 600; }
-.fx-segmented.grid > button label.fx-seg-sub { color: @fx_muted; font-weight: 400; font-size: 11px; }
-.fx-segmented.grid > button:checked {
+/* A radio mark: a ring, filled with the accent when chosen. */
+.fx-radio {
+  min-width: 18px;
+  min-height: 18px;
+  border-radius: 999px;
+  border: 1.5px solid @fx_faint;
   background-color: @fx_surface;
-  box-shadow: 0 1px 2px alpha(black, 0.15);
 }
-.fx-segmented.grid > button:disabled { opacity: 0.55; }
-.fx-segmented.grid > button:disabled label { color: @fx_text; }
-.fx-segmented.grid > button:disabled label.fx-seg-sub { color: @fx_muted; }
+.fx-radio.on,
+button.fx-option:checked .fx-radio { border: 5px solid @fx_accent; min-width: 8px; min-height: 8px; }
 
-/* A bordered row: result text and a button (speed test, microphone test). */
-.fx-test-box { border: 1px solid @fx_border; border-radius: 10px; padding: 12px 14px; }
-.fx-test-box .fx-status { font-size: 13px; }
+/* Compute: a list of options in a box. */
+button.fx-option {
+  background: none;
+  box-shadow: none;
+  border: none;
+  border-radius: 0;
+  border-top: 1px solid @fx_divider;
+  padding: 10px 14px;
+  min-height: 0;
+}
+button.fx-option:first-child { border-top: none; }
+button.fx-option:hover { background-color: alpha(@fx_text, 0.03); }
+button.fx-option:checked { background-color: @fx_accent_tint; }
+button.fx-option:disabled { opacity: 0.5; }
+.fx-option-title { font-size: 13px; font-weight: 500; color: @fx_text; }
+window.fennec button.fx-option label.fx-option-title { font-weight: 500; }
 
 /* Dictation */
 .fx-mono-value { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: @fx_text; }
-.fx-settings-section scale { margin-top: 6px; padding-left: 0; padding-right: 0; }
-.fx-settings-section checkbutton { color: @fx_text; border-spacing: 10px; padding-left: 0; }
-.fx-settings-section checkbutton check { min-width: 15px; min-height: 15px; padding: 0; margin: 0; }
-.fx-settings-section checkbutton:disabled { color: @fx_text; opacity: 1; filter: none; }
-.fx-settings-section checkbutton:disabled label { color: @fx_text; opacity: 1; filter: none; }
-/* Always-on choices are shown at full strength, as in the mockup. */
-.fx-settings-section checkbutton:disabled check { filter: none; opacity: 1; }
-.fx-table-row.first { border-top: none; }
-.fx-table-row.cmd { min-height: 20px; }
-.fx-settings-section textview.fx-boxed { min-height: 38px; padding: 10px 12px; font-size: 13px; }
+.fx-settings-section scale { padding-left: 0; padding-right: 0; }
+.fx-set-box .fx-table-head { padding: 0 16px; min-height: 34px; border-radius: 0; }
+.fx-set-box .fx-table-row { padding: 0 16px; min-height: 40px; }
+.fx-set-box > .fx-table-row:nth-child(2) { border-top: none; }
+.fx-say { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: @fx_accent_text; }
+.fx-table-head .fx-say { font-family: inherit; color: @fx_muted; font-size: 11px; }
+.fx-vocab-chip { background-color: @fx_chip; border-radius: 6px; padding: 0 2px 0 10px; min-height: 28px; }
+.fx-vocab-chip label { font-size: 12.5px; color: @fx_text; }
+button.fx-vocab-remove {
+  background: none;
+  box-shadow: none;
+  border: none;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  color: @fx_muted;
+  -gtk-icon-size: 12px;
+}
+button.fx-vocab-remove:hover { color: @fx_accent_text; }
+.fx-set-box levelbar.fx-meter trough,
+.fx-set-box levelbar.fx-meter block { min-height: 8px; }
 
 /* AI providers */
+.fx-ai-banner { border: 1px solid @fx_border; border-radius: 10px; background-color: @fx_chrome; padding: 14px 16px; }
+.fx-banner-icon {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  border: 1px solid @fx_border;
+  background-color: @fx_surface;
+  color: @fx_text;
+}
 menubutton.fx-add { padding: 0; min-height: 0; background: none; border: none; box-shadow: none; }
 menubutton.fx-add > button {
   background-color: @fx_accent;
@@ -57,30 +121,24 @@ menubutton.fx-add > button {
 menubutton.fx-add > button:hover { background-color: @fx_accent_hover; }
 menubutton.fx-add > button label { font-weight: 600; color: white; }
 menubutton.fx-add > button image { color: white; }
+.fx-provider { border-top: 1px solid @fx_divider; }
+.fx-provider:first-child { border-top: none; }
+.fx-provider.editing { background-color: @fx_accent_tint; }
+.fx-provider-row { padding: 14px 16px; }
 .fx-provider-proto { font-size: 12px; color: @fx_muted; }
-.fx-provider-addr { color: @fx_text_soft; }
+.fx-provider-addr { color: @fx_muted; }
 .fx-status-line .fx-dot { background-color: @fx_faint; }
 .fx-status-line.ok .fx-dot { background-color: @fx_ok; }
 .fx-status-line.bad .fx-dot { background-color: @fx_accent; }
-.fx-provider-editor { border-top: 1px solid @fx_divider; padding-top: 14px; margin-top: 16px; }
-.fx-switch-row { padding: 2px 0; }
-
-/* AI defaults */
-.fx-job-row { border-top: 1px solid @fx_divider; padding: 10px 16px; }
-.fx-job-row.first { border-top: none; }
-.fx-job-title { font-size: 14px; font-weight: 500; color: @fx_text; }
-
-/* Privacy */
-.fx-callout.neutral image { color: @fx_text; }
-.fx-project-check { border-top: 1px solid @fx_divider; padding: 0 16px; min-height: 48px; }
-.fx-project-check.first { border-top: none; }
-.fx-project-check label { font-size: 13px; color: @fx_text; }
+.fx-status-line.ok { color: @fx_text_soft; }
+.fx-provider-editor { padding: 2px 16px 16px 16px; }
+.fx-legend-row { padding: 12px 14px; border-top: 1px solid @fx_divider; }
+.fx-legend-row:first-child { border-top: none; }
+.fx-quiet.danger { color: @fx_error; }
+.fx-quiet.small { min-height: 28px; font-size: 12px; }
+button.fx-secondary.small { min-height: 32px; padding: 0 12px; font-size: 12.5px; }
+button.fx-primary.small { min-height: 32px; padding: 0 12px; font-size: 12.5px; }
 
 /* Storage */
-.fx-storage-name { font-size: 13px; font-weight: 500; color: @fx_text; }
-.fx-storage-row .fx-mono { color: @fx_text_soft; }
-.fx-storage-row button.fx-secondary { min-height: 36px; font-size: 12px; }
-.fx-badge.local { background-color: @fx_chip; color: @fx_text_soft; }
-.fx-test-box levelbar.fx-meter trough, .fx-test-box levelbar.fx-meter block { min-height: 8px; }
-menubutton.fx-secondary { padding: 0; }
-menubutton.fx-secondary > button { background: none; border: none; box-shadow: none; min-height: 38px; padding: 0 12px; color: inherit; }
+.fx-storage-size { color: @fx_text_soft; }
+.fx-disk-bar { color: @fx_accent; }

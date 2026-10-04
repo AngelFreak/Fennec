@@ -795,9 +795,48 @@ fn main() {
     });
     check("the speed test reports a real-time factor", measured);
     check(
-        "Settings shows only the screens in the sidebar",
-        w.sidebar.context() == "none",
+        "Settings lists its sections in the sidebar",
+        w.sidebar.context() == "settings",
     );
+    check(
+        "each section shows its state under its name",
+        w.settings
+            .nav_summaries()
+            .iter()
+            .any(|(id, line)| id == "model" && line.starts_with("Edda v0.1")),
+    );
+    check(
+        "the header names the open section",
+        w.header_crumbs() == (Some("Settings".to_string()), "Speech model".to_string()),
+    );
+    w.settings.add_vocabulary("Leverandør A/S");
+    check(
+        "a vocabulary word is added as a chip and saved",
+        w.settings
+            .vocabulary_entries()
+            .contains(&"Leverandør A/S".to_string())
+            && Settings::load(&root.join("config/settings.toml"))
+                .unwrap()
+                .vocabulary
+                .contains("Leverandør A/S"),
+    );
+    w.settings.remove_vocabulary("Leverandør A/S");
+    check(
+        "and removed again",
+        !w.settings
+            .vocabulary_entries()
+            .contains(&"Leverandør A/S".to_string()),
+    );
+    let before = w.settings.vocabulary_entries().len();
+    w.settings.add_vocabulary("Ærø, Fennec Kommune");
+    w.settings.add_vocabulary("ærø");
+    let entries = w.settings.vocabulary_entries();
+    check(
+        "typing two words adds two; a Danish case-only duplicate is left out",
+        entries.len() == before + 2 && entries.iter().filter(|e| e.to_lowercase() == "ærø").count() == 1,
+    );
+    w.settings.remove_vocabulary("Ærø");
+    w.settings.remove_vocabulary("Fennec Kommune");
     screenshot(&w.window, "settings");
     w.settings.show_section("dictation");
     let settings_text = ui::texts_in(&w.settings.root);
@@ -1222,8 +1261,15 @@ fn ai_checks(root: &std::path::Path) {
     w.settings.ai.render_projects();
     w.settings.ai.set_local_only(&name, true);
     check(
-        "the Privacy checkbox marks the project local only",
+        "the Privacy switch marks the project local only",
         store.projects().unwrap()[0].local_only,
+    );
+    check(
+        "the sidebar line under Privacy counts it at once",
+        w.settings
+            .nav_summaries()
+            .iter()
+            .any(|(id, line)| id == "privacy" && line == "1 project local-only"),
     );
     let local_before = local.count();
     w.dictation.ai_summarize();
