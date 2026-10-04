@@ -313,6 +313,12 @@ impl MainWindow {
                 w.update_header();
             }
         });
+        let weak = Rc::downgrade(self);
+        self.project.connect_editor_state(move || {
+            weak.upgrade().map_or((None, false), |w| {
+                (w.dictation.document(), w.dictation.is_recording())
+            })
+        });
         // The editor must not keep a document that was just deleted.
         let weak = Rc::downgrade(self);
         self.project.connect_deleted(move |ids| {
@@ -395,10 +401,17 @@ impl MainWindow {
         let weak = Rc::downgrade(self);
         self.window.connect_close_request(move |_| {
             if let Some(w) = weak.upgrade() {
-                w.dictation.save_now();
+                w.before_close();
             }
             gtk::glib::Propagation::Proceed
         });
+    }
+
+    /// Saves the document and carries out a delete still waiting for Undo:
+    /// on closing the window and on quitting (Ctrl+Q skips close-request).
+    pub fn before_close(&self) {
+        self.dictation.save_now();
+        self.project.finish_delete();
     }
 
     fn add_action(self: &Rc<Self>, name: &str, accels: &[&str], run: impl Fn(&Rc<Self>) + 'static) {

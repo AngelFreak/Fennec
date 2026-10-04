@@ -40,7 +40,12 @@ const UNDO_TIME: Duration = Duration::from_secs(10);
 struct PendingDelete {
     ids: Vec<DocumentId>,
     timer: glib::SourceId,
+    /// The document in the editor when the delete started.
+    open_at_start: Option<DocumentId>,
 }
+
+/// The editor's document and whether dictation is recording into it.
+type EditorState = Rc<dyn Fn() -> (Option<DocumentId>, bool)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scope {
@@ -106,6 +111,8 @@ pub struct ProjectPage {
     menu: RefCell<Option<gtk::Popover>>,
     toast: gtk::Box,
     toast_label: gtk::Label,
+    toast_undo: gtk::Button,
+    editor: RefCell<Option<EditorState>>,
     side: gtk::ScrolledWindow,
     project_fields: gtk::Box,
     name: gtk::Entry,
@@ -494,6 +501,8 @@ impl ProjectPage {
             menu: RefCell::default(),
             toast,
             toast_label,
+            toast_undo: undo.clone(),
+            editor: RefCell::default(),
             side,
             project_fields,
             name,
@@ -1046,6 +1055,8 @@ impl ProjectPage {
 
     /// Re-reads documents and redraws the list and tag chips.
     pub fn render_list(self: &Rc<Self>) {
+        // A menu hangs from a row's ⋯ button; it goes before the rows do.
+        self.close_menu();
         // Documents waiting for Undo are already gone from the list.
         let hidden = self.hidden_ids();
         let mut all = self.store.documents(&self.base_filter()).unwrap_or_default();
@@ -1474,7 +1485,8 @@ impl ProjectPage {
 
     /// Moves documents to a project (`None`: Unsorted).
     pub fn move_documents(self: &Rc<Self>, ids: &[DocumentId], project: Option<ProjectId>) {
-        for id in ids {
+        let hidden = self.hidden_ids();
+        for id in ids.iter().filter(|id| !hidden.contains(id)) {
             if let Err(e) = self.store.move_document(*id, project) {
                 tracing::error!("moving document {id}: {e}");
             }
@@ -1494,7 +1506,8 @@ impl ProjectPage {
         if tag.is_empty() {
             return;
         }
-        for id in ids {
+        let hidden = self.hidden_ids();
+        for id in ids.iter().filter(|id| !hidden.contains(id)) {
             let Ok(doc) = self.store.document(*id) else {
                 continue;
             };
@@ -1536,11 +1549,23 @@ impl ProjectPage {
 
     /// Hides the documents and offers Undo; they are deleted when the offer
     /// runs out, another delete starts, or the window closes.
-    pub fn delete_documents(self: &Rc<Self>, ids: Vec<DocumentId>) {
+    pub fn delete_documents(self: &Rc<Self>, mut ids: Vec<DocumentId>) {
         if ids.is_empty() {
             return;
         }
         self.finish_delete();
+        let (open, recording) = self.editor_state();
+        // The document being dictated into cannot go; the text still lands in it.
+        if recording && let Some(busy) = open.filter(|o| ids.contains(o)) {
+            ids.retain(|id| *id != busy);
+            if ids.is_empty() {
+                let title = self.store.document(busy).map(|d| d.title).unwrap_or_default();
+                self.notice(&format!(
+                    "«{title}» is being dictated into. Stop dictation to delete it."
+                ));
+                return;
+            }
+        }
         let text = match ids.as_slice() {
             [id] => format!(
                 "Deleted «{}»",
@@ -1556,8 +1581,13 @@ impl ProjectPage {
                 p.commit_delete(false);
             }
         });
-        *self.pending_delete.borrow_mut() = Some(PendingDelete { ids, timer });
+        *self.pending_delete.borrow_mut() = Some(PendingDelete {
+            ids,
+            timer,
+            open_at_start: open,
+        });
         self.toast_label.set_text(&text);
+        self.toast_undo.set_visible(true);
         self.toast.set_visible(true);
         self.render_list();
     }
@@ -1586,22 +1616,60 @@ impl ProjectPage {
             pending.timer.remove();
         }
         self.toast.set_visible(false);
+        // A document opened in the editor since, or being dictated into, is kept:
+        // deleting it would lose what was written there meanwhile.
+        let (open, recording) = self.editor_state();
+        let keep = open.filter(|o| recording || Some(*o) != pending.open_at_start);
         let audio_dir = self.deps.paths.audio();
-        for id in &pending.ids {
-            if let Ok(Some(path)) = self.store.document(*id).map(|d| d.audio_path)
+        let mut deleted = Vec::new();
+        for id in pending.ids {
+            if Some(id) == keep {
+                continue;
+            }
+            let audio = self.store.document(id).ok().and_then(|d| d.audio_path);
+            if let Err(e) = self.store.delete_document(id) {
+                tracing::error!("deleting document {id}: {e}");
+                continue;
+            }
+            deleted.push(id);
+            // Only Fennec's own recordings; a path that climbs out with ".." is not one.
+            if let Some(path) = audio
                 && path.starts_with(&audio_dir)
+                && !path.components().any(|c| c == std::path::Component::ParentDir)
                 && let Err(e) = std::fs::remove_file(&path)
             {
                 tracing::warn!("could not delete the audio {}: {e}", path.display());
             }
-            if let Err(e) = self.store.delete_document(*id) {
-                tracing::error!("deleting document {id}: {e}");
-            }
         }
         if let Some(f) = self.on_deleted.borrow().clone() {
-            f(pending.ids);
+            f(deleted);
         }
         self.notify_changed();
+    }
+
+    /// Tells the page which document the editor holds and whether dictation
+    /// is recording into it.
+    pub fn connect_editor_state(&self, f: impl Fn() -> (Option<DocumentId>, bool) + 'static) {
+        *self.editor.borrow_mut() = Some(Rc::new(f));
+    }
+
+    fn editor_state(&self) -> (Option<DocumentId>, bool) {
+        self.editor.borrow().clone().map_or((None, false), |f| f())
+    }
+
+    /// A message in the bottom bar, without Undo, for a few seconds.
+    fn notice(self: &Rc<Self>, text: &str) {
+        self.toast_label.set_text(text);
+        self.toast_undo.set_visible(false);
+        self.toast.set_visible(true);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || {
+            if let Some(p) = weak.upgrade()
+                && p.pending_delete.borrow().is_none()
+            {
+                p.toast.set_visible(false);
+            }
+        });
     }
 
     fn hidden_ids(&self) -> Vec<DocumentId> {
@@ -1635,6 +1703,11 @@ impl ProjectPage {
                 pop.unparent();
             }
         }
+    }
+
+    /// Whether a row or bulk menu is open (tests).
+    pub fn menu_open(&self) -> bool {
+        self.menu.borrow().is_some()
     }
 
     /// Ids of the documents shown, in order (tests).

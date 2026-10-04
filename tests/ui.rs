@@ -994,6 +994,69 @@ fn document_checks(root: &std::path::Path) {
         "without Undo the document is deleted, with its recording",
         store.document(ids[0]).is_err() && !recording.exists() && count(meetings) == 1,
     );
+
+    // Closing the window (or quitting) carries out a delete waiting for Undo.
+    w.project.select_document(ids[1], true);
+    w.project.delete_selected();
+    w.before_close();
+    check(
+        "closing the window carries out a delete waiting for Undo",
+        store.document(ids[1]).is_err() && w.project.toast_text().is_none(),
+    );
+
+    // A row menu hangs from its row; redrawing the rows closes it first.
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.open_row_menu(0);
+    let opened = w.project.menu_open();
+    w.project.render_list();
+    check(
+        "redrawing the list closes an open row menu",
+        opened && !w.project.menu_open(),
+    );
+
+    // The document being dictated into stays.
+    w.dictation.open_document(ids[2]).unwrap();
+    w.dictation.start_recording();
+    let recording_started = pump_until(Duration::from_secs(5), || w.dictation.is_recording());
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.delete_documents(vec![ids[2]]);
+    w.project.finish_delete();
+    check(
+        "the document being dictated into is not deleted, and says why",
+        recording_started
+            && store.document(ids[2]).is_ok()
+            && w.project
+                .toast_text()
+                .is_some_and(|t| t.contains("Stop dictation")),
+    );
+    w.dictation.stop_recording();
+    pump_until(Duration::from_secs(10), || !w.dictation.is_recording());
+
+    // A document opened in the editor during the Undo time is kept.
+    let late = store
+        .create_document(&NewDocument {
+            project_id: Some(vendor),
+            ..NewDocument::dictation("Opfølgning")
+        })
+        .unwrap();
+    w.project.render_list();
+    w.project.delete_documents(vec![late]);
+    w.dictation.open_document(late).unwrap();
+    w.project.finish_delete();
+    check(
+        "a document opened in the editor while Undo shows is kept",
+        store.document(late).is_ok(),
+    );
+
+    // Moving or tagging skips documents waiting to be deleted.
+    w.sidebar.go(Nav::Project(ProjectFilter::Project(vendor)));
+    w.project.delete_documents(vec![ids[2]]);
+    w.project.move_documents(&[ids[2]], Some(meetings));
+    check(
+        "a document waiting for Undo is not moved",
+        store.document(ids[2]).unwrap().project_id == Some(vendor),
+    );
+    w.project.undo_delete();
 }
 
 /// Answers like a model would, by recognising each action's instructions.
