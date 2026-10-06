@@ -715,6 +715,7 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
         secrets: Arc::new(MemorySecrets::with("claude", "sk-ant-mockup")),
         confirm_cloud: Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        phone_local_only: true,
     }
 }
 

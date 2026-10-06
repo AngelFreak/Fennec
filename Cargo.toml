@@ -41,8 +41,18 @@ candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+# Receiving recordings from the phone app (src/sync).
+base64 = "0.22"
+getrandom = "0.3"
+httparse = "1"
+mdns-sd = "0.21"
+qrcode = { version = "0.14", default-features = false }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.11"
 
 [dev-dependencies]
+x509-parser = "0.18"
 
 [profile.release]
 strip = true
@@ -58,6 +68,12 @@ harness = false
 # The real window, model and microphone, timed (FENNEC_RESPONSIVENESS=1).
 [[test]]
 name = "responsiveness"
+harness = false
+
+# The desktop half of the phone end-to-end test (FENNEC_PHONE_E2E_DIR;
+# android/e2e/run-e2e.sh runs it).
+[[test]]
+name = "phone_e2e"
 harness = false
 
 # Stages the mockup's content and screenshots it (FENNEC_MOCKUP_DIR).

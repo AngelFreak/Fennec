@@ -164,6 +164,7 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
         secrets: Arc::new(fennec::ai::MemorySecrets::default()),
         confirm_cloud: std::rc::Rc::new(|_, _, answer| answer(true)),
         dictation_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        phone_local_only: true,
     }
 }
 
@@ -927,6 +928,9 @@ fn main() {
     // --- documents in a project: select, move, tag, delete with Undo
     document_checks(&tmp.path().join("e"));
 
+    // --- a phone pairs, sends a recording, and it is transcribed here
+    phone_checks(&tmp.path().join("f"));
+
     let failures = unsafe { FAILURES };
     if failures > 0 {
         println!("\n{failures} UI check(s) failed");
@@ -1555,5 +1559,243 @@ fn audio_checks(root: &std::path::Path) {
         pump_until(Duration::from_secs(10), || {
             w.dictation.dock.state_text() == "Ready"
         }),
+    );
+}
+
+/// A free port on localhost for the phone receiver.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// What the stand-in phone saw, sent back to the main thread.
+#[derive(Debug, Default)]
+struct PhoneRun {
+    paired: bool,
+    document_id: Option<i64>,
+    final_state: String,
+}
+
+/// Plays Fennec Recorder against the real window: pairs (someone presses
+/// Allow), sends a WAV in chunks and waits until it is transcribed.
+fn phone_checks(root: &std::path::Path) {
+    use sha2::Digest;
+
+    let d = deps(root, vec!["Hej fra telefonen."], true);
+    let port = free_port();
+    d.settings.borrow_mut().phone.port = port;
+    let w = ui::build_window(d);
+    w.window.present();
+    w.sidebar.go(ui::Nav::Settings);
+    w.settings.show_section("phone");
+    let summaries = w.settings.nav_summaries();
+    check(
+        "Settings lists Phone, off until turned on",
+        summaries.iter().any(|(id, line)| id == "phone" && line == "Off"),
+    );
+    check(
+        "receiving is off by default: nothing listens",
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+    );
+
+    w.settings.phone.start_pairing();
+    let offer = w.phone.offer();
+    check(
+        "Pair a phone turns receiving on and shows a code",
+        offer.is_some() && w.settings.phone.enabled.is_active(),
+    );
+    let Some(offer) = offer else { return };
+    let texts = ui::texts_in(&w.settings.root);
+    check(
+        "the address and code are shown for phones without a camera",
+        texts.iter().any(|t| t == &offer.address) && texts.iter().any(|t| t.contains(&offer.token_display())),
+    );
+    screenshot(&w.window, "settings-phone-pairing");
+
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/da_fleurs_0.wav"
+    ))
+    .unwrap();
+    let token = offer.token.clone();
+    let base = format!("https://{}", offer.address);
+    let phone = std::thread::spawn(move || {
+        let client = reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap();
+        let mut run = PhoneRun::default();
+        let paired: serde_json::Value = client
+            .post(format!("{base}/v1/pair"))
+            .json(&serde_json::json!({
+                "token": token, "device_name": "Pixel 8", "nonce": "ui-test-nonce-0123456789"
+            }))
+            .send()
+            .and_then(|r| r.json())
+            .unwrap_or_default();
+        let Some(secret) = paired["secret"].as_str().map(str::to_string) else {
+            return run;
+        };
+        run.paired = true;
+        let id = "11111111-2222-3333-4444-555555555555";
+        let sum: String = sha2::Sha256::digest(&wav)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let call = |m: reqwest::Method, path: &str, body: Vec<u8>| -> serde_json::Value {
+            client
+                .request(m, format!("{base}{path}"))
+                .bearer_auth(&secret)
+                .body(body)
+                .send()
+                .and_then(|r| r.json())
+                .unwrap_or_default()
+        };
+        let meta = serde_json::json!({
+            "title": "Telefonmøde", "recorded_at": 1_791_000_000_000_i64, "duration_ms": 5000,
+            "ext": "wav", "size": wav.len(), "sha256": sum,
+        });
+        call(
+            reqwest::Method::PUT,
+            &format!("/v1/recordings/{id}"),
+            serde_json::to_vec(&meta).unwrap(),
+        );
+        for (i, piece) in wav.chunks(64 * 1024).enumerate() {
+            call(
+                reqwest::Method::PUT,
+                &format!("/v1/recordings/{id}/audio?offset={}", i * 64 * 1024),
+                piece.to_vec(),
+            );
+        }
+        run.document_id = call(
+            reqwest::Method::POST,
+            &format!("/v1/recordings/{id}/complete"),
+            vec![],
+        )["document_id"]
+            .as_i64();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(30) {
+            let st = call(reqwest::Method::GET, &format!("/v1/recordings?ids={id}"), vec![]);
+            run.final_state = st["recordings"][0]["state"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            if run.final_state == "done" || run.final_state == "failed" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        run
+    });
+
+    let asked = pump_until(Duration::from_secs(10), || w.phone.pending().is_some());
+    let pending = w.phone.pending();
+    check(
+        "a phone with the right code waits for Allow, with the code to compare",
+        asked
+            && pending.as_ref().is_some_and(|p| {
+                p.device_name == "Pixel 8"
+                    && p.code
+                        == fennec::sync::pairing_code(&offer.pin, &offer.token, "ui-test-nonce-0123456789")
+            }),
+    );
+    screenshot(&w.window, "settings-phone-allow");
+    w.phone.decide(true);
+    pump_until(Duration::from_secs(60), || phone.is_finished());
+    let run = phone.join().unwrap();
+    check("the phone is paired after Allow", run.paired);
+    check(
+        "the paired phone is listed",
+        ui::texts_in(&w.settings.root).iter().any(|t| t == "Pixel 8"),
+    );
+    check(
+        "the recording becomes a document in the Files queue",
+        run.document_id.is_some()
+            && w.files
+                .statuses()
+                .iter()
+                .any(|(name, _)| name.starts_with("phone-")),
+    );
+    let queue = ui::texts_in(&w.files.root);
+    check(
+        "the queue shows the phone recording by its title, not its file name",
+        queue.iter().any(|t| t == "Telefonmøde") && !queue.iter().any(|t| t.starts_with("phone-")),
+    );
+    check(
+        "the phone sees its recording transcribed",
+        run.final_state == "done",
+    );
+    let store = Store::open(&root.join("data/fennec.db")).unwrap();
+    let text = run
+        .document_id
+        .and_then(|doc| store.paragraphs(doc).ok())
+        .unwrap_or_default();
+    check(
+        "the transcript is saved under the phone's title",
+        text.iter().any(|p| p.text.contains("Hej fra telefonen"))
+            && run
+                .document_id
+                .and_then(|doc| store.document(doc).ok())
+                .is_some_and(|d| d.title == "Telefonmøde"),
+    );
+    check(
+        "the phone's row counts what it sent",
+        ui::texts_in(&w.settings.root)
+            .iter()
+            .any(|t| t.starts_with("Last seen") && t.ends_with("1 recording")),
+    );
+    check(
+        "the Settings line counts the phone",
+        w.settings
+            .nav_summaries()
+            .iter()
+            .any(|(id, line)| id == "phone" && line == "On · 1 phone"),
+    );
+    screenshot(&w.window, "settings-phone-paired");
+
+    w.settings.phone.enabled.set_active(false);
+    check(
+        "turning receiving off stops listening",
+        pump_until(Duration::from_secs(5), || {
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
+        }),
+    );
+
+    // Fennec closed halfway through transcribing a phone recording.
+    let Some(doc) = run.document_id else { return };
+    store
+        .set_inbound_state_for_document(doc, fennec::store::InboundState::Transcribing, None)
+        .unwrap();
+    store
+        .replace_paragraphs(doc, &[Paragraph::new("Halvt færdig")])
+        .unwrap();
+    drop(w);
+    let w = ui::build_window(deps(root, vec!["Hej fra telefonen."], true));
+    let resumed = pump_until(Duration::from_secs(20), || {
+        store
+            .inbound("11111111-2222-3333-4444-555555555555")
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.state == fennec::store::InboundState::Done)
+    });
+    let texts: Vec<String> = store
+        .paragraphs(doc)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    check(
+        "a phone recording cut off by closing Fennec is transcribed again from the start",
+        resumed
+            && texts.iter().any(|t| t.contains("Hej fra telefonen"))
+            && !texts.iter().any(|t| t == "Halvt færdig"),
+    );
+    check(
+        "resuming does not need receiving to be on",
+        matches!(w.phone.state(), ui::phone::LinkState::Off),
     );
 }
