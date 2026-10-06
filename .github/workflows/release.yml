@@ -20,6 +20,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/build-deb.sh
+      - android/app/build.gradle.kts
   workflow_dispatch:
 
 permissions:
@@ -72,8 +73,62 @@ jobs:
           path: ${{ env.DEB }}
           if-no-files-found: error
 
+  # Fennec Recorder, the Android companion app. Signed when the repository
+  # has the FENNEC_KEYSTORE_BASE64, FENNEC_KEYSTORE_PASSWORD, FENNEC_KEY_ALIAS
+  # and FENNEC_KEY_PASSWORD secrets; an unsigned APK is kept as an artifact
+  # but not published, since phones will not install it.
+  apk:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Check the tag matches the app's version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match versionName ${version} in android/app/build.gradle.kts"
+            exit 1
+          fi
+
+      - name: Test and build
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FENNEC_KEYSTORE_BASE64 }}
+          FENNEC_KEYSTORE_PASSWORD: ${{ secrets.FENNEC_KEYSTORE_PASSWORD }}
+          FENNEC_KEY_ALIAS: ${{ secrets.FENNEC_KEY_ALIAS }}
+          FENNEC_KEY_PASSWORD: ${{ secrets.FENNEC_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/fennec.keystore"
+            export FENNEC_KEYSTORE="$RUNNER_TEMP/fennec.keystore"
+          fi
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
+          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
+          if [[ -f app/build/outputs/apk/release/app-release.apk ]]; then
+            cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/fennec-recorder-$version.apk"
+          else
+            echo "::warning::No signing key in the repository secrets: the APK is unsigned and will not be published."
+            cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/fennec-recorder-$version-unsigned.apk"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: ${{ runner.temp }}/fennec-recorder-*.apk
+          if-no-files-found: error
+
   release:
-    needs: deb
+    needs: [deb, apk]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
@@ -83,6 +138,16 @@ jobs:
         with:
           name: deb
           path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+
+      - name: Keep only a signed APK
+        run: |
+          shopt -s nullglob
+          for f in apk/*.apk; do [[ "$f" == *-unsigned.apk ]] || mv "$f" dist/; done
 
       - name: Publish the release
         env:
@@ -95,11 +160,13 @@ jobs:
               sudo apt install ./fennec_*.deb
 
           The speech model runs on the GPU through Vulkan (AMD, Intel and NVIDIA) when there is one, and on the CPU otherwise. Settings → Speech model → Compute shows which, and can force the CPU.
+
+          Fennec Recorder (`fennec-recorder-*.apk`, Android 10 or newer) records on your phone and sends the audio to Fennec over your own network. Install the APK, then in Fennec choose Settings → Phone → Pair a phone and scan the code.
           EOF
           )
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.deb \
+            gh release create "$GITHUB_REF_NAME" dist/* \
               --title "Fennec ${GITHUB_REF_NAME#v}" --notes "$notes" --generate-notes
           fi
