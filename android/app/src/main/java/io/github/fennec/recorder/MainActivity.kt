@@ -110,6 +110,15 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
     val pairUi by vm.pair.collectAsState()
 
     val draft by vm.project.collectAsState()
+    // The red dot on the Settings gear, and what Settings says about it.
+    val attention = when {
+        paired == null -> "Not paired. Pair with Fennec to send recordings over Wi-Fi, or use a USB cable."
+        contact.wrongComputer -> "Another computer answered at ${paired?.address}. Pair with Fennec again."
+        contact.reachable == false -> "${paired?.name} is not reachable. Is this phone on the same Wi-Fi as Fennec, with Fennec open? Recordings wait until it is, or use a USB cable."
+        else -> null
+    }
+    // Away from Fennec's Wi-Fi is normal: only what the user must act on gets the dot.
+    val dot = paired == null || contact.wrongComputer
     val pairInWelcome by vm.pairInWelcome.collectAsState()
     val startRecording = {
         Recorder.start(context, vm.recordRequest())
@@ -180,17 +189,16 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                     status,
                     // Fennec may have renamed or recoloured the chosen project.
                     next.copy(project = next.project?.let { info.project(it.id) ?: it }),
-                    info, paired?.name, contact.reachable.takeIf { paired != null }, settings.defaultTemplate,
+                    info, dot, settings.defaultTemplate,
                     onManageProjects = { vm.go(Screen.Projects) },
                     onNext = vm::setNext, onRecord = record,
                     onPause = { Recorder.pause(context) }, onResume = { Recorder.resume(context) },
                     onStop = { Recorder.stop(context) },
-                    onPair = { vm.go(Screen.Pair) }, onSettings = { vm.go(Screen.Settings) },
+                    onSettings = { vm.go(Screen.Settings) },
                 )
                 Screen.Recordings -> RecordingsScreen(
-                    recordings, info.projects.associateBy { it.id }, paired?.name, contact.reachable, contact.at,
-                    onOpen = { vm.go(Screen.Detail(it)) }, onPair = { vm.go(Screen.Pair) },
-                    onSettings = { vm.go(Screen.Settings) },
+                    recordings, info.projects.associateBy { it.id }, paired?.name, dot,
+                    onOpen = { vm.go(Screen.Detail(it)) }, onSettings = { vm.go(Screen.Settings) },
                 )
                 is Screen.Detail -> {
                     val r = recordings.firstOrNull { it.id == s.id }
@@ -228,7 +236,7 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                     paired, settings, info, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
                     onUnpair = vm::unpair, onChange = { s2 -> vm.app.settings.update { s2 } },
                     onProjects = { vm.go(Screen.Projects) }, onTemplates = { vm.go(Screen.Templates) },
-                    onUsbCopies = vm::setUsbCopies,
+                    onUsbCopies = vm::setUsbCopies, attention = attention,
                 )
                 Screen.Projects -> ProjectsScreen(
                     info, paired != null, contact.reachable, draft,

@@ -327,35 +327,37 @@ fun SecondaryButton(
     ) { Text(text, style = MaterialTheme.typography.labelLarge, color = color) }
 }
 
-/** The paired computer and whether it answered lately. */
+/** A header button with a red dot when something needs the user (see Settings). */
 @Composable
-fun ContactLine(name: String?, reachable: Boolean?, trailing: String? = null, onPair: () -> Unit = {}) {
+fun HeaderIconWithDot(@DrawableRes id: Int, description: String, dot: Boolean, onClick: () -> Unit) {
+    val c = Fennec.colors
+    IconButton(onClick = onClick, modifier = Modifier.semantics {
+        contentDescription = if (dot) "$description, needs attention" else description
+    }) {
+        Box {
+            FennecIcon(id, c.muted)
+            if (dot) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).size(10.dp).clip(CircleShape).background(c.surface)
+                        .padding(1.5.dp).clip(CircleShape).background(c.error),
+                )
+            }
+        }
+    }
+}
+
+/** What needs the user, shown at the top of Settings (the red dot points here). */
+@Composable
+fun AttentionNote(text: String, modifier: Modifier = Modifier) {
     val c = Fennec.colors
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.chrome)
-            .let { if (name == null) it.clickable(onClick = onPair) else it }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.error.copy(alpha = 0.10f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Dot(
-            when {
-                name == null -> c.faint
-                reachable == false -> c.accent
-                else -> c.ok
-            },
-        )
-        Text(
-            when {
-                name == null -> "Not paired. Pair with Fennec to send over Wi-Fi, or use a USB cable."
-                reachable == false -> "$name is not reachable. Is this phone on the same Wi-Fi, with Fennec open?"
-                reachable == true -> "Paired with $name"
-                else -> "Paired with $name"
-            },
-            fontSize = 12.5.sp, color = c.muted, modifier = Modifier.weight(1f), maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        trailing?.let { Mono(it) }
+        Dot(c.error, 10.dp)
+        Text(text, fontSize = 13.5.sp, lineHeight = 19.sp, color = c.text, modifier = Modifier.weight(1f))
     }
 }
 

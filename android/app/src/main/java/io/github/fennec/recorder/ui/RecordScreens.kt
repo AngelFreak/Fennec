@@ -56,8 +56,8 @@ fun RecordScreen(
     status: Recorder.Status,
     next: NextRecording,
     info: DesktopInfo,
-    pairedName: String?,
-    reachable: Boolean?,
+    /** Something waits in Settings: not paired, or Fennec not reachable. */
+    attention: Boolean,
     phoneDefault: String?,
     onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
@@ -65,14 +65,13 @@ fun RecordScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
-    onPair: () -> Unit,
     onSettings: () -> Unit,
 ) {
     when (status) {
         is Recorder.Status.Recording -> RecordingNow(status, onPause, onResume, onStop)
         else -> ReadyToRecord(
-            next, info, pairedName, reachable, (status as? Recorder.Status.Failed)?.message, phoneDefault,
-            onManageProjects, onNext, onRecord, onPair, onSettings,
+            next, info, attention, (status as? Recorder.Status.Failed)?.message, phoneDefault,
+            onManageProjects, onNext, onRecord, onSettings,
         )
     }
 }
@@ -81,21 +80,19 @@ fun RecordScreen(
 private fun ReadyToRecord(
     next: NextRecording,
     info: DesktopInfo,
-    pairedName: String?,
-    reachable: Boolean?,
+    attention: Boolean,
     error: String?,
     phoneDefault: String?,
     onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
     onRecord: () -> Unit,
-    onPair: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
         Header("Fennec", navigation = {
             Box(Modifier.padding(start = 12.dp, end = 10.dp)) { FennecLogo(28.dp) }
-        }) { HeaderIcon(R.drawable.ic_settings, "Settings", onSettings) }
+        }) { HeaderIconWithDot(R.drawable.ic_settings, "Settings", attention, onSettings) }
         Column(Modifier.weight(1f).padding(horizontal = 20.dp, vertical = 16.dp)) {
             SectionTitle("New recording")
             FennecBox {
@@ -149,7 +146,6 @@ private fun ReadyToRecord(
                 Text("Record", style = MaterialTheme.typography.labelLarge)
                 Gap(16.dp)
             }
-            ContactLine(pairedName, reachable, onPair = onPair)
         }
     }
 }
@@ -274,15 +270,13 @@ fun RecordingsScreen(
     recordings: List<Recording>,
     projects: Map<Long, Project>,
     pairedName: String?,
-    reachable: Boolean?,
-    lastContact: Long?,
+    attention: Boolean,
     onOpen: (String) -> Unit,
-    onPair: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
-        Header("Recordings") { HeaderIcon(R.drawable.ic_settings, "Settings", onSettings) }
+        Header("Recordings") { HeaderIconWithDot(R.drawable.ic_settings, "Settings", attention, onSettings) }
         if (recordings.isEmpty()) {
             Column(
                 Modifier.weight(1f).fillMaxWidth().padding(32.dp),
@@ -306,14 +300,6 @@ fun RecordingsScreen(
                     }
                 }
             }
-        }
-        Box(Modifier.padding(20.dp, 12.dp)) {
-            ContactLine(
-                pairedName, reachable,
-                trailing = lastContact?.let { SimpleDateFormat("HH:mm", Locale.ROOT).format(Date(it)) }
-                    ?.let { "seen $it" },
-                onPair = onPair,
-            )
         }
     }
 }

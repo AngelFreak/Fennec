@@ -119,7 +119,20 @@ class ScreenshotTest(private val dark: Boolean) {
     fun record() = shot("record") {
         RecordScreen(
             Recorder.Status.Idle, NextRecording("Møde med Jensen", info.projects[0]), info,
-            "fennec-desktop", true, null, {}, {}, {}, {}, {}, {}, {}, {},
+            false, null, {}, {}, {}, {}, {}, {}, {},
+        )
+    }
+
+    @Test
+    fun recordUnpaired() = shot("record-unpaired") {
+        RecordScreen(Recorder.Status.Idle, NextRecording(), DesktopInfo(), true, null, {}, {}, {}, {}, {}, {}, {})
+    }
+
+    @Test
+    fun settingsUnpaired() = shot("settings-unpaired") {
+        SettingsScreen(
+            null, AppSettings(), DesktopInfo(), "0.1.0", {}, {}, {}, {}, {}, {},
+            attention = "Not paired. Pair with Fennec to send recordings over Wi-Fi, or use a USB cable.",
         )
     }
 
@@ -128,13 +141,13 @@ class ScreenshotTest(private val dark: Boolean) {
         val levels = listOf(.05f, .2f, .5f, .3f, .7f, .9f, .4f, .15f, .6f, .95f, .5f, .3f, .1f, .35f, .8f, .55f, .25f, .08f, .4f, .65f, .2f, .05f)
         RecordScreen(
             Recorder.Status.Recording("r", "Møde med Jensen", "Kundemøder", "Mødereferat", 768_000, false, 4_600_000, levels),
-            NextRecording(), info, "fennec-desktop", true, null, {}, {}, {}, {}, {}, {}, {}, {},
+            NextRecording(), info, false, null, {}, {}, {}, {}, {}, {}, {},
         )
     }
 
     @Test
     fun recordings() = shot("recordings") {
-        RecordingsScreen(list, info.projects.associateBy { it.id }, "fennec-desktop", true, today(14, 47), {}, {}, {})
+        RecordingsScreen(list, info.projects.associateBy { it.id }, "fennec-desktop", false, {}, {})
     }
 
     @Test

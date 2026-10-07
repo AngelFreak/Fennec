@@ -510,6 +510,8 @@ fun SettingsScreen(
     onProjects: () -> Unit,
     onTemplates: () -> Unit,
     onUsbCopies: (Boolean) -> Unit = { on -> onChange(settings.copy(usbCopies = on)) },
+    /** What the red dot on the gear is about, if anything. */
+    attention: String? = null,
 ) {
     val c = Fennec.colors
     var unpairing by remember { mutableStateOf(false) }
@@ -519,6 +521,7 @@ fun SettingsScreen(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            attention?.let { AttentionNote(it, Modifier.padding(bottom = 8.dp)) }
             SectionTitle("Computer")
             FennecBox {
                 if (paired != null) {
