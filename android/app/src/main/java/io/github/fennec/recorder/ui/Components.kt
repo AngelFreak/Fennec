@@ -347,7 +347,7 @@ fun ContactLine(name: String?, reachable: Boolean?, trailing: String? = null, on
         Text(
             when {
                 name == null -> "Not paired. Pair with Fennec to send recordings."
-                reachable == false -> "$name is not reachable right now"
+                reachable == false -> "$name is not reachable. Is this phone on the same Wi-Fi, with Fennec open?"
                 reachable == true -> "Paired with $name"
                 else -> "Paired with $name"
             },
@@ -360,3 +360,26 @@ fun ContactLine(name: String?, reachable: Boolean?, trailing: String? = null, on
 
 @Composable
 fun Gap(h: Dp) = Spacer(Modifier.height(h))
+
+/** The rule people must know: phone and computer on the same Wi-Fi. */
+const val SAME_NETWORK = "Your phone and the computer running Fennec must be on the same Wi-Fi network."
+
+/** [SAME_NETWORK] as a callout, with what happens otherwise. */
+@Composable
+fun SameNetworkNote(modifier: Modifier = Modifier) {
+    val c = Fennec.colors
+    Row(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.accentSoft)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        FennecIcon(R.drawable.ic_wifi, c.accentText, 20.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("Same Wi-Fi only", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.accentText)
+            Text(
+                "$SAME_NETWORK Recordings made elsewhere wait on the phone and are sent when you are back on that network with Fennec open.",
+                fontSize = 13.sp, lineHeight = 19.sp, color = c.text,
+            )
+        }
+    }
+}

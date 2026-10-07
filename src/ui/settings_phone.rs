@@ -123,9 +123,10 @@ impl PhoneSettingsUi {
         let (outer, b) = page(Some(760), 28);
         b.append(&title_block(
             "Phone",
-            "Record meetings and interviews with Fennec Recorder on your phone. Recordings come straight to this computer over your network and are transcribed here.",
+            "Record meetings and interviews with Fennec Recorder on your phone. Recordings come straight to this computer over your Wi-Fi network and are transcribed here.",
             None,
         ));
+        b.append(&same_network_note());
 
         let (receiving, rows) = group("Receiving", None);
         let r = row("Receive recordings from phones", None, &self.enabled);
@@ -146,7 +147,7 @@ impl PhoneSettingsUi {
         let idle = row(
             "Add a phone",
             Some(
-                "Shows a code to scan with Fennec Recorder. The phone can send recordings once you press Allow here.",
+                "Shows a code to scan with Fennec Recorder, on a phone on the same Wi-Fi as this computer. The phone can send recordings once you press Allow here.",
             ),
             &self.pair_button,
         );
@@ -436,6 +437,21 @@ impl PhoneSettingsUi {
             self.devices_box.append(&r);
         }
     }
+}
+
+/// The rule people must know, at the top of the section.
+fn same_network_note() -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    b.add_css_class("fx-network-note");
+    let text = label("", &["fx-network-note-text"]);
+    text.set_markup(
+        "<b>Same Wi-Fi only.</b> The phone and this computer must be on the same Wi-Fi network, \
+         and Fennec must be open. Recordings made elsewhere wait on the phone and are sent when it is back.",
+    );
+    text.set_wrap(true);
+    text.set_hexpand(true);
+    b.append(&text);
+    b
 }
 
 /// The QR code for `text` with a four-module quiet zone.

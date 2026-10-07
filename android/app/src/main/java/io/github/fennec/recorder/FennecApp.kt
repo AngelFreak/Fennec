@@ -95,7 +95,7 @@ class AppGraph(
                 r.message
             }
             is Api.Unreachable ->
-                "Fennec could not be reached. Changing projects needs this phone on the same network as Fennec."
+                "Fennec could not be reached. Changing projects needs this phone on the same Wi-Fi network as Fennec, with Fennec open."
         }
     }
 

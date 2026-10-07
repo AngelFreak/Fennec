@@ -225,7 +225,7 @@ private fun Steps(r: Recording, pairedName: String?) {
                 sent -> "Arrived complete"
                 r.state == SyncState.FAILED && r.deliveredAt == null -> "Not sent"
                 pairedName == null -> "Pair with Fennec to send it"
-                else -> "Waits until this phone is on the same network"
+                else -> "Waits until this phone is on the same Wi-Fi as Fennec"
             },
             when {
                 sent -> Step.DONE
@@ -355,6 +355,7 @@ fun PairScreen(
                         "On your computer, open Fennec, go to Settings, then Phone, and choose Pair a phone. Point the camera at the code.",
                         style = MaterialTheme.typography.bodyMedium, color = c.textSoft,
                     )
+                    SameNetworkNote()
                     Box(Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) { camera() }
                     TextButton(onManual, Modifier.align(Alignment.CenterHorizontally)) {
                         Text("No camera? Enter the code instead", color = c.accentText)
@@ -367,6 +368,7 @@ fun PairScreen(
                         "Fennec shows its address and an 8-digit code under Settings → Phone → Pair a phone.",
                         style = MaterialTheme.typography.bodyMedium, color = c.textSoft,
                     )
+                    SameNetworkNote()
                     OutlinedTextField(
                         address, { address = it }, label = { Text("Address") }, singleLine = true,
                         placeholder = { Text("192.168.1.20:47130") }, colors = fieldColors(),
@@ -421,7 +423,7 @@ fun PairScreen(
                             Text("Paired with ${ui.name}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text)
                         }
                         Text(
-                            "Recordings go to ${ui.name} whenever this phone is on the same network.",
+                            "Recordings go to ${ui.name} whenever this phone is on the same Wi-Fi network and Fennec is open. Recorded elsewhere, they wait on the phone until then.",
                             fontSize = 13.sp, color = c.muted,
                         )
                     }
@@ -503,6 +505,7 @@ fun SettingsScreen(
                     }
                 }
             }
+            SameNetworkNote(Modifier.padding(top = 8.dp))
             Gap(8.dp)
             SectionTitle("Filing in Fennec")
             FennecBox {
@@ -546,7 +549,7 @@ fun SettingsScreen(
             }
             Gap(12.dp)
             Text(
-                "Recordings go only from this phone to the computer you paired, over your own network. Nothing passes through the internet.",
+                "Recordings go only from this phone to the computer you paired, over your own Wi-Fi network. Nothing passes through the internet.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Mono("Fennec Recorder $version", 11, c.faint)

@@ -174,7 +174,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (r.wrongComputer) {
                         "Another computer answered at ${target.address}. Scan the code again."
                     } else {
-                        "Fennec could not be reached at ${target.address}. Check that this phone is on the same network and that receiving is on in Fennec."
+                        "Fennec could not be reached at ${target.address}. $SAME_NETWORK Check that it is, and that Fennec is open with receiving on."
                     },
                 )
             }

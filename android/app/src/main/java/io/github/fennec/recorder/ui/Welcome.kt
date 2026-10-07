@@ -92,8 +92,9 @@ fun WelcomeIntro(onNext: () -> Unit) {
         )
         Gap(4.dp)
         Feature(R.drawable.ic_mic, "Record anywhere", "With the screen off, for as long as you need. Pause when you need to.")
-        Feature(R.drawable.ic_send, "Sent over your Wi-Fi", "Straight to Fennec, encrypted. Nothing passes through the internet.")
+        Feature(R.drawable.ic_send, "Sent over your Wi-Fi", "Straight to Fennec on your computer, encrypted. Nothing passes through the internet.")
         Feature(R.drawable.ic_file, "Transcribed in Fennec", "Its Danish models turn each recording into a document, filed under your projects.")
+        SameNetworkNote()
     }
 }
 
