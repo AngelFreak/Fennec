@@ -40,6 +40,7 @@ class FakeFennec : Dispatcher() {
 
     val recordings = mutableMapOf<String, Rec>()
     val requests = mutableListOf<String>()
+    val projects = mutableListOf("""{"id":3,"name":"Kundemøder","color":"#2F6F4E","default_template":null,"documents":4}""")
 
     /** Lose the answer to this many chunk requests after storing them. */
     @Volatile var loseChunkAnswers = 0
@@ -77,7 +78,27 @@ class FakeFennec : Dispatcher() {
         if (unpaired || request.headers["Authorization"] != "Bearer $secret") return err(401, "not_paired")
         return when {
             request.method == "GET" && path == "/v1/info" ->
-                ok("""{"name":"fennec-desktop","projects":[{"id":3,"name":"Kundemøder","color":"#2F6F4E"}],"templates":[{"id":"notat","name":"Notat"}]}""")
+                ok(
+                    """{"name":"fennec-desktop","projects":[${projects.joinToString(",")}],""" +
+                        """"templates":[{"id":"notat","name":"Notat","fields":[{"key":"sagsnr","label":"Sagsnr.","kind":"text","required":true}]}],""" +
+                        """"default_template":"notat","project_colors":["#C2410C","#1D4ED8"]}""",
+                )
+            request.method == "POST" && path == "/v1/projects" -> {
+                val v = json.parseToJsonElement(request.body!!.utf8()).jsonObject
+                val name = v["name"]!!.jsonPrimitive.content
+                if (projects.any { it.contains("\"name\":\"$name\"") }) return err(409, "exists")
+                val p = """{"id":${projects.size + 3},"name":"$name","color":${v["color"]},"default_template":${v["default_template"] ?: "null"},"documents":0}"""
+                projects += p
+                ok(p)
+            }
+            request.method == "PUT" && parts.size == 3 && parts[1] == "projects" -> {
+                val v = json.parseToJsonElement(request.body!!.utf8()).jsonObject
+                val i = projects.indexOfFirst { it.startsWith("{\"id\":${parts[2]},") }
+                if (i < 0) return err(404, "unknown_project")
+                val p = """{"id":${parts[2]},"name":${v["name"]},"color":${v["color"]},"default_template":${v["default_template"]},"documents":0}"""
+                projects[i] = p
+                ok(p)
+            }
             request.method == "PUT" && parts.size == 3 -> {
                 val meta = json.parseToJsonElement(request.body!!.utf8()).jsonObject
                 val r = recordings.getOrPut(parts[2]) { Rec(meta) }

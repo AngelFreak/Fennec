@@ -26,16 +26,30 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 sealed interface Screen {
+    /** First run: 0 what the app does, 1 the microphone (2 is pairing). */
+    data class Welcome(val step: Int) : Screen
     data object Record : Screen
     data object Recordings : Screen
     data class Detail(val id: String) : Screen
     data object Pair : Screen
     data object Settings : Screen
+    data object Projects : Screen
+    data object Templates : Screen
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val app = FennecApp.graph(application)
-    val screen = MutableStateFlow<Screen>(if (app.pairing.paired.value == null) Screen.Pair else Screen.Record)
+    val screen = MutableStateFlow<Screen>(
+        when {
+            !app.settings.settings.value.welcomed && app.pairing.paired.value == null -> Screen.Welcome(0)
+            else -> Screen.Record
+        },
+    )
+
+    val project = MutableStateFlow<ProjectDraft?>(null)
+
+    /** Pairing was opened as the last welcome step. */
+    val pairInWelcome = MutableStateFlow(false)
     val next = MutableStateFlow(NextRecording())
     val pair = MutableStateFlow<PairUi>(PairUi.Scan)
     val recordings = app.db.recordings().observeAll()
@@ -49,15 +63,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Back: Detail and Settings return to the tab below; Pair closes. */
     fun back(): Boolean {
-        when (screen.value) {
+        when (val s = screen.value) {
             is Screen.Detail -> screen.value = Screen.Recordings
-            Screen.Settings, Screen.Pair, Screen.Recordings -> {
-                if (screen.value == Screen.Pair) cancelPairing()
-                screen.value = Screen.Record
+            Screen.Projects, Screen.Templates -> screen.value = Screen.Settings
+            is Screen.Welcome -> if (s.step > 0) screen.value = Screen.Welcome(s.step - 1) else return false
+            Screen.Pair -> {
+                cancelPairing()
+                if (pairInWelcome.value) screen.value = Screen.Welcome(1) else screen.value = Screen.Record
             }
+            Screen.Settings, Screen.Recordings -> screen.value = Screen.Record
             Screen.Record -> return false
         }
         return true
+    }
+
+    /** The welcome is over (paired, or Not now): straight to recording from now on. */
+    fun finishWelcome() {
+        app.settings.update { it.copy(welcomed = true) }
+        pairInWelcome.value = false
+        cancelPairing()
+        screen.value = Screen.Record
+    }
+
+    /** From the microphone step to pairing. */
+    fun welcomePairing() {
+        pairInWelcome.value = true
+        go(Screen.Pair)
+    }
+
+    // ---- projects and templates ----
+
+    fun editProject(d: ProjectDraft?) {
+        project.value = d
+    }
+
+    fun saveProject(d: ProjectDraft) {
+        project.value = d.copy(saving = true, error = null)
+        viewModelScope.launch {
+            val error = app.saveProject(d.id, d.name, d.color, d.template)
+            project.value = if (error == null) null else d.copy(saving = false, error = error)
+        }
+    }
+
+    fun setDefaultTemplate(id: String?) = app.settings.update { it.copy(defaultTemplate = id) }
+
+    /** What the next recording is filed under, as Fennec has it now. */
+    fun recordRequest(): io.github.fennec.recorder.record.RecordRequest {
+        val n = next.value
+        val info = app.pairing.info.value
+        val project = n.project?.let { info.project(it.id) ?: it }
+        val template = templateFor(n.template, project, info, app.settings.settings.value.defaultTemplate)
+        return io.github.fennec.recorder.record.RecordRequest(n.title, project?.id, project?.name, template?.id, template?.name)
     }
 
     /** While a screen shows: read Fennec's projects and follow recordings it has. */
@@ -110,6 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     app.pairing.save(Paired(r.value.name, r.value.id, target.address, pin, r.value.deviceId, r.value.secret))
                     app.refreshInfo()
                     app.sendSoon()
+                    app.settings.update { it.copy(welcomed = true) }
                     PairUi.Paired(r.value.name)
                 }
                 is Api.Refused -> PairUi.Failed(r.message)

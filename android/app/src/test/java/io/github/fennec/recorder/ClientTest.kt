@@ -56,6 +56,24 @@ class ClientTest {
     @Test
     fun `projects and templates are read for the pickers`() = runBlocking {
         val r = FennecClient(fennec.address, fennec.pin, fennec.secret).info()
-        assertTrue("$r", r is Api.Ok && r.value.projects.single().name == "Kundemøder" && r.value.templates.single().id == "notat")
+        assertTrue("$r", r is Api.Ok)
+        val info = (r as Api.Ok).value
+        assertEquals("Kundemøder", info.projects.single().name)
+        assertEquals(4, info.projects.single().documents)
+        assertEquals("Sagsnr.", info.templates.single().fields.single().label)
+        assertEquals("notat", info.defaultTemplate)
+        assertEquals(listOf("#C2410C", "#1D4ED8"), info.projectColors)
+    }
+
+    @Test
+    fun `a project is added and changed in Fennec`() = runBlocking {
+        val client = FennecClient(fennec.address, fennec.pin, fennec.secret)
+        val made = client.createProject("Fra telefonen", "#1D4ED8", "notat")
+        assertTrue("$made", made is Api.Ok && made.value.defaultTemplate == "notat")
+        val id = (made as Api.Ok).value.id
+        val changed = client.updateProject(id, "Omdøbt", "#C2410C", null)
+        assertTrue("$changed", changed is Api.Ok && changed.value.name == "Omdøbt" && changed.value.defaultTemplate == null)
+        val again = client.createProject("Omdøbt", "#C2410C", null)
+        assertTrue("$again", again is Api.Refused && again.code == "exists")
     }
 }

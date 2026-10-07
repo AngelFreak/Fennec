@@ -53,6 +53,7 @@ class GraphTest {
 
     @Test
     fun `transcribed recordings leave the phone after the chosen days`() = runBlocking {
+        app.settings.update { it.copy(keepDays = 30) }
         val day = 86_400_000L
         val now = 100 * day
         put(Recording(id = "old", title = "a", recordedAt = 1, fileName = "old.aac", state = SyncState.DONE, deliveredAt = now - 31 * day), 10)

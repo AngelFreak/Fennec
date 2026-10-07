@@ -17,6 +17,7 @@ use super::discovery::Discovery;
 use super::http::{ReadError, Request, Response, read_request, write_response};
 use super::inbound::{self, Target, valid_uuid};
 use super::pairing::{Pairing, PairingOffer, Refusal, pairing_code};
+use super::projects;
 use super::tls::Identity;
 use super::{EventSink, PROTOCOL_VERSION, SyncEvent, desktop_name, random_bytes, secret_hash};
 use crate::config::{Paths, Settings};
@@ -341,6 +342,23 @@ fn route(shared: &Shared, req: &Request) -> Response {
             }
             response
         }
+        ("POST", ["v1", "projects"]) => {
+            let (response, changed) = projects::create(&store, &shared.templates, &req.body);
+            if changed {
+                (shared.events)(SyncEvent::ProjectsChanged);
+            }
+            response
+        }
+        ("PUT", ["v1", "projects", id]) => {
+            let Ok(id) = id.parse() else {
+                return Response::error(404, "unknown_project", "Fennec has no such project.");
+            };
+            let (response, changed) = projects::update(&store, &shared.templates, id, &req.body);
+            if changed {
+                (shared.events)(SyncEvent::ProjectsChanged);
+            }
+            response
+        }
         ("DELETE", ["v1", "devices", "self"]) => match store.remove_device(device) {
             Ok(()) => {
                 (shared.events)(SyncEvent::DevicesChanged);
@@ -361,21 +379,19 @@ fn info(shared: &Shared, store: &Store) -> Response {
     let projects: Vec<_> = store
         .projects()
         .unwrap_or_default()
-        .into_iter()
-        .map(|p| json!({ "id": p.id, "name": p.name, "color": p.color }))
+        .iter()
+        .map(projects::project_json)
         .collect();
-    let templates: Vec<_> = crate::template::load_dir(&shared.templates)
-        .into_iter()
-        .flatten()
-        .map(|t| json!({ "id": t.id, "name": t.name }))
-        .collect();
+    let default_template = shared.target.lock().unwrap().default_template.clone();
     Response::ok(json!({
         "name": shared.name,
         "id": &shared.pin[..12],
         "version": env!("CARGO_PKG_VERSION"),
         "protocol": PROTOCOL_VERSION,
         "projects": projects,
-        "templates": templates,
+        "templates": projects::templates_json(&shared.templates),
+        "default_template": default_template,
+        "project_colors": crate::store::PROJECT_COLORS,
     }))
 }
 

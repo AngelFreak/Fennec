@@ -80,6 +80,25 @@ class AppGraph(
         }
     }
 
+    /** Adds a project (no [id]) or changes one in Fennec. Null when saved, else why not. */
+    suspend fun saveProject(id: Long?, name: String, color: String, template: String?): String? {
+        val p = pairing.paired.value ?: return "Pair with Fennec first."
+        val c = client(p)
+        val r = if (id == null) c.createProject(name.trim(), color, template) else c.updateProject(id, name.trim(), color, template)
+        return when (r) {
+            is Api.Ok -> {
+                refreshInfo()
+                null
+            }
+            is Api.Refused -> {
+                if (r.status == 401) unpairedByFennec()
+                r.message
+            }
+            is Api.Unreachable ->
+                "Fennec could not be reached. Changing projects needs this phone on the same network as Fennec."
+        }
+    }
+
     suspend fun cleanUp(now: Long) {
         val days = settings.settings.value.keepDays
         if (days <= 0) return

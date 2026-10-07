@@ -44,7 +44,6 @@ import com.google.zxing.BarcodeFormat
 import com.journeyapps.barcodescanner.BarcodeView
 import com.journeyapps.barcodescanner.DefaultDecoderFactory
 import io.github.fennec.recorder.data.Recording
-import io.github.fennec.recorder.record.RecordRequest
 import io.github.fennec.recorder.record.Recorder
 import io.github.fennec.recorder.ui.DetailScreen
 import io.github.fennec.recorder.ui.FennecIcon
@@ -56,6 +55,12 @@ import io.github.fennec.recorder.ui.RecordScreen
 import io.github.fennec.recorder.ui.RecordingsScreen
 import io.github.fennec.recorder.ui.Screen
 import io.github.fennec.recorder.ui.SettingsScreen
+import io.github.fennec.recorder.ui.CameraPermissionCard
+import io.github.fennec.recorder.ui.ProjectsScreen
+import io.github.fennec.recorder.ui.TemplatesScreen
+import io.github.fennec.recorder.ui.Viewfinder
+import io.github.fennec.recorder.ui.WelcomeIntro
+import io.github.fennec.recorder.ui.WelcomeMicrophone
 import io.github.fennec.recorder.ui.theme.Fennec
 import io.github.fennec.recorder.ui.theme.FennecTheme
 import kotlinx.coroutines.delay
@@ -104,14 +109,25 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
     val next by vm.next.collectAsState()
     val pairUi by vm.pair.collectAsState()
 
+    val draft by vm.project.collectAsState()
+    val pairInWelcome by vm.pairInWelcome.collectAsState()
     val startRecording = {
-        val n = vm.next.value
-        Recorder.start(
-            context,
-            RecordRequest(n.title, n.project?.id, n.project?.name, n.template?.id, n.template?.name),
-        )
-        vm.setNext(n.copy(title = ""))
+        Recorder.start(context, vm.recordRequest())
+        vm.setNext(vm.next.value.copy(title = ""))
     }
+    // The welcome's microphone step asks with the same two permissions as Record.
+    var micGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+    }
+    var micDenied by remember { mutableStateOf(false) }
+    val askMicWelcome = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        micGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        micDenied = !micGranted
+    }
+    val recordingPermissions = buildList {
+        add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+    }.toTypedArray()
     val micAllowed = {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
@@ -147,13 +163,25 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
             job?.cancel()
         }
     }
-    BackHandler(enabled = screen != Screen.Record) { vm.back() }
+    BackHandler(enabled = screen != Screen.Record && screen != Screen.Welcome(0)) { vm.back() }
 
     Column(Modifier.fillMaxSize().background(c.surface).statusBarsPadding()) {
         Box(Modifier.weight(1f)) {
             when (val s = screen) {
+                is Screen.Welcome -> when (s.step) {
+                    0 -> WelcomeIntro(onNext = { vm.go(Screen.Welcome(1)) })
+                    else -> WelcomeMicrophone(
+                        micGranted, micDenied,
+                        onAllow = { askMicWelcome.launch(recordingPermissions) },
+                        onNext = vm::welcomePairing,
+                    )
+                }
                 Screen.Record -> RecordScreen(
-                    status, next, info, paired?.name, contact.reachable.takeIf { paired != null },
+                    status,
+                    // Fennec may have renamed or recoloured the chosen project.
+                    next.copy(project = next.project?.let { info.project(it.id) ?: it }),
+                    info, paired?.name, contact.reachable.takeIf { paired != null }, settings.defaultTemplate,
+                    onManageProjects = { vm.go(Screen.Projects) },
                     onNext = vm::setNext, onRecord = record,
                     onPause = { Recorder.pause(context) }, onResume = { Recorder.resume(context) },
                     onStop = { Recorder.stop(context) },
@@ -186,13 +214,28 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                     onConfirm = vm::startPairing,
                     onRetry = { vm.pair.value = PairUi.Scan },
                     onClose = {
-                        vm.cancelPairing()
-                        vm.go(Screen.Record)
+                        if (pairInWelcome || !settings.welcomed) {
+                            vm.finishWelcome()
+                        } else {
+                            vm.cancelPairing()
+                            vm.go(Screen.Record)
+                        }
                     },
+                    welcome = pairInWelcome,
                 )
                 Screen.Settings -> SettingsScreen(
-                    paired, settings, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
+                    paired, settings, info, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
                     onUnpair = vm::unpair, onChange = { s2 -> vm.app.settings.update { s2 } },
+                    onProjects = { vm.go(Screen.Projects) }, onTemplates = { vm.go(Screen.Templates) },
+                )
+                Screen.Projects -> ProjectsScreen(
+                    info, paired != null, contact.reachable, draft,
+                    onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
+                    onEdit = vm::editProject, onSave = vm::saveProject,
+                )
+                Screen.Templates -> TemplatesScreen(
+                    info, paired != null, settings.defaultTemplate,
+                    onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) }, onPick = vm::setDefaultTemplate,
                 )
             }
         }
@@ -200,7 +243,9 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
             HorizontalDivider(color = c.divider)
             NavigationBar(containerColor = c.chrome, modifier = Modifier.navigationBarsPadding(), windowInsets = androidx.compose.foundation.layout.WindowInsets(0)) {
                 val colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = c.accentText, selectedTextColor = c.accentText, indicatorColor = c.accentSoft,
+                    selectedIconColor = c.accentText, selectedTextColor = c.accentText,
+                    // No pill behind the icon: the colour says which tab is open.
+                    indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                     unselectedIconColor = c.muted, unselectedTextColor = c.muted,
                 )
                 NavigationBarItem(
@@ -229,9 +274,7 @@ private fun Camera(onCode: (String) -> Unit) {
     }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = it }
     if (!allowed) {
-        TextButton({ ask.launch(Manifest.permission.CAMERA) }) {
-            Text("Allow the camera to scan the code", color = androidx.compose.ui.graphics.Color(0xFFF59A6B))
-        }
+        CameraPermissionCard { ask.launch(Manifest.permission.CAMERA) }
         return
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -260,7 +303,7 @@ private fun Camera(onCode: (String) -> Unit) {
             view.pause()
         }
     }
-    AndroidView({ view }, Modifier.fillMaxSize())
+    Viewfinder { AndroidView({ view }, Modifier.fillMaxSize()) }
 }
 
 private class Player(val state: Playback, val toggle: () -> Unit)

@@ -46,6 +46,7 @@ pub struct PhoneLink {
     events: async_channel::Sender<SyncEvent>,
     on_changed: Handler<()>,
     on_received: Handler<(DocumentId, PathBuf)>,
+    on_projects_changed: Handler<()>,
 }
 
 impl PhoneLink {
@@ -63,6 +64,7 @@ impl PhoneLink {
             events: tx,
             on_changed: RefCell::default(),
             on_received: RefCell::default(),
+            on_projects_changed: RefCell::default(),
         });
         let weak = Rc::downgrade(&link);
         glib::spawn_future_local(async move {
@@ -82,6 +84,11 @@ impl PhoneLink {
     /// A recording arrived and has a document.
     pub fn connect_received(&self, f: impl Fn((DocumentId, PathBuf)) + 'static) {
         *self.on_received.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// A phone added or changed a project.
+    pub fn connect_projects_changed(&self, f: impl Fn(()) + 'static) {
+        *self.on_projects_changed.borrow_mut() = Some(Rc::new(f));
     }
 
     pub fn set_parent(&self, w: &impl IsA<gtk::Widget>) {
@@ -224,6 +231,12 @@ impl PhoneLink {
                 self.notify_changed();
             }
             SyncEvent::DevicesChanged => self.notify_changed(),
+            SyncEvent::ProjectsChanged => {
+                if let Some(f) = self.on_projects_changed.borrow().clone() {
+                    f(());
+                }
+                self.notify_changed();
+            }
             SyncEvent::Received { document_id, path } => {
                 if let Some(f) = self.on_received.borrow().clone() {
                     f((document_id, path));

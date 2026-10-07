@@ -7,22 +7,32 @@ import kotlinx.coroutines.flow.StateFlow
 data class AppSettings(
     /** Send only on networks without a data limit (home Wi-Fi). */
     val unmeteredOnly: Boolean = true,
-    /** 48 kHz instead of 16 kHz, for people who want the audio itself. */
-    val highQuality: Boolean = false,
+    /** 48 kHz instead of 16 kHz, for keeping the audio itself. */
+    val highQuality: Boolean = true,
     /** Delete a recording from the phone this many days after Fennec has
      *  transcribed it; 0 keeps it. */
-    val keepDays: Int = 30,
+    val keepDays: Int = 0,
+    /** Template for new recordings when their project has no default;
+     *  null leaves it to Fennec. */
+    val defaultTemplate: String? = null,
+    /** The welcome steps have been seen. */
+    val welcomed: Boolean = false,
 )
 
 class SettingsStore(private val prefs: SharedPreferences) {
     private val _settings = MutableStateFlow(read())
     val settings: StateFlow<AppSettings> = _settings
 
-    private fun read() = AppSettings(
-        unmeteredOnly = prefs.getBoolean("unmetered_only", true),
-        highQuality = prefs.getBoolean("high_quality", false),
-        keepDays = prefs.getInt("keep_days", 30),
-    )
+    private fun read(): AppSettings {
+        val d = AppSettings()
+        return AppSettings(
+            unmeteredOnly = prefs.getBoolean("unmetered_only", d.unmeteredOnly),
+            highQuality = prefs.getBoolean("high_quality", d.highQuality),
+            keepDays = prefs.getInt("keep_days", d.keepDays),
+            defaultTemplate = prefs.getString("default_template", null),
+            welcomed = prefs.getBoolean("welcomed", d.welcomed),
+        )
+    }
 
     fun update(f: (AppSettings) -> AppSettings) {
         val s = f(_settings.value)
@@ -30,6 +40,8 @@ class SettingsStore(private val prefs: SharedPreferences) {
             .putBoolean("unmetered_only", s.unmeteredOnly)
             .putBoolean("high_quality", s.highQuality)
             .putInt("keep_days", s.keepDays)
+            .putString("default_template", s.defaultTemplate)
+            .putBoolean("welcomed", s.welcomed)
             .apply()
         _settings.value = s
     }

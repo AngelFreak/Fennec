@@ -127,7 +127,18 @@ fn results(store: &Store, root: &Path) -> serde_json::Value {
             "paragraphs": paragraphs,
         }));
     }
-    serde_json::json!({ "recordings": out, "devices": store.devices().unwrap().len(), "samples_heard": HEARD.load(Ordering::Relaxed) })
+    let projects: Vec<_> = store
+        .projects()
+        .unwrap()
+        .into_iter()
+        .map(|p| serde_json::json!({ "id": p.id, "name": p.name, "color": p.color, "default_template": p.default_template }))
+        .collect();
+    serde_json::json!({
+        "recordings": out,
+        "projects": projects,
+        "devices": store.devices().unwrap().len(),
+        "samples_heard": HEARD.load(Ordering::Relaxed),
+    })
 }
 
 fn main() {

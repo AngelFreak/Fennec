@@ -20,6 +20,15 @@ The design and the phone protocol are in
 
 A quick settings tile and a home screen widget start a recording in one tap.
 
+Under **Settings** you can add projects and change their name, colour and
+default template (the changes go to Fennec and show in its sidebar; deleting
+stays on the computer), and choose the template new recordings get when their
+project has none. A recording's template is the one picked for it, else its
+project's default, else this phone's default, else Fennec's.
+
+New installs record in high quality (48 kHz) and keep recordings after
+Fennec has transcribed them; both can be changed in Settings.
+
 ## Building
 
 ```bash

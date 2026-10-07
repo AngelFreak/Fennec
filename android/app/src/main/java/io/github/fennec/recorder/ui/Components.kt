@@ -1,7 +1,13 @@
 package io.github.fennec.recorder.ui
 
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,10 +35,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -48,6 +58,32 @@ import io.github.fennec.recorder.data.SyncState
 import io.github.fennec.recorder.ui.theme.Fennec
 import io.github.fennec.recorder.ui.theme.PlexMono
 import java.util.Locale
+
+/**
+ * Fennec's logo as the desktop draws it (`logo()` in src/ui/window.rs): an
+ * accent square with rounded corners and a white mark, fox ears that read
+ * as an M.
+ */
+@Composable
+fun FennecLogo(size: Dp = 28.dp) {
+    val accent = Fennec.colors.accent
+    Canvas(Modifier.size(size).semantics { contentDescription = "Fennec" }) {
+        val u = this.size.width / 26f
+        drawRoundRect(accent, cornerRadius = CornerRadius(7 * u, 7 * u))
+        // M4 20 L7 4 L12 12 L17 4 L20 20 Z in a 24-unit box drawn 16 units wide.
+        val s = 16f / 24f * u
+        val o = 5 * u
+        val mark = Path().apply {
+            moveTo(o + 4 * s, o + 20 * s)
+            lineTo(o + 7 * s, o + 4 * s)
+            lineTo(o + 12 * s, o + 12 * s)
+            lineTo(o + 17 * s, o + 4 * s)
+            lineTo(o + 20 * s, o + 20 * s)
+            close()
+        }
+        drawPath(mark, Color.White)
+    }
+}
 
 @Composable
 fun FennecIcon(@DrawableRes id: Int, tint: Color, size: Dp = 20.dp, description: String? = null) {
@@ -203,34 +239,70 @@ fun LevelBars(levels: List<Float>, active: Boolean, count: Int = 28, modifier: M
     }
 }
 
-/** The big round button: a microphone to start, a square to stop. */
+/**
+ * The big round button: one solid circle, a microphone to start and a
+ * square to stop. While recording a soft halo breathes around it.
+ */
 @Composable
 fun RecordButton(recording: Boolean, onClick: () -> Unit) {
     val c = Fennec.colors
-    Box(
-        Modifier.size(92.dp).clip(CircleShape).border(2.dp, c.accent, CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = if (recording) "Stop and save" else "Start recording" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(70.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
+    val halo by rememberInfiniteTransition(label = "halo").animateFloat(
+        initialValue = 0.86f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        label = "halo",
+    )
+    Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
+        if (recording) {
+            Box(Modifier.size(104.dp).scale(halo).clip(CircleShape).background(c.accent.copy(alpha = 0.16f)))
+        }
+        Box(
+            Modifier.size(84.dp).clip(CircleShape).background(c.accent)
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics { contentDescription = if (recording) "Stop and save" else "Start recording" },
+            contentAlignment = Alignment.Center,
+        ) {
             if (recording) {
-                Box(Modifier.size(24.dp).clip(RoundedCornerShape(5.dp)).background(Color.White))
+                Box(Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Color.White))
             } else {
-                FennecIcon(R.drawable.ic_mic, Color.White, 28.dp)
+                FennecIcon(R.drawable.ic_mic, Color.White, 32.dp)
             }
         }
     }
 }
 
+/** A secondary round control beside the record button: filled, no outline. */
 @Composable
 fun RoundButton(@DrawableRes icon: Int, description: String, onClick: () -> Unit) {
     val c = Fennec.colors
     Box(
-        Modifier.size(60.dp).clip(CircleShape).border(1.dp, c.border, CircleShape).background(c.surface)
+        Modifier.size(64.dp).clip(CircleShape).background(c.chip)
             .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
-    ) { FennecIcon(icon, c.text, 22.dp) }
+    ) { FennecIcon(icon, c.text, 24.dp) }
+}
+
+/** An icon on a soft accent disc, for headings of welcome steps and empty states. */
+@Composable
+fun IconDisc(@DrawableRes icon: Int, size: Dp = 56.dp) {
+    val c = Fennec.colors
+    Box(Modifier.size(size).clip(CircleShape).background(c.accentSoft), contentAlignment = Alignment.Center) {
+        FennecIcon(icon, c.accentText, size * 0.45f)
+    }
+}
+
+/** Where in a series of steps one is: the current step is a longer pill. */
+@Composable
+fun StepDots(count: Int, current: Int) {
+    val c = Fennec.colors
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(count) { i ->
+            Box(
+                Modifier.height(6.dp).width(if (i == current) 22.dp else 6.dp).clip(RoundedCornerShape(3.dp))
+                    .background(if (i == current) c.accent else c.dash),
+            )
+        }
+    }
 }
 
 @Composable

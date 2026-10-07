@@ -346,7 +346,7 @@ fn info_lists_the_projects_a_recording_can_go_to() {
     assert_eq!(info["protocol"], 1);
     assert_eq!(
         info["projects"][0],
-        json!({ "id": p, "name": "Kundemøder", "color": "#2F6F4E" })
+        json!({ "id": p, "name": "Kundemøder", "color": "#2F6F4E", "default_template": null, "documents": 0 })
     );
     assert_eq!(info["id"].as_str().unwrap(), &desktop.receiver().pin()[..12]);
 }
@@ -542,4 +542,86 @@ fn phones_can_find_fennec_by_name_on_the_network() {
     let (port, version) = found.expect("Fennec was not announced over mDNS");
     assert_eq!(port, receiver.local_addr().port());
     assert_eq!(version.as_deref(), Some("1"));
+}
+
+#[test]
+fn a_phone_adds_projects_and_changes_their_name_colour_and_default_template() {
+    let desktop = Desktop::start(Duration::from_secs(5));
+    fennec::template::install_defaults(&desktop.paths.templates()).unwrap();
+    let phone = desktop.paired_phone();
+
+    let (_, info) = phone.get("/v1/info");
+    let interview = info["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "moedereferat")
+        .expect("the built-in templates are listed");
+    assert!(
+        !interview["fields"].as_array().unwrap().is_empty(),
+        "with their fields"
+    );
+    assert_eq!(info["project_colors"].as_array().unwrap().len(), 5);
+    assert_eq!(info["default_template"], "notat");
+
+    let post = |v: Value| {
+        phone.send(
+            reqwest::Method::POST,
+            "/v1/projects",
+            Some(serde_json::to_vec(&v).unwrap()),
+        )
+    };
+    let (status, p) = post(json!({ "name": "  Fra telefonen ", "default_template": "moedereferat" }));
+    assert_eq!(status, 200, "{p}");
+    assert_eq!(p["name"], "Fra telefonen");
+    assert_eq!(p["color"], "#C2410C", "the next colour in the sidebar's order");
+    assert_eq!(p["default_template"], "moedereferat");
+    desktop.wait_for("projects changed", |e| *e == SyncEvent::ProjectsChanged);
+
+    assert_eq!(post(json!({ "name": "fra TELEFONEN" })).1["error"], "exists");
+    assert_eq!(post(json!({ "name": "   " })).1["error"], "bad_name");
+    assert_eq!(
+        post(json!({ "name": "X", "color": "red" })).1["error"],
+        "bad_color"
+    );
+    assert_eq!(
+        post(json!({ "name": "X", "default_template": "nope" })).1["error"],
+        "bad_template"
+    );
+
+    let id = p["id"].as_i64().unwrap();
+    let (status, p) = phone.put_json(
+        &format!("/v1/projects/{id}"),
+        json!({ "name": "Kundemøder", "color": "#0F766E" }),
+    );
+    assert_eq!(status, 200, "{p}");
+    assert_eq!(p["default_template"], "moedereferat", "fields left out stay");
+    let store = desktop.store();
+    let saved = store
+        .projects()
+        .unwrap()
+        .into_iter()
+        .find(|x| x.id == id)
+        .unwrap();
+    assert_eq!(
+        (saved.name.as_str(), saved.color.as_str()),
+        ("Kundemøder", "#0F766E")
+    );
+
+    // A recording into it without a template of its own gets the project's.
+    let data = audio(1000);
+    phone.announce(ID, &data, json!({ "project_id": id }));
+    phone.upload(ID, &data, 0);
+    let doc = phone.complete(ID).1["document_id"].as_i64().unwrap();
+    assert_eq!(
+        store.document(doc).unwrap().template_id.as_deref(),
+        Some("moedereferat")
+    );
+
+    let (_, p) = phone.put_json(&format!("/v1/projects/{id}"), json!({ "default_template": null }));
+    assert!(p["default_template"].is_null(), "null clears it");
+    assert_eq!(
+        phone.put_json("/v1/projects/9999", json!({ "name": "x" })).1["error"],
+        "unknown_project"
+    );
 }

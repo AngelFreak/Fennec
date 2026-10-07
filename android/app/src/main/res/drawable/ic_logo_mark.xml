@@ -1,0 +1,5 @@
+<!-- Fennec's mark (src/ui/window.rs logo()): fox ears that read as an M. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M4,20L7,4L12,12L17,4L20,20Z"/>
+</vector>

@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.security.KeyStore
@@ -66,14 +67,39 @@ class KeystoreCipher : SecretCipher {
 }
 
 @Serializable
-data class Project(val id: Long, val name: String, val color: String = "#9AA1AE")
+data class Project(
+    val id: Long,
+    val name: String,
+    val color: String = "#9AA1AE",
+    /** The template new documents in it get, unless one is chosen. */
+    @SerialName("default_template") val defaultTemplate: String? = null,
+    val documents: Int = 0,
+)
+
+/** A header field of a template (filled in on the computer). */
+@Serializable
+data class TemplateField(val key: String, val label: String, val kind: String = "text", val required: Boolean = false)
 
 @Serializable
-data class Template(val id: String, val name: String)
+data class Template(val id: String, val name: String, val fields: List<TemplateField> = emptyList())
 
 /** What Fennec offers to file recordings under, as last read from it. */
 @Serializable
-data class DesktopInfo(val projects: List<Project> = emptyList(), val templates: List<Template> = emptyList())
+data class DesktopInfo(
+    val projects: List<Project> = emptyList(),
+    val templates: List<Template> = emptyList(),
+    /** Fennec's own default template. */
+    @SerialName("default_template") val defaultTemplate: String? = null,
+    /** Colours a project can have, as Fennec's sidebar offers them. */
+    @SerialName("project_colors") val projectColors: List<String> = DEFAULT_COLORS,
+) {
+    fun template(id: String?): Template? = id?.let { t -> templates.firstOrNull { it.id == t } }
+    fun project(id: Long?): Project? = id?.let { p -> projects.firstOrNull { it.id == p } }
+
+    companion object {
+        val DEFAULT_COLORS = listOf("#C2410C", "#1D4ED8", "#0F766E", "#6B21A8", "#9AA1AE")
+    }
+}
 
 class PairingStore(private val prefs: SharedPreferences, private val cipher: SecretCipher) {
     private val json = Json { ignoreUnknownKeys = true }

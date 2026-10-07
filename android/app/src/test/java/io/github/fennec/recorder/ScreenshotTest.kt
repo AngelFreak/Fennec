@@ -17,6 +17,16 @@ import io.github.fennec.recorder.data.Project
 import io.github.fennec.recorder.data.Recording
 import io.github.fennec.recorder.data.SyncState
 import io.github.fennec.recorder.data.Template
+import io.github.fennec.recorder.data.TemplateField
+import io.github.fennec.recorder.ui.CameraPermissionCard
+import io.github.fennec.recorder.ui.ProjectDraft
+import io.github.fennec.recorder.ui.ProjectFields
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
+import io.github.fennec.recorder.ui.ProjectsScreen
+import io.github.fennec.recorder.ui.TemplatesScreen
+import io.github.fennec.recorder.ui.WelcomeIntro
+import io.github.fennec.recorder.ui.WelcomeMicrophone
 import io.github.fennec.recorder.net.PairingTarget
 import io.github.fennec.recorder.record.Recorder
 import io.github.fennec.recorder.ui.DetailScreen
@@ -59,8 +69,17 @@ class ScreenshotTest(private val dark: Boolean) {
     }
 
     private val info = DesktopInfo(
-        listOf(Project(3, "Kundemøder", "#2F6F4E"), Project(4, "Intern", "#4A6FA5")),
-        listOf(Template("notat", "Notat"), Template("interview", "Interview")),
+        listOf(
+            Project(3, "Kundemøder", "#0F766E", "moedereferat", 12),
+            Project(4, "Intern", "#1D4ED8", null, 3),
+            Project(5, "Retssager", "#6B21A8", "afhoeringsrapport", 1),
+        ),
+        listOf(
+            Template("notat", "Notat", listOf(TemplateField("sagsnr", "Sagsnr."), TemplateField("dato", "Dato"), TemplateField("udarbejdet_af", "Udarbejdet af"), TemplateField("emne", "Emne"))),
+            Template("moedereferat", "Mødereferat", listOf(TemplateField("dato", "Dato"), TemplateField("deltagere", "Deltagere"))),
+            Template("afhoeringsrapport", "Afhøringsrapport", listOf(TemplateField("sagsnr", "Sagsnr."), TemplateField("afhoert", "Afhørt"))),
+        ),
+        defaultTemplate = "notat",
     )
 
     /** Today at the given time, so day headings and times stay the same. */
@@ -99,8 +118,8 @@ class ScreenshotTest(private val dark: Boolean) {
     @Test
     fun record() = shot("record") {
         RecordScreen(
-            Recorder.Status.Idle, NextRecording("Møde med Jensen", info.projects[0], info.templates[0]), info,
-            "fennec-desktop", true, {}, {}, {}, {}, {}, {}, {},
+            Recorder.Status.Idle, NextRecording("Møde med Jensen", info.projects[0]), info,
+            "fennec-desktop", true, null, {}, {}, {}, {}, {}, {}, {}, {},
         )
     }
 
@@ -109,7 +128,7 @@ class ScreenshotTest(private val dark: Boolean) {
         val levels = listOf(.05f, .2f, .5f, .3f, .7f, .9f, .4f, .15f, .6f, .95f, .5f, .3f, .1f, .35f, .8f, .55f, .25f, .08f, .4f, .65f, .2f, .05f)
         RecordScreen(
             Recorder.Status.Recording("r", "Møde med Jensen", "Kundemøder", "Mødereferat", 768_000, false, 4_600_000, levels),
-            NextRecording(), info, "fennec-desktop", true, {}, {}, {}, {}, {}, {}, {},
+            NextRecording(), info, "fennec-desktop", true, null, {}, {}, {}, {}, {}, {}, {}, {},
         )
     }
 
@@ -145,8 +164,40 @@ class ScreenshotTest(private val dark: Boolean) {
     @Test
     fun settings() = shot("settings") {
         SettingsScreen(
-            Paired("fennec-desktop", "abc", "192.168.1.20:47130", "pin", 7, "s"), AppSettings(), "0.1.0",
-            {}, {}, {}, {},
+            Paired("fennec-desktop", "abc", "192.168.1.20:47130", "pin", 7, "s"), AppSettings(), info, "0.1.0",
+            {}, {}, {}, {}, {}, {},
         )
+    }
+
+    @Test
+    fun welcomeIntro() = shot("welcome-intro") { WelcomeIntro {} }
+
+    @Test
+    fun welcomeMicrophone() = shot("welcome-microphone") { WelcomeMicrophone(false, false, {}, {}) }
+
+    @Test
+    fun welcomePair() = shot("welcome-pair") {
+        PairScreen(PairUi.Scan, camera = { CameraPermissionCard {} }, {}, { _, _ -> }, {}, {}, {}, welcome = true)
+    }
+
+    @Test
+    fun projects() = shot("projects") {
+        ProjectsScreen(info, paired = true, reachable = true, draft = null, {}, {}, {}, {})
+    }
+
+    @Test
+    fun projectEditor() = shot("project-editor") {
+        // The dialog's fields; Robolectric cannot capture a dialog window.
+        androidx.compose.foundation.layout.Column(Modifier.padding(24.dp)) {
+            Text("New project", style = androidx.compose.material3.MaterialTheme.typography.titleLarge)
+            Box(Modifier.padding(top = 16.dp)) {
+                ProjectFields(ProjectDraft(null, "Fra telefonen", "#1D4ED8", "moedereferat"), info) {}
+            }
+        }
+    }
+
+    @Test
+    fun templates() = shot("templates") {
+        TemplatesScreen(info, paired = true, phoneDefault = "moedereferat", {}, {}, {})
     }
 }

@@ -58,6 +58,8 @@ fun RecordScreen(
     info: DesktopInfo,
     pairedName: String?,
     reachable: Boolean?,
+    phoneDefault: String?,
+    onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
     onRecord: () -> Unit,
     onPause: () -> Unit,
@@ -69,8 +71,8 @@ fun RecordScreen(
     when (status) {
         is Recorder.Status.Recording -> RecordingNow(status, onPause, onResume, onStop)
         else -> ReadyToRecord(
-            next, info, pairedName, reachable, (status as? Recorder.Status.Failed)?.message,
-            onNext, onRecord, onPair, onSettings,
+            next, info, pairedName, reachable, (status as? Recorder.Status.Failed)?.message, phoneDefault,
+            onManageProjects, onNext, onRecord, onPair, onSettings,
         )
     }
 }
@@ -82,6 +84,8 @@ private fun ReadyToRecord(
     pairedName: String?,
     reachable: Boolean?,
     error: String?,
+    phoneDefault: String?,
+    onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
     onRecord: () -> Unit,
     onPair: () -> Unit,
@@ -90,7 +94,7 @@ private fun ReadyToRecord(
     val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
         Header("Fennec", navigation = {
-            Box(Modifier.padding(start = 12.dp, end = 10.dp)) { FennecIcon(R.drawable.ic_fennec, androidx.compose.ui.graphics.Color.Unspecified, 28.dp) }
+            Box(Modifier.padding(start = 12.dp, end = 10.dp)) { FennecLogo(28.dp) }
         }) { HeaderIcon(R.drawable.ic_settings, "Settings", onSettings) }
         Column(Modifier.weight(1f).padding(horizontal = 20.dp, vertical = 16.dp)) {
             SectionTitle("New recording")
@@ -117,12 +121,13 @@ private fun ReadyToRecord(
                     next.project?.name ?: "Unsorted",
                     next.project?.color,
                     listOf<Pair<String, Project?>>("Unsorted" to null) + info.projects.map { it.name to it },
+                    manage = "Manage projects" to onManageProjects,
                 ) { onNext(next.copy(project = it)) }
                 Picker(
                     "Template",
-                    next.template?.name ?: "Fennec's default",
+                    next.template?.name ?: defaultTemplateLabel(next.project, info, phoneDefault),
                     null,
-                    listOf<Pair<String, Template?>>("Fennec's default" to null) + info.templates.map { it.name to it },
+                    listOf<Pair<String, Template?>>("Default" to null) + info.templates.map { it.name to it },
                 ) { onNext(next.copy(template = it)) }
             }
             Column(
@@ -155,6 +160,7 @@ private fun <T> Picker(
     shown: String,
     color: String?,
     options: List<Pair<String, T>>,
+    manage: Pair<String, () -> Unit>? = null,
     onPick: (T) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -163,7 +169,7 @@ private fun <T> Picker(
         BoxRow(label, onClick = { open = true }) {
             if (color != null) {
                 Dot(projectColor(color))
-                Text(" ", fontSize = 4.sp)
+                androidx.compose.foundation.layout.Spacer(Modifier.widthIn(min = 8.dp))
             }
             Text(shown, style = MaterialTheme.typography.bodyMedium, color = c.text)
         }
@@ -172,6 +178,13 @@ private fun <T> Picker(
                 DropdownMenuItem(text = { Text(name) }, onClick = {
                     open = false
                     onPick(value)
+                })
+            }
+            manage?.let { (name, go) ->
+                HorizontalDivider(color = c.divider)
+                DropdownMenuItem(text = { Text(name, color = c.accentText) }, onClick = {
+                    open = false
+                    go()
                 })
             }
         }
@@ -234,13 +247,13 @@ private fun RecordingNow(
                     RoundButton(R.drawable.ic_pause, "Pause", onPause)
                 }
                 RecordButton(recording = true, onClick = onStop)
-                Box(Modifier.widthIn(min = 60.dp))
+                Box(Modifier.widthIn(min = 64.dp))
             }
             Gap(8.dp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)) {
-                Text(if (s.paused) "Resume" else "Pause", style = MaterialTheme.typography.bodySmall, modifier = Modifier.widthIn(min = 60.dp), textAlign = TextAlign.Center)
-                Text("Stop", style = MaterialTheme.typography.labelLarge, modifier = Modifier.widthIn(min = 92.dp), textAlign = TextAlign.Center)
-                Box(Modifier.widthIn(min = 60.dp))
+                Text(if (s.paused) "Resume" else "Pause", style = MaterialTheme.typography.bodySmall, modifier = Modifier.widthIn(min = 64.dp), textAlign = TextAlign.Center)
+                Text("Stop", style = MaterialTheme.typography.labelLarge, modifier = Modifier.widthIn(min = 104.dp), textAlign = TextAlign.Center)
+                Box(Modifier.widthIn(min = 64.dp))
             }
         }
     }

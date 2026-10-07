@@ -152,12 +152,19 @@ class FennecClient(
             )
         }
 
-    suspend fun info(): Api<DesktopInfo> = call("GET", "/v1/info").map {
-        DesktopInfo(
-            projects = it["projects"]?.jsonArray?.map { p -> json.decodeFromJsonElement<Project>(p) }.orEmpty(),
-            templates = it["templates"]?.jsonArray?.map { t -> json.decodeFromJsonElement<Template>(t) }.orEmpty(),
-        )
-    }
+    suspend fun info(): Api<DesktopInfo> = call("GET", "/v1/info").map { json.decodeFromJsonElement<DesktopInfo>(it) }
+
+    suspend fun createProject(name: String, color: String, defaultTemplate: String?): Api<Project> =
+        call("POST", "/v1/projects", buildJsonObject {
+            put("name", name); put("color", color)
+            defaultTemplate?.let { put("default_template", it) }
+        }.body()).map { json.decodeFromJsonElement<Project>(it) }
+
+    /** Changes name, colour and default template (null: Fennec's default). */
+    suspend fun updateProject(id: Long, name: String, color: String, defaultTemplate: String?): Api<Project> =
+        call("PUT", "/v1/projects/$id", buildJsonObject {
+            put("name", name); put("color", color); put("default_template", defaultTemplate)
+        }.body()).map { json.decodeFromJsonElement<Project>(it) }
 
     suspend fun announce(a: Announcement): Api<RemoteStatus> =
         call("PUT", "/v1/recordings/${a.id}", buildJsonObject {

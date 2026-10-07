@@ -1655,6 +1655,11 @@ fn phone_checks(root: &std::path::Path) {
                 .and_then(|r| r.json())
                 .unwrap_or_default()
         };
+        call(
+            reqwest::Method::POST,
+            "/v1/projects",
+            serde_json::to_vec(&serde_json::json!({ "name": "Fra telefonen" })).unwrap(),
+        );
         let meta = serde_json::json!({
             "title": "Telefonmøde", "recorded_at": 1_791_000_000_000_i64, "duration_ms": 5000,
             "ext": "wav", "size": wav.len(), "sha256": sum,
@@ -1708,6 +1713,12 @@ fn phone_checks(root: &std::path::Path) {
     pump_until(Duration::from_secs(60), || phone.is_finished());
     let run = phone.join().unwrap();
     check("the phone is paired after Allow", run.paired);
+    check(
+        "a project added on the phone appears in the sidebar",
+        pump_until(Duration::from_secs(5), || {
+            w.sidebar.project_names().iter().any(|n| n == "Fra telefonen")
+        }),
+    );
     check(
         "the paired phone is listed",
         ui::texts_in(&w.settings.root).iter().any(|t| t == "Pixel 8"),

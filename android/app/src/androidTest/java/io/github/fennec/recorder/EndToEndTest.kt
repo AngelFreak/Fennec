@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -94,12 +95,40 @@ class EndToEndTest {
             shot("paired")
             compose.onNodeWithText("Start recording").performClick()
 
-            // File the first one under Fennec's project.
-            waitForText("Fennec")
+            // This phone's default template for recordings without a project default.
+            waitForText("NEW RECORDING")
+            compose.onNodeWithContentDescription("Settings").performClick()
+            compose.onNodeWithText("Templates").performClick()
+            waitForText("Afhøringsrapport", 20)
+            compose.onNodeWithTag("template-Afhøringsrapport").performClick()
+            shot("templates")
+            compose.onNodeWithContentDescription("Back").performClick()
+
+            // A project made on the phone, with its own default template.
+            compose.onNodeWithText("Projects").performClick()
+            compose.onNodeWithText("New project").performClick()
+            compose.onNodeWithTag("project-name").performTextInput("Fra telefonen")
+            compose.onNodeWithText("Fennec's default").performClick()
+            compose.onAllNodesWithText("Mødereferat").onLast().performClick()
+            shot("project-editor")
+            compose.onNodeWithText("Add").performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag("project-Fra telefonen"), 20_000)
+            shot("projects")
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose.onNodeWithContentDescription("Back").performClick()
+
+            // Into the new project: its default template applies.
+            waitForText("NEW RECORDING")
             compose.onNodeWithText("Unsorted").performClick()
-            waitForText("Kundemøder", 20)
-            compose.onAllNodesWithText("Kundemøder")[0].performClick()
+            compose.onAllNodesWithText("Fra telefonen").onLast().performClick()
+            waitForText("Mødereferat · project default")
+            shot("record")
             record("E2E møde", seconds = 6)
+
+            // Unsorted: this phone's default applies.
+            compose.onNodeWithText("Fra telefonen").performClick()
+            compose.onAllNodesWithText("Unsorted").onLast().performClick()
+            waitForText("Afhøringsrapport · default")
             record("E2E med pause", seconds = 4, pauseFor = 3)
 
             compose.onNodeWithText("Recordings").performClick()

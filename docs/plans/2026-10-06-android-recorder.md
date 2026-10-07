@@ -124,7 +124,9 @@ and may be up to 4 MB.
 | Method and path | Purpose |
 |---|---|
 | `POST /v1/pair` | Pair (above). 403 with `no_offer`, `busy`, `wrong_token`, `locked`, `denied` or `timeout` |
-| `GET /v1/info` | `{name, id, version, protocol: 1, projects: [{id, name, color}], templates: [{id, name}]}` |
+| `GET /v1/info` | `{name, id, version, protocol: 1, projects: [{id, name, color, default_template, documents}], templates: [{id, name, fields: [{key, label, kind, required}]}], default_template, project_colors}` |
+| `POST /v1/projects` | Add a project: `{name, color?, default_template?}`. 409 `exists` for a name Fennec already has (any case), 400 `bad_name`, `bad_color` (`#RRGGBB`), `bad_template` |
+| `PUT /v1/projects/{id}` | Change `name`, `color` and/or `default_template` (`null` clears it); fields left out stay. Deleting stays on the computer |
 | `PUT /v1/recordings/{id}` | Announce: `{title, recorded_at (ms), duration_ms, project_id?, template_id?, ext? (default m4a), size, sha256 (hex)}`. Repeating it is harmless; answers the recording's status (below), so `received` says where to resume. A different size or checksum under the same id while still arriving starts over |
 | `PUT /v1/recordings/{id}/audio?offset=N` | One chunk (the phone sends 1 MB). If `N` is not where the stored part ends: 409 `offset` with `received` |
 | `POST /v1/recordings/{id}/complete` | Fennec checks size and SHA-256, makes the document and queues it. 409 `incomplete` (with `received`), 422 `checksum` (the part is deleted; `received` is 0, send again). Repeating it returns the same document |
@@ -175,10 +177,12 @@ src/
   `devices(id, name, secret_hash, paired_at, last_seen_at)` and
   `inbound_recordings(uuid PRIMARY KEY, device_id, title, recorded_at,
   duration_ms, project_id NULL, template_id NULL, ext, size, sha256,
-  received, state, document_id NULL, error NULL, updated_at)`. Phone
-  documents keep `source = 'file'`: a new value would mean rebuilding the
-  `documents` table to change its CHECK constraint, and the inbound row
-  already records where a document came from. The document is dated by
+  received, state, document_id NULL, error NULL, updated_at)`. A recording
+  without a template of its own gets its project's default template, else
+  Fennec's default, as in dictation. Phone documents keep
+  `source = 'file'`: a new value would mean rebuilding the `documents`
+  table to change its CHECK constraint, and the inbound row already records
+  where a document came from. The document is dated by
   `recorded_at`, not the arrival time.
 - **Migrations** now run inside one write-locked transaction, and opening
   a store retries when SQLite answers "busy" at once: the receiver, the

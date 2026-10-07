@@ -290,7 +290,7 @@ class RecordingService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, FennecApp.CHANNEL_RECORDING)
-            .setSmallIcon(R.drawable.ic_mic)
+            .setSmallIcon(R.drawable.ic_logo_mark)
             .setContentTitle(if (paused) "Paused" else "Recording")
             .setContentText(title)
             .setOngoing(true)

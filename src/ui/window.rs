@@ -476,6 +476,8 @@ impl MainWindow {
         let files = Rc::clone(&self.files);
         self.phone
             .connect_received(move |(doc, path)| files.add_document(doc, path));
+        let sidebar = Rc::clone(&self.sidebar);
+        self.phone.connect_projects_changed(move |()| sidebar.refresh());
         match self.store.inbound_to_resume() {
             Ok(unfinished) => {
                 for r in unfinished {

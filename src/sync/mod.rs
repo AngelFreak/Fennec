@@ -11,6 +11,7 @@ mod discovery;
 mod http;
 mod inbound;
 mod pairing;
+mod projects;
 mod server;
 mod tls;
 
@@ -45,6 +46,8 @@ pub enum SyncEvent {
     PairingEnded,
     /// A phone was paired or removed.
     DevicesChanged,
+    /// A phone added a project or changed one.
+    ProjectsChanged,
     /// A recording arrived in full and has a document; it should join the
     /// Files queue.
     Received { document_id: DocumentId, path: PathBuf },

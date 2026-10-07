@@ -1,9 +1,8 @@
+<!-- Fennec's mark on the accent background (mipmap-anydpi/ic_launcher.xml), sized
+     as on the desktop logo: 16 of 26 units, centred in the icon's safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <group android:translateX="22" android:translateY="20" android:scaleX="0.5" android:scaleY="0.5">
-        <path android:fillColor="#FFF7ED" android:pathData="M26,22L58,58L34,74ZM102,22L70,58L94,74Z"/>
-        <path android:fillColor="#FDBA74" android:pathData="M32,34L50,56L38,64ZM96,34L78,56L90,64Z"/>
-        <path android:fillColor="#FFF7ED" android:pathData="M32,64Q64,48 96,64L72,101Q64,110 56,101Z"/>
-        <path android:fillColor="#431407" android:pathData="M51,74m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0M77,74m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0M64,99m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0"/>
+    <group android:translateX="32" android:translateY="32" android:scaleX="1.8333" android:scaleY="1.8333">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M4,20L7,4L12,12L17,4L20,20Z"/>
     </group>
 </vector>

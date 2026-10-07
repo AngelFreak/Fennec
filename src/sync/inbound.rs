@@ -256,17 +256,26 @@ pub fn complete(store: &Store, target: &Target, device: DeviceId, uuid: &str) ->
     if let Err(e) = std::fs::create_dir_all(&target.audio).and_then(|()| std::fs::rename(&part, &path)) {
         return (internal(e), None);
     }
-    let exists = |p: Option<i64>| p.filter(|id| store.project_exists(*id).unwrap_or(false));
+    let projects = store.projects().unwrap_or_default();
+    let exists = |p: Option<i64>| p.filter(|id| projects.iter().any(|x| x.id == *id));
     let project_id = exists(rec.info.project_id).or_else(|| exists(target.default_project));
+    // The phone's choice, else the project's default, else Fennec's (as in dictation).
+    let template = rec
+        .info
+        .template_id
+        .clone()
+        .or_else(|| {
+            projects
+                .iter()
+                .find(|p| Some(p.id) == project_id)?
+                .default_template
+                .clone()
+        })
+        .unwrap_or_else(|| target.default_template.clone());
     let doc = store
         .create_document(&NewDocument {
             project_id,
-            template_id: Some(
-                rec.info
-                    .template_id
-                    .clone()
-                    .unwrap_or_else(|| target.default_template.clone()),
-            ),
+            template_id: Some(template),
             ..NewDocument::file(&rec.info.title)
         })
         .and_then(|doc| {

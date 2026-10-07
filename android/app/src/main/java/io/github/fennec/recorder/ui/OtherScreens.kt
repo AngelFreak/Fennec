@@ -330,24 +330,32 @@ fun PairScreen(
     onConfirm: (PairingTarget) -> Unit,
     onRetry: () -> Unit,
     onClose: () -> Unit,
+    /** Shown as the last welcome step, with Not now instead of Close. */
+    welcome: Boolean = false,
 ) {
     val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
-        Header("Pair with Fennec", navigation = { HeaderIcon(R.drawable.ic_close, "Close", onClose) })
+        if (welcome) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                StepDots(WELCOME_STEPS, 2)
+            }
+        } else {
+            Header("Pair with Fennec", navigation = { HeaderIcon(R.drawable.ic_close, "Close", onClose) })
+        }
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             when (ui) {
                 PairUi.Scan -> {
+                    if (welcome) {
+                        Text("Pair with Fennec", fontFamily = SourceSerif, fontSize = 28.sp, fontWeight = FontWeight.Medium, color = c.text)
+                    }
                     Text(
                         "On your computer, open Fennec, go to Settings, then Phone, and choose Pair a phone. Point the camera at the code.",
                         style = MaterialTheme.typography.bodyMedium, color = c.textSoft,
                     )
-                    Box(
-                        Modifier.fillMaxWidth().height(300.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF15171C)),
-                        contentAlignment = Alignment.Center,
-                    ) { camera() }
+                    Box(Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) { camera() }
                     TextButton(onManual, Modifier.align(Alignment.CenterHorizontally)) {
                         Text("No camera? Enter the code instead", color = c.accentText)
                     }
@@ -428,7 +436,11 @@ fun PairScreen(
                 }
             }
         }
-        if (ui is PairUi.Waiting || ui is PairUi.Confirm) {
+        if (welcome && ui !is PairUi.Paired) {
+            Box(Modifier.padding(20.dp)) {
+                SecondaryButton("Not now, record first", Modifier.fillMaxWidth(), onClick = onClose)
+            }
+        } else if (ui is PairUi.Waiting || ui is PairUi.Confirm) {
             Box(Modifier.padding(20.dp)) { SecondaryButton("Cancel", Modifier.fillMaxWidth(), onClick = onClose) }
         }
     }
@@ -450,11 +462,14 @@ private fun CodeCard(content: @Composable () -> Unit) {
 fun SettingsScreen(
     paired: Paired?,
     settings: AppSettings,
+    info: DesktopInfo,
     version: String,
     onBack: () -> Unit,
     onPair: () -> Unit,
     onUnpair: () -> Unit,
     onChange: (AppSettings) -> Unit,
+    onProjects: () -> Unit,
+    onTemplates: () -> Unit,
 ) {
     val c = Fennec.colors
     var unpairing by remember { mutableStateOf(false) }
@@ -487,6 +502,20 @@ fun SettingsScreen(
                         PrimaryButton("Pair with Fennec", onClick = onPair)
                     }
                 }
+            }
+            Gap(8.dp)
+            SectionTitle("Filing in Fennec")
+            FennecBox {
+                NavRow(
+                    "Projects",
+                    when (info.projects.size) {
+                        0 -> "None yet"
+                        1 -> "1 project"
+                        else -> "${info.projects.size} projects"
+                    },
+                    first = true, onClick = onProjects,
+                )
+                NavRow("Templates", "For new recordings: " + (info.template(settings.defaultTemplate)?.name ?: "Fennec's default"), onClick = onTemplates)
             }
             Gap(8.dp)
             SectionTitle("Sending")
@@ -532,6 +561,22 @@ fun SettingsScreen(
             dismissButton = { TextButton({ unpairing = false }) { Text("Cancel", color = c.muted) } },
             containerColor = c.surface,
         )
+    }
+}
+
+@Composable
+private fun NavRow(title: String, note: String, first: Boolean = false, onClick: () -> Unit) {
+    val c = Fennec.colors
+    if (!first) androidx.compose.material3.HorizontalDivider(color = c.divider)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onClick).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = c.text)
+            Text(note, fontSize = 12.5.sp, color = c.muted)
+        }
+        FennecIcon(R.drawable.ic_chevron, c.muted, 16.dp)
     }
 }
 

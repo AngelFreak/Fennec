@@ -14,6 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
 
 pub type ProjectId = i64;
+
+/// Colours a new project can have, in the order the sidebar hands them out
+/// (the phone app offers the same).
+pub const PROJECT_COLORS: [&str; 5] = ["#C2410C", "#1D4ED8", "#0F766E", "#6B21A8", "#9AA1AE"];
 pub type DocumentId = i64;
 pub type ParagraphId = i64;
 pub type ActionItemId = i64;
