@@ -16,6 +16,9 @@ import io.github.fennec.recorder.net.Api
 import io.github.fennec.recorder.net.FennecClient
 import io.github.fennec.recorder.record.Recorder
 import io.github.fennec.recorder.sync.CleanupWorker
+import io.github.fennec.recorder.sync.MediaStoreCopies
+import io.github.fennec.recorder.sync.SharedCopies
+import io.github.fennec.recorder.sync.usbSidecar
 import io.github.fennec.recorder.sync.UploadWorker
 import io.github.fennec.recorder.sync.Uploader
 import io.github.fennec.recorder.sync.follow
@@ -42,6 +45,10 @@ class AppGraph(
     val pairing: PairingStore,
     val settings: SettingsStore,
     val dir: File,
+    /** Copies for USB transfer. */
+    val copies: SharedCopies,
+    /** Asks WorkManager to send waiting recordings (tests pass their own). */
+    private val schedule: (AppGraph) -> Unit,
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val lastContact = MutableStateFlow(Contact())
@@ -122,7 +129,81 @@ class AppGraph(
         }
     }
 
-    fun sendSoon() = UploadWorker.enqueue(context)
+    fun sendSoon() = schedule(this)
+
+    // ---- USB transfer ----
+
+    /** Gives recordings not yet sent their copy for USB transfer (if that is on). */
+    suspend fun exportForUsb() {
+        if (!settings.settings.value.usbCopies) return
+        val deviceId = pairing.paired.value?.deviceId
+        for (r in db.recordings().needingUsbCopy()) {
+            val file = File(dir, r.fileName)
+            if (!file.exists() || r.sha256 == null) continue
+            val (audio, meta) = copies.export(file, r.id, usbSidecar(r, deviceId)) ?: continue
+            db.recordings().update(r.copy(usbAudio = audio, usbMeta = meta))
+        }
+    }
+
+    /** The title, project or template changed: the sidecar says so too. */
+    suspend fun refreshUsbSidecar(id: String) {
+        val r = db.recordings().get(id) ?: return
+        if (r.usbAudio == null) return
+        val meta = copies.replaceSidecar(r.usbMeta, r.id, usbSidecar(r, pairing.paired.value?.deviceId))
+        db.recordings().update(r.copy(usbMeta = meta))
+    }
+
+    /**
+     * Copies Fennec took over USB (it deletes them after importing) mark
+     * their recordings sent; copies of recordings Fennec has otherwise are
+     * removed, and so are all copies when USB transfer is turned off.
+     */
+    suspend fun checkUsb(now: Long = System.currentTimeMillis()) {
+        val keep = settings.settings.value.usbCopies
+        for (r in db.recordings().withUsbCopy()) {
+            val gone = r.usbAudio == null || !copies.exists(r.usbAudio)
+            when {
+                r.state.delivered || !keep -> dropCopies(r)
+                gone && r.state != SyncState.RECORDING -> {
+                    r.usbMeta?.let(copies::delete)
+                    db.recordings().update(
+                        r.copy(state = SyncState.USB, deliveredAt = r.deliveredAt ?: now, error = null, usbAudio = null, usbMeta = null),
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun dropCopies(r: io.github.fennec.recorder.data.Recording) {
+        r.usbAudio?.let(copies::delete)
+        r.usbMeta?.let(copies::delete)
+        db.recordings().update(r.copy(usbAudio = null, usbMeta = null))
+    }
+
+    /** Fennec has it, though the phone could not tell (copied by hand, say). */
+    suspend fun markSent(id: String) {
+        val r = db.recordings().get(id) ?: return
+        dropCopies(r)
+        db.recordings().get(id)?.let {
+            db.recordings().update(it.copy(state = SyncState.USB, deliveredAt = System.currentTimeMillis(), error = null))
+        }
+    }
+
+    /** It was marked sent by mistake: send it again, over Wi-Fi or USB. */
+    suspend fun markNotSent(id: String) {
+        val r = db.recordings().get(id) ?: return
+        db.recordings().update(r.copy(state = SyncState.WAITING, deliveredAt = null, sentBytes = 0, error = null))
+        exportForUsb()
+        sendSoon()
+    }
+
+    suspend fun deleteRecording(id: String) {
+        val r = db.recordings().get(id) ?: return
+        r.usbAudio?.let(copies::delete)
+        r.usbMeta?.let(copies::delete)
+        File(dir, r.fileName).delete()
+        db.recordings().delete(id)
+    }
 }
 
 class FennecApp : Application() {
@@ -139,6 +220,8 @@ class FennecApp : Application() {
         )
         graph.scope.launch {
             graph.recoverUnfinished()
+            graph.checkUsb()
+            graph.exportForUsb()
             if (graph.db.recordings().toSend().isNotEmpty()) graph.sendSoon()
             if (graph.db.recordings().toFollow().isNotEmpty()) follow(this@FennecApp)
         }
@@ -150,7 +233,13 @@ class FennecApp : Application() {
 
         fun graph(context: Context): AppGraph = (context.applicationContext as FennecApp).graph
 
-        fun build(context: Context, cipher: SecretCipher, inMemory: Boolean = false): AppGraph {
+        fun build(
+            context: Context,
+            cipher: SecretCipher,
+            inMemory: Boolean = false,
+            copies: SharedCopies? = null,
+            schedule: ((AppGraph) -> Unit)? = null,
+        ): AppGraph {
             val db = if (inMemory) {
                 Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
             } else {
@@ -162,6 +251,8 @@ class FennecApp : Application() {
                 PairingStore(context.getSharedPreferences("pairing", MODE_PRIVATE), cipher),
                 SettingsStore(context.getSharedPreferences("settings", MODE_PRIVATE)),
                 recordingsDir(context),
+                copies ?: MediaStoreCopies(context.contentResolver),
+                schedule ?: { g -> UploadWorker.enqueue(g.context, g.settings.settings.value.unmeteredOnly) },
             )
         }
     }

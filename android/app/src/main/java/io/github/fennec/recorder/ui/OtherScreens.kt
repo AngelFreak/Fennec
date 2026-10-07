@@ -82,6 +82,8 @@ fun DetailScreen(
     onTemplate: (Template?) -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    onMarkSent: () -> Unit = {},
+    onMarkNotSent: () -> Unit = {},
 ) {
     val c = Fennec.colors
     var renaming by remember { mutableStateOf(false) }
@@ -134,6 +136,20 @@ fun DetailScreen(
                     "Template", r.templateName ?: "Fennec's default", editable,
                     listOf<Pair<String, Template?>>("Fennec's default" to null) + info.templates.map { it.name to it },
                     onPick = onTemplate,
+                )
+            }
+            when {
+                r.state == SyncState.USB -> UsbNote(
+                    "Fennec took it over a USB cable, or it was marked sent. Its status shows here once this phone reaches Fennec on the same Wi-Fi.",
+                    "Mark as not sent", onMarkNotSent,
+                )
+                r.deliveredAt == null && r.state != SyncState.RECORDING && r.state != SyncState.SENDING -> UsbNote(
+                    if (r.usbAudio != null) {
+                        "A copy waits in Download/Fennec Recorder. Plug the phone into the computer with a USB cable and choose File transfer: Fennec imports it, and this recording is marked sent."
+                    } else {
+                        "Moved it to Fennec yourself? Mark it sent, so it is not sent again."
+                    },
+                    "Mark as sent to Fennec", onMarkSent,
                 )
             }
             Column {
@@ -189,6 +205,22 @@ fun DetailScreen(
 }
 
 @Composable
+private fun UsbNote(text: String, action: String, onAction: () -> Unit) {
+    val c = Fennec.colors
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.chrome)
+            .border(1.dp, c.border, RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("USB cable", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+        Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = c.muted)
+        TextButton(onAction, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+            Text(action, color = c.accentText, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
 private fun <T> DetailPicker(
     label: String,
     shown: String,
@@ -219,8 +251,13 @@ private fun Steps(r: Recording, pairedName: String?) {
     val steps = listOf(
         Triple("Saved on this phone", r.sha256?.let { "Checksum ready" } ?: "Recording", if (r.state == SyncState.RECORDING) Step.CURRENT else Step.DONE),
         Triple(
-            if (sent) "Sent to $computer" else "Sending to $computer",
             when {
+                r.state == SyncState.USB -> "Sent by USB"
+                sent -> "Sent to $computer"
+                else -> "Sending to $computer"
+            },
+            when {
+                r.state == SyncState.USB -> "Fennec has it; it was removed from the transfer folder"
                 r.state == SyncState.SENDING -> "%.1f of %.1f MB · resumes if the Wi-Fi drops".format(r.sentBytes / 1_048_576.0, r.size / 1_048_576.0)
                 sent -> "Arrived complete"
                 r.state == SyncState.FAILED && r.deliveredAt == null -> "Not sent"
@@ -236,7 +273,7 @@ private fun Steps(r: Recording, pairedName: String?) {
         ),
         Triple(
             "Transcribing",
-            "In the Files queue in Fennec",
+            if (r.state == SyncState.USB) "Shows once this phone reaches Fennec on Wi-Fi" else "In the Files queue in Fennec",
             when (r.state) {
                 SyncState.QUEUED, SyncState.TRANSCRIBING -> Step.CURRENT
                 SyncState.DONE -> Step.DONE
@@ -472,6 +509,7 @@ fun SettingsScreen(
     onChange: (AppSettings) -> Unit,
     onProjects: () -> Unit,
     onTemplates: () -> Unit,
+    onUsbCopies: (Boolean) -> Unit = { on -> onChange(settings.copy(usbCopies = on)) },
 ) {
     val c = Fennec.colors
     var unpairing by remember { mutableStateOf(false) }
@@ -528,6 +566,15 @@ fun SettingsScreen(
                     "Recordings wait for a network like your home Wi-Fi.",
                     settings.unmeteredOnly,
                 ) { onChange(settings.copy(unmeteredOnly = it)) }
+            }
+            Gap(8.dp)
+            SectionTitle("USB cable")
+            FennecBox {
+                ToggleRow(
+                    "Keep a copy for USB transfer",
+                    "Recordings not yet sent are also kept in Download/Fennec Recorder. Plug the phone into the computer and choose File transfer: Fennec imports them and removes the copies. Other apps on the phone can read that folder.",
+                    settings.usbCopies,
+                ) { onUsbCopies(it) }
             }
             Gap(8.dp)
             SectionTitle("Audio")

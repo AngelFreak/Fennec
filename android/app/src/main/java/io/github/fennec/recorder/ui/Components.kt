@@ -193,6 +193,7 @@ fun StateChip(r: Recording, paired: Boolean) {
         SyncState.TRANSCRIBING -> Chip("Transcribing", c.aiBg, c.aiText)
         SyncState.DONE -> Chip("Transcribed", c.netBg, c.netText, R.drawable.ic_check)
         SyncState.FAILED -> Chip("Failed", c.error.copy(alpha = 0.14f), c.error)
+        SyncState.USB -> Chip("Sent by USB", c.netBg, c.netText, R.drawable.ic_check)
     }
 }
 
@@ -346,7 +347,7 @@ fun ContactLine(name: String?, reachable: Boolean?, trailing: String? = null, on
         )
         Text(
             when {
-                name == null -> "Not paired. Pair with Fennec to send recordings."
+                name == null -> "Not paired. Pair with Fennec to send over Wi-Fi, or use a USB cable."
                 reachable == false -> "$name is not reachable. Is this phone on the same Wi-Fi, with Fennec open?"
                 reachable == true -> "Paired with $name"
                 else -> "Paired with $name"
@@ -375,10 +376,14 @@ fun SameNetworkNote(modifier: Modifier = Modifier) {
     ) {
         FennecIcon(R.drawable.ic_wifi, c.accentText, 20.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("Same Wi-Fi only", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.accentText)
+            Text("Same Wi-Fi network", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.accentText)
             Text(
                 "$SAME_NETWORK Recordings made elsewhere wait on the phone and are sent when you are back on that network with Fennec open.",
                 fontSize = 13.sp, lineHeight = 19.sp, color = c.text,
+            )
+            Text(
+                "No shared Wi-Fi? Plug the phone into the computer with a USB cable and choose File transfer.",
+                fontSize = 13.sp, lineHeight = 19.sp, color = c.textSoft,
             )
         }
     }

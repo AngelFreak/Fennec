@@ -17,6 +17,9 @@ data class AppSettings(
     val defaultTemplate: String? = null,
     /** The welcome steps have been seen. */
     val welcomed: Boolean = false,
+    /** Keep a copy of recordings not yet sent in Download/Fennec Recorder,
+     *  where Fennec finds them over a USB cable. */
+    val usbCopies: Boolean = true,
 )
 
 class SettingsStore(private val prefs: SharedPreferences) {
@@ -31,6 +34,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
             keepDays = prefs.getInt("keep_days", d.keepDays),
             defaultTemplate = prefs.getString("default_template", null),
             welcomed = prefs.getBoolean("welcomed", d.welcomed),
+            usbCopies = prefs.getBoolean("usb_copies", d.usbCopies),
         )
     }
 
@@ -42,6 +46,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
             .putInt("keep_days", s.keepDays)
             .putString("default_template", s.defaultTemplate)
             .putBoolean("welcomed", s.welcomed)
+            .putBoolean("usb_copies", s.usbCopies)
             .apply()
         _settings.value = s
     }

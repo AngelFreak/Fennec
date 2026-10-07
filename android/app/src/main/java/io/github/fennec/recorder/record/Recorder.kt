@@ -254,6 +254,7 @@ class RecordingService : Service() {
             app.scope.launch {
                 if (f.exists() && f.length() > 0) {
                     app.db.recordings().update(Recorder.finished(r, f, duration))
+                    app.exportForUsb()
                     app.sendSoon()
                 } else {
                     f.delete()

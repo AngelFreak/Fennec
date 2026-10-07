@@ -97,7 +97,7 @@ pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, bo
     let title: String = meta.title.trim().chars().take(200).collect();
     let info = NewInbound {
         uuid: uuid.to_string(),
-        device_id: device,
+        device_id: Some(device),
         title: if title.is_empty() {
             "Optagelse".into()
         } else {
@@ -114,7 +114,7 @@ pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, bo
 
     match store.inbound(uuid) {
         Err(e) => internal(e),
-        Ok(Some(existing)) if existing.info.device_id != device => {
+        Ok(Some(existing)) if existing.info.device_id != Some(device) => {
             Response::error(409, "taken", "Another phone sent a recording with this id.")
         }
         Ok(Some(existing))
@@ -161,7 +161,7 @@ pub fn chunk(
     body: &[u8],
 ) -> Response {
     let rec = match store.inbound(uuid) {
-        Ok(Some(r)) if r.info.device_id == device => r,
+        Ok(Some(r)) if r.info.device_id == Some(device) => r,
         Ok(_) => return Response::error(404, "unknown", "Announce the recording first."),
         Err(e) => return internal(e),
     };
@@ -197,6 +197,7 @@ pub fn chunk(
 }
 
 /// A finished recording, ready for the Files queue.
+#[derive(Debug)]
 pub struct Arrived {
     pub document_id: DocumentId,
     pub path: PathBuf,
@@ -206,7 +207,7 @@ pub struct Arrived {
 /// document. Repeating it returns the same document.
 pub fn complete(store: &Store, target: &Target, device: DeviceId, uuid: &str) -> (Response, Option<Arrived>) {
     let rec = match store.inbound(uuid) {
-        Ok(Some(r)) if r.info.device_id == device => r,
+        Ok(Some(r)) if r.info.device_id == Some(device) => r,
         Ok(_) => {
             return (
                 Response::error(404, "unknown", "Announce the recording first."),
@@ -256,35 +257,7 @@ pub fn complete(store: &Store, target: &Target, device: DeviceId, uuid: &str) ->
     if let Err(e) = std::fs::create_dir_all(&target.audio).and_then(|()| std::fs::rename(&part, &path)) {
         return (internal(e), None);
     }
-    let projects = store.projects().unwrap_or_default();
-    let exists = |p: Option<i64>| p.filter(|id| projects.iter().any(|x| x.id == *id));
-    let project_id = exists(rec.info.project_id).or_else(|| exists(target.default_project));
-    // The phone's choice, else the project's default, else Fennec's (as in dictation).
-    let template = rec
-        .info
-        .template_id
-        .clone()
-        .or_else(|| {
-            projects
-                .iter()
-                .find(|p| Some(p.id) == project_id)?
-                .default_template
-                .clone()
-        })
-        .unwrap_or_else(|| target.default_template.clone());
-    let doc = store
-        .create_document(&NewDocument {
-            project_id,
-            template_id: Some(template),
-            ..NewDocument::file(&rec.info.title)
-        })
-        .and_then(|doc| {
-            store.set_document_created_at(doc, rec.info.recorded_at)?;
-            store.set_audio_path(doc, Some(&path))?;
-            store.set_inbound_received(uuid, rec.info.size)?;
-            store.set_inbound_state(uuid, InboundState::Queued, Some(doc), None)?;
-            Ok(doc)
-        });
+    let doc = file_recording(store, target, &rec.info, &path);
     match doc {
         Ok(document_id) => (
             Response::ok(state_body(
@@ -300,12 +273,50 @@ pub fn complete(store: &Store, target: &Target, device: DeviceId, uuid: &str) ->
     }
 }
 
+/// Makes the document for a recording whose file is at `path` (in Fennec's
+/// audio folder) and marks it queued: the project the phone chose (else the
+/// default for phone recordings), the template it chose (else the project's,
+/// else Fennec's, as in dictation), dated when it was recorded. Used for
+/// uploads and for imports over USB.
+pub fn file_recording(
+    store: &Store,
+    target: &Target,
+    info: &NewInbound,
+    path: &Path,
+) -> crate::store::Result<DocumentId> {
+    let projects = store.projects().unwrap_or_default();
+    let exists = |p: Option<i64>| p.filter(|id| projects.iter().any(|x| x.id == *id));
+    let project_id = exists(info.project_id).or_else(|| exists(target.default_project));
+    let template = info
+        .template_id
+        .clone()
+        .or_else(|| {
+            projects
+                .iter()
+                .find(|p| Some(p.id) == project_id)?
+                .default_template
+                .clone()
+        })
+        .unwrap_or_else(|| target.default_template.clone());
+    let doc = store.create_document(&NewDocument {
+        project_id,
+        template_id: Some(template),
+        ..NewDocument::file(&info.title)
+    })?;
+    store.set_document_created_at(doc, info.recorded_at)?;
+    store.set_audio_path(doc, Some(path))?;
+    store.set_inbound_received(&info.uuid, info.size)?;
+    store.set_inbound_state(&info.uuid, InboundState::Queued, Some(doc), None)?;
+    Ok(doc)
+}
+
 /// `GET /v1/recordings?ids=a,b`: where each recording is.
 pub fn statuses(store: &Store, target: &Target, device: DeviceId, ids: &str) -> Response {
     let mut out = Vec::new();
     for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()).take(200) {
         match store.inbound(id) {
-            Ok(Some(r)) if r.info.device_id == device => {
+            // Also ones imported over USB without a pairing: the id is the phone's own secret.
+            Ok(Some(r)) if r.info.device_id == Some(device) || r.info.device_id.is_none() => {
                 let received = if r.state == InboundState::Receiving {
                     on_disk(&part_path(target, id))
                 } else {

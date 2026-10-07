@@ -120,6 +120,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun watch(): Job = viewModelScope.launch {
         app.refreshInfo()
         while (isActive) {
+            app.checkUsb()
             app.refreshStatuses()
             if (app.db.recordings().toSend().isNotEmpty() && app.pairing.paired.value != null) app.sendSoon()
             delay(3_000)
@@ -214,15 +215,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val r = app.db.recordings().get(id) ?: return@launch
             app.db.recordings().update(f(r))
+            app.refreshUsbSidecar(id)
         }
     }
 
     fun delete(id: String) {
         screen.value = Screen.Recordings
+        viewModelScope.launch { app.deleteRecording(id) }
+    }
+
+    fun markSent(id: String) {
+        viewModelScope.launch { app.markSent(id) }
+    }
+
+    fun markNotSent(id: String) {
+        viewModelScope.launch { app.markNotSent(id) }
+    }
+
+    /** USB copies turned on or off. */
+    fun setUsbCopies(on: Boolean) {
+        app.settings.update { it.copy(usbCopies = on) }
         viewModelScope.launch {
-            val r = app.db.recordings().get(id) ?: return@launch
-            File(app.dir, r.fileName).delete()
-            app.db.recordings().delete(id)
+            app.checkUsb()
+            app.exportForUsb()
         }
     }
 

@@ -15,7 +15,7 @@ android {
         applicationId = "io.github.fennec.recorder"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 3
+        versionCode = 4
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -54,6 +54,8 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--add-opens=java.base/java.io=ALL-UNNAMED")
     // The desktop's colour tokens, which the theme must match.
     systemProperty("fennec.css.dir", rootProject.file("../src/ui").absolutePath)
+    // Files both apps read, such as the USB sidecar.
+    systemProperty("fennec.fixtures.dir", rootProject.file("../tests/fixtures").absolutePath)
     inputs.dir(rootProject.file("../src/ui")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("desktopCss")
     inputs.dir("src/test/screenshots").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("screenshotBaselines")
 }

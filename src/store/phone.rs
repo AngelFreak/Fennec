@@ -54,7 +54,9 @@ impl InboundState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewInbound {
     pub uuid: String,
-    pub device_id: DeviceId,
+    /// The paired phone that sent it; `None` for one imported over USB from a
+    /// phone Fennec has no pairing for.
+    pub device_id: Option<DeviceId>,
     pub title: String,
     /// When recording started, in ms since the epoch.
     pub recorded_at: i64,
@@ -86,7 +88,7 @@ fn inbound_row(r: &Row<'_>) -> rusqlite::Result<Inbound> {
     Ok(Inbound {
         info: NewInbound {
             uuid: r.get(0)?,
-            device_id: r.get::<_, Option<DeviceId>>(1)?.unwrap_or_default(),
+            device_id: r.get(1)?,
             title: r.get(2)?,
             recorded_at: r.get(3)?,
             duration_ms: r.get(4)?,

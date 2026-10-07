@@ -21,6 +21,7 @@ mod settings_page;
 mod settings_phone;
 pub mod sidebar;
 mod templates_page;
+pub mod usb;
 mod window;
 mod wrap;
 

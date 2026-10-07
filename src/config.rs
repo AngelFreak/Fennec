@@ -109,6 +109,8 @@ pub struct PhoneSettings {
     pub port: u16,
     /// Project for recordings that name none, or one that no longer exists.
     pub default_project: Option<i64>,
+    /// Offer to import recordings from a phone plugged in over USB.
+    pub usb_import: bool,
 }
 
 impl Default for PhoneSettings {
@@ -117,6 +119,7 @@ impl Default for PhoneSettings {
             enabled: false,
             port: crate::sync::DEFAULT_PORT,
             default_project: None,
+            usb_import: true,
         }
     }
 }

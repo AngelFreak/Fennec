@@ -1,5 +1,6 @@
 package io.github.fennec.recorder.data
 
+import androidx.room.AutoMigration
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -24,10 +25,14 @@ enum class SyncState {
     QUEUED,
     TRANSCRIBING,
     DONE,
-    FAILED;
+    FAILED,
+
+    /** Taken over a USB cable (Fennec removed the phone's copy), or marked
+     *  sent by hand. Fennec's status shows once the phone reaches it again. */
+    USB;
 
     /** Fennec has the whole file; the phone only follows along. */
-    val delivered: Boolean get() = this == QUEUED || this == TRANSCRIBING || this == DONE
+    val delivered: Boolean get() = this == QUEUED || this == TRANSCRIBING || this == DONE || this == USB
 
     companion object {
         /** A state from the desktop's status answer. */
@@ -68,6 +73,10 @@ data class Recording(
     val deliveredAt: Long? = null,
     /** Times the file arrived damaged and was sent again. */
     val resends: Int = 0,
+    /** The copy in Download/Fennec Recorder for USB transfer (a MediaStore URI). */
+    val usbAudio: String? = null,
+    /** Its sidecar with title, project and template. */
+    val usbMeta: String? = null,
 )
 
 @Dao
@@ -84,8 +93,15 @@ interface RecordingDao {
     @Query("SELECT * FROM recordings WHERE state IN ('WAITING', 'SENDING') ORDER BY recordedAt")
     suspend fun toSend(): List<Recording>
 
-    @Query("SELECT * FROM recordings WHERE state IN ('QUEUED', 'TRANSCRIBING')")
+    @Query("SELECT * FROM recordings WHERE state IN ('QUEUED', 'TRANSCRIBING', 'USB')")
     suspend fun toFollow(): List<Recording>
+
+    /** Not delivered and without a copy for USB transfer. */
+    @Query("SELECT * FROM recordings WHERE state IN ('WAITING', 'SENDING', 'FAILED') AND deliveredAt IS NULL AND usbAudio IS NULL")
+    suspend fun needingUsbCopy(): List<Recording>
+
+    @Query("SELECT * FROM recordings WHERE usbAudio IS NOT NULL OR usbMeta IS NOT NULL")
+    suspend fun withUsbCopy(): List<Recording>
 
     @Query("SELECT * FROM recordings WHERE state = 'RECORDING'")
     suspend fun unfinished(): List<Recording>
@@ -106,7 +122,7 @@ interface RecordingDao {
     suspend fun delete(id: String)
 }
 
-@Database(entities = [Recording::class], version = 1)
+@Database(entities = [Recording::class], version = 2, autoMigrations = [AutoMigration(from = 1, to = 2)])
 abstract class AppDatabase : RoomDatabase() {
     abstract fun recordings(): RecordingDao
 }

@@ -39,6 +39,8 @@ pub struct MainWindow {
     pub settings: Rc<SettingsPage>,
     /// Receives recordings from Fennec Recorder.
     pub phone: Rc<PhoneLink>,
+    /// Imports recordings from a phone plugged in over USB.
+    pub usb: Rc<super::usb::UsbImport>,
     model_chips: Vec<gtk::Button>,
     pub sidebar: Rc<Sidebar>,
     pub store: Rc<Store>,
@@ -206,6 +208,7 @@ impl MainWindow {
             templates,
             settings,
             phone,
+            usb: super::usb::UsbImport::new(deps.clone()),
             model_chips,
             sidebar,
             store,
@@ -478,6 +481,13 @@ impl MainWindow {
             .connect_received(move |(doc, path)| files.add_document(doc, path));
         let sidebar = Rc::clone(&self.sidebar);
         self.phone.connect_projects_changed(move |()| sidebar.refresh());
+        self.usb.set_parent(&self.window);
+        let files = Rc::clone(&self.files);
+        self.usb
+            .connect_received(move |(doc, path)| files.add_document(doc, path));
+        let sidebar = Rc::clone(&self.sidebar);
+        self.usb.connect_imported(move |()| sidebar.go(Nav::Files));
+        self.usb.watch();
         match self.store.inbound_to_resume() {
             Ok(unfinished) => {
                 for r in unfinished {

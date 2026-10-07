@@ -29,7 +29,7 @@ class GraphTest {
 
     @Before
     fun setUp() {
-        app = FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true)
+        app = FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true, copies = FakeCopies(), schedule = {})
     }
 
     private fun put(r: Recording, bytes: Int) = runBlocking {
@@ -73,12 +73,12 @@ class GraphTest {
     @Test
     fun `the pairing survives a restart and the secret is not stored as is`() {
         app.pairing.save(Paired("fennec-desktop", "abcdefabcdef", "10.0.2.2:47131", "pin", 7, "the-secret"))
-        val again = FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true)
+        val again = FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true, copies = FakeCopies(), schedule = {})
         assertEquals("the-secret", again.pairing.paired.value?.secret)
         val prefs = ApplicationProvider.getApplicationContext<android.content.Context>()
             .getSharedPreferences("pairing", android.content.Context.MODE_PRIVATE)
         assertEquals("terces-eht", prefs.getString("secret", null))
         again.unpairedByFennec()
-        assertNull(FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true).pairing.paired.value)
+        assertNull(FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true, copies = FakeCopies(), schedule = {}).pairing.paired.value)
     }
 }

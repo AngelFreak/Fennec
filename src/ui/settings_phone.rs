@@ -24,6 +24,8 @@ pub struct PhoneSettingsUi {
     deps: Deps,
     pub link: Rc<PhoneLink>,
     pub enabled: gtk::Switch,
+    /// Import over USB.
+    pub usb: gtk::Switch,
     status: gtk::Label,
     pub port: gtk::SpinButton,
     pub pair_button: gtk::Button,
@@ -72,6 +74,11 @@ impl PhoneSettingsUi {
             deps,
             link,
             enabled,
+            usb: {
+                let s = gtk::Switch::new();
+                s.update_property(&[gtk::accessible::Property::Label("Import over USB")]);
+                s
+            },
             status: label("", &["fx-field-note"]),
             port,
             pair_button,
@@ -163,6 +170,14 @@ impl PhoneSettingsUi {
         self.devices_box.set_orientation(gtk::Orientation::Vertical);
         rows.append(&self.devices_box);
         b.append(&devices);
+
+        let (cable, rows) = group("USB cable", None);
+        rows.append(&row(
+            "Import over USB",
+            Some("When a phone with Fennec Recorder is plugged in and set to File transfer, Fennec offers to import its recordings. No pairing or shared Wi-Fi needed."),
+            &self.usb,
+        ));
+        b.append(&cable);
 
         let (recordings, rows) = group("Recordings", None);
         rows.append(&row(
@@ -256,6 +271,17 @@ impl PhoneSettingsUi {
             ui.save_and_apply();
         });
         let weak = Rc::downgrade(self);
+        self.usb.connect_active_notify(move |sw| {
+            let Some(ui) = weak.upgrade() else { return };
+            if ui.loading.get() {
+                return;
+            }
+            ui.deps.settings.borrow_mut().phone.usb_import = sw.is_active();
+            if let Err(e) = ui.deps.save_settings() {
+                ui.status.set_text(&format!("Settings not saved: {e}"));
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.port.connect_value_changed(move |sb| {
             let Some(ui) = weak.upgrade() else { return };
             if ui.loading.get() {
@@ -342,6 +368,7 @@ impl PhoneSettingsUi {
         self.loading.set(true);
         let s = self.deps.settings();
         self.enabled.set_active(s.phone.enabled);
+        self.usb.set_active(s.phone.usb_import);
         self.port.set_value(f64::from(s.phone.port));
         let state = self.link.state();
         self.status.set_text(&match &state {
@@ -445,8 +472,10 @@ fn same_network_note() -> gtk::Box {
     b.add_css_class("fx-network-note");
     let text = label("", &["fx-network-note-text"]);
     text.set_markup(
-        "<b>Same Wi-Fi only.</b> The phone and this computer must be on the same Wi-Fi network, \
-         and Fennec must be open. Recordings made elsewhere wait on the phone and are sent when it is back.",
+        "<b>Same Wi-Fi network.</b> To send recordings by themselves, the phone and this computer \
+         must be on the same Wi-Fi network, and Fennec must be open. Recordings made elsewhere wait \
+         on the phone until then. No shared Wi-Fi? Plug the phone in with a USB cable and choose \
+         File transfer on the phone.",
     );
     text.set_wrap(true);
     text.set_hexpand(true);

@@ -931,6 +931,9 @@ fn main() {
     // --- a phone pairs, sends a recording, and it is transcribed here
     phone_checks(&tmp.path().join("f"));
 
+    // --- a phone plugged in over USB: import, transcribe, remove from the phone
+    usb_checks(&tmp.path().join("g"));
+
     let failures = unsafe { FAILURES };
     if failures > 0 {
         println!("\n{failures} UI check(s) failed");
@@ -1808,5 +1811,106 @@ fn phone_checks(root: &std::path::Path) {
     check(
         "resuming does not need receiving to be on",
         matches!(w.phone.state(), ui::phone::LinkState::Off),
+    );
+}
+
+/// Puts a recording in a fake phone's transfer folder as Fennec Recorder does.
+fn put_on_phone(folder: &std::path::Path, id: &str, title: &str, audio: &[u8]) {
+    use sha2::Digest;
+    let sum: String = sha2::Sha256::digest(audio)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    std::fs::write(folder.join(format!("{id}.wav")), audio).unwrap();
+    let meta = serde_json::json!({
+        "fennec_recorder": 1, "id": id, "title": title, "recorded_at": 1_791_000_000_000_i64,
+        "duration_ms": 5000, "ext": "wav", "size": audio.len(), "sha256": sum,
+    });
+    std::fs::write(folder.join(format!("{id}.json")), meta.to_string()).unwrap();
+}
+
+/// A phone in File transfer mode, as a folder: the offer, Import, the
+/// transcript, and the copy gone from the phone (which tells the app).
+fn usb_checks(root: &std::path::Path) {
+    let w = ui::build_window(deps(root, vec!["Hej over kablet."], true));
+    w.window.present();
+    let phone = root.join("phone");
+    let folder = phone.join("Internal shared storage/Download/Fennec Recorder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let wav = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/da_fleurs_0.wav"
+    ))
+    .unwrap();
+    put_on_phone(
+        &folder,
+        "aaaaaaaa-1111-2222-3333-444444444444",
+        "Over kablet",
+        &wav,
+    );
+
+    let root_file = gtk::gio::File::for_path(&phone);
+    w.usb.check(root_file.clone(), "Pixel 8".into());
+    check(
+        "a phone with recordings Fennec lacks gets an offer to import",
+        pump_until(Duration::from_secs(10), || {
+            w.usb.offer().is_some_and(|o| o.ids.len() == 1)
+        }),
+    );
+    screenshot(&w.window, "usb-offer");
+    w.usb.answer(true);
+    let done = pump_until(Duration::from_secs(10), || w.usb.last.borrow().is_some());
+    check(
+        "Import says what it did",
+        done && w
+            .usb
+            .last
+            .borrow()
+            .as_deref()
+            .is_some_and(|t| t.starts_with("1 recording imported")),
+    );
+    check(
+        "Fennec shows the Files queue after importing",
+        w.visible_page() == "files",
+    );
+    check(
+        "the imported recording is removed from the phone, so the app marks it sent",
+        std::fs::read_dir(&folder).unwrap().next().is_none(),
+    );
+    let store = Store::open(&root.join("data/fennec.db")).unwrap();
+    let transcribed = pump_until(Duration::from_secs(20), || {
+        store
+            .inbound("aaaaaaaa-1111-2222-3333-444444444444")
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.state == fennec::store::InboundState::Done)
+    });
+    let doc = store
+        .inbound("aaaaaaaa-1111-2222-3333-444444444444")
+        .unwrap()
+        .and_then(|r| r.document_id);
+    check(
+        "it is transcribed under its title from the phone",
+        transcribed
+            && doc.is_some_and(|d| {
+                store.document(d).is_ok_and(|x| x.title == "Over kablet")
+                    && store
+                        .paragraphs(d)
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.text.contains("Hej over kablet"))
+            }),
+    );
+
+    // Not now: not asked again for that recording.
+    put_on_phone(&folder, "bbbbbbbb-1111-2222-3333-444444444444", "Senere", &wav);
+    w.usb.check(root_file.clone(), "Pixel 8".into());
+    pump_until(Duration::from_secs(10), || w.usb.offer().is_some());
+    w.usb.answer(false);
+    w.usb.check(root_file, "Pixel 8".into());
+    pump_until(Duration::from_millis(800), || false);
+    check(
+        "after Not now the same recording is not offered again",
+        w.usb.offer().is_none() && folder.join("bbbbbbbb-1111-2222-3333-444444444444.wav").exists(),
     );
 }

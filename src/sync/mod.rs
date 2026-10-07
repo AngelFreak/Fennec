@@ -14,6 +14,7 @@ mod pairing;
 mod projects;
 mod server;
 mod tls;
+pub mod usb;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::store::DocumentId;
 
+pub use inbound::{Arrived, Target};
 pub use pairing::{PairingOffer, pairing_code};
 pub use server::{Receiver, ReceiverConfig};
 pub use tls::Identity;

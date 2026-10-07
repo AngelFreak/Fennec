@@ -226,6 +226,39 @@ As built (`android/`, package `io.github.fennec.recorder`):
 - Released as an APK on GitHub releases next to the `.deb`, signed with the
   key from the repository secrets.
 
+## USB cable
+
+For when the phone and computer share no Wi-Fi, without developer mode or
+adb: Android's **File transfer** mode (MTP), which GNOME mounts through GVFS.
+
+- **Phone**: each recording not yet sent also gets a copy in
+  `Download/Fennec Recorder/` through MediaStore (no permission needed):
+  `<id>.aac`, then `<id>.json` (`fennec_recorder: 1`, id, title,
+  recorded_at, duration_ms, project_id, template_id, ext, size, sha256,
+  device_id). `tests/fixtures/usb/sidecar.json` is checked by both apps.
+  Edits rewrite the sidecar; delivery over Wi-Fi, deleting the recording, or
+  turning copies off removes them.
+- **Fennec** (`src/sync/usb.rs`, `src/ui/usb.rs`): watches GIO mounts; on an
+  `mtp://` mount with that folder it removes copies it already has and asks
+  "Import recordings from <phone>?". Importing copies the audio, checks the
+  SHA-256, files it like an upload (`inbound::file_recording`, so project
+  and template defaults match), then deletes both files from the phone.
+  Settings → Phone → Import over USB turns it off.
+- **Back to the phone**: Android shows an app only its own files, so Fennec
+  cannot leave a receipt. It deletes the copy instead; the app checks its
+  MediaStore entries (on start, every few seconds while open, around
+  uploads) and marks a recording whose copy is gone **Sent by USB**. Once
+  the phone reaches Fennec over Wi-Fi, `/v1/recordings` reports its real
+  state (imports keep the phone's id; ones from an unpaired phone have no
+  device and any paired phone may ask by id). **Mark as sent to Fennec** /
+  **Mark as not sent** cover what the check cannot tell.
+- **Tested**: desktop import against a phone-shaped folder and the real
+  window (offer, import, transcript, removal, Not now); the app's copy logic
+  with a fake MediaStore; on the emulator, a recording's copy pulled off
+  the device and imported by the desktop code, then deleted on the device
+  and marked Sent by USB. Not tested: a real MTP mount (the emulator cannot
+  be one).
+
 ## Privacy and security
 
 - Receiving is off by default and only listens while the switch is on.

@@ -203,6 +203,7 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                             onRename = { vm.rename(r.id, it) }, onProject = { vm.setProject(r.id, it) },
                             onTemplate = { vm.setTemplate(r.id, it) }, onRetry = { vm.retry(r.id) },
                             onDelete = { vm.delete(r.id) },
+                            onMarkSent = { vm.markSent(r.id) }, onMarkNotSent = { vm.markNotSent(r.id) },
                         )
                     }
                 }
@@ -227,6 +228,7 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                     paired, settings, info, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
                     onUnpair = vm::unpair, onChange = { s2 -> vm.app.settings.update { s2 } },
                     onProjects = { vm.go(Screen.Projects) }, onTemplates = { vm.go(Screen.Templates) },
+                    onUsbCopies = vm::setUsbCopies,
                 )
                 Screen.Projects -> ProjectsScreen(
                     info, paired != null, contact.reachable, draft,

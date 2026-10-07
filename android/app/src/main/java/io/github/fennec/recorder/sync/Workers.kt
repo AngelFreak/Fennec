@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = FennecApp.graph(applicationContext)
+        app.checkUsb()
         val paired = app.pairing.paired.value ?: return Result.success()
         var outcome = app.uploader(paired).sendAll()
         if (outcome == Outcome.RETRY) {
@@ -37,6 +38,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
         return when (outcome) {
             Outcome.DONE -> {
+                // Fennec has them now: their copies for USB can go.
+                app.checkUsb()
                 follow(applicationContext)
                 Result.success()
             }
@@ -55,9 +58,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     companion object {
         private const val NAME = "upload"
 
-        fun enqueue(context: Context) {
-            val app = FennecApp.graph(context)
-            val network = if (app.settings.settings.value.unmeteredOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
+        fun enqueue(context: Context, unmeteredOnly: Boolean) {
+            val network = if (unmeteredOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
             val req = OneTimeWorkRequestBuilder<UploadWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
@@ -111,7 +113,8 @@ suspend fun io.github.fennec.recorder.AppGraph.refreshStatuses(): Boolean {
             for (r in open) {
                 val status = byId[r.id] ?: continue
                 val updated = if (status.state == "unknown") {
-                    r.copy(state = SyncState.FAILED, error = "Fennec no longer has this recording.")
+                    // Taken over USB by a Fennec this phone is not paired with: nothing to follow.
+                    if (r.state == SyncState.USB) r else r.copy(state = SyncState.FAILED, error = "Fennec no longer has this recording.")
                 } else {
                     r.applying(status, System.currentTimeMillis())
                 }

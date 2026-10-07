@@ -146,6 +146,22 @@ class ScreenshotTest(private val dark: Boolean) {
     }
 
     @Test
+    fun detailUsb() = shot("detail-usb") {
+        DetailScreen(
+            list[0].copy(recordedAt = 1_791_295_320_000, usbAudio = "content://x"), info, "fennec-desktop", Playback(),
+            {}, {}, {}, {}, {}, {}, {},
+        )
+    }
+
+    @Test
+    fun detailSentByUsb() = shot("detail-sent-usb") {
+        DetailScreen(
+            list[0].copy(recordedAt = 1_791_295_320_000, state = SyncState.USB, deliveredAt = 1), info, "fennec-desktop",
+            Playback(), {}, {}, {}, {}, {}, {}, {},
+        )
+    }
+
+    @Test
     fun pairWaiting() = shot("pair-waiting") {
         PairScreen(
             PairUi.Waiting(PairingTarget("192.168.1.20:47130", "73051148", "pin", "fennec-desktop"), "4821 9306"),

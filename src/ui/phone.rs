@@ -204,7 +204,9 @@ impl PhoneLink {
     }
 
     fn close_dialog(&self) {
-        if let Some(d) = self.dialog.borrow_mut().take() {
+        // Taken before closing: closing fires the close response.
+        let open = self.dialog.borrow_mut().take();
+        if let Some(d) = open {
             d.force_close();
         }
     }

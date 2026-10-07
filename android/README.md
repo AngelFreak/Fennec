@@ -26,6 +26,16 @@ stays on the computer), and choose the template new recordings get when their
 project has none. A recording's template is the one picked for it, else its
 project's default, else this phone's default, else Fennec's.
 
+No shared Wi-Fi? Plug the phone into the computer with a USB cable and
+choose **File transfer** on the phone. The app keeps a copy of each recording
+not yet sent in `Download/Fennec Recorder` (a sidecar `.json` beside it names
+title, project and template); Fennec offers to import them, then deletes the
+copies. The app sees its copy gone and shows **Sent by USB**: Android lets an
+app see only its own files, so that deletion is how the phone learns Fennec
+has it. **Mark as sent to Fennec** and **Mark as not sent** on a recording
+cover the cases it cannot tell (copied by hand, deleted by mistake). The
+copies can be turned off in Settings; other apps on the phone can read them.
+
 New installs record in high quality (48 kHz) and keep recordings after
 Fennec has transcribed them; both can be changed in Settings.
 
@@ -49,6 +59,7 @@ attach the signed APK next to the `.deb`.
 |---|---|
 | `./gradlew :app:testDebugUnitTest` | Pairing links and codes (the code is checked against the desktop's), certificate pinning, uploads against a fake Fennec (chunks, a lost answer, a damaged file, unpairing), the desktop's QR code read by the phone's scanner, recovery after the app is killed, clean-up, the theme's colours against Fennec's CSS, and screenshots of every screen in light and dark |
 | `./gradlew :app:recordRoborazziDebug` | Records new screenshot baselines (`app/src/test/screenshots`) after a deliberate UI change |
+| `cargo test --test usb_import` (desktop) | USB import against a folder laid out as a phone shows it; `FENNEC_USB_PHONE=<folder>` imports a folder pulled from a real phone or the emulator (`adb pull "/sdcard/Download/Fennec Recorder"`) |
 | `e2e/run-e2e.sh` | The real Fennec (headless) and the app in the emulator: pair through Fennec's link, record twice (once with a pause), send, see both transcribed, unpair. Then checks on the desktop that both arrived, decode to their full length, are dated and filed as on the phone, and that the phone is unpaired |
 
 The end-to-end run needs the emulator (`pixel8-api36` on port 5580) and a
