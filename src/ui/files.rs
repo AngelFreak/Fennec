@@ -16,7 +16,7 @@ use super::{Deps, icon_button, label};
 use crate::audio::decode::decode_file;
 use crate::audio::playback::{Player, peaks};
 use crate::ingest::{IngestError, IngestEvent, IngestOptions, Recognizer, ingest_file};
-use crate::store::{DocumentId, NewDocument, Store};
+use crate::store::{DocumentId, InboundState, NewDocument, Store};
 use crate::text::{clock, duration};
 use crate::worker::{EngineWorker, Priority};
 
@@ -491,15 +491,7 @@ impl FilesPage {
                     continue;
                 }
             };
-            let id = {
-                let mut n = self.next_id.borrow_mut();
-                *n += 1;
-                *n
-            };
-            first_new.get_or_insert(id);
-            let item = self.make_item(id, path.clone(), doc);
-            self.queue_list.append(&item.row);
-            self.items.borrow_mut().push(item);
+            first_new.get_or_insert(self.push_item(doc, path.clone()));
         }
         if self.selected.borrow().is_none()
             && let Some(id) = first_new
@@ -509,17 +501,62 @@ impl FilesPage {
         self.dispatch_waiting();
     }
 
+    /// Queues a document that already exists, such as a recording from the
+    /// phone, for transcription of `path`.
+    pub fn add_document(self: &Rc<Self>, doc: DocumentId, path: PathBuf) {
+        let id = self.push_item(doc, path);
+        if self.selected.borrow().is_none() {
+            self.select(id);
+        }
+        self.dispatch_waiting();
+    }
+
+    fn push_item(self: &Rc<Self>, doc: DocumentId, path: PathBuf) -> u64 {
+        let id = {
+            let mut n = self.next_id.borrow_mut();
+            *n += 1;
+            *n
+        };
+        let item = self.make_item(id, path, doc);
+        self.queue_list.append(&item.row);
+        self.items.borrow_mut().push(item);
+        id
+    }
+
+    /// Tells the phone that sent `doc`, if one did, how transcribing goes.
+    fn report_to_phone(&self, doc: DocumentId, status: &ItemStatus) {
+        let (state, error) = match status {
+            ItemStatus::Waiting => (InboundState::Queued, None),
+            ItemStatus::Running { .. } => (InboundState::Transcribing, None),
+            ItemStatus::Done => (InboundState::Done, None),
+            ItemStatus::Failed(e) => (InboundState::Failed, Some(e.as_str())),
+            ItemStatus::Cancelled => (InboundState::Failed, Some("Cancelled in Fennec")),
+        };
+        if let Err(e) = self.store.set_inbound_state_for_document(doc, state, error) {
+            tracing::warn!("recording the phone status of document {doc}: {e}");
+        }
+    }
+
+    /// The file's name, or for a recording from the phone (whose file is
+    /// named by an id) the title it was given there.
+    fn shown_name(&self, path: &Path, doc: DocumentId) -> String {
+        let file = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if from_phone(path)
+            && let Ok(d) = self.store.document(doc)
+        {
+            return d.title;
+        }
+        file
+    }
+
     fn make_item(self: &Rc<Self>, id: u64, path: PathBuf, doc: DocumentId) -> Item {
         let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
         row.add_css_class("fx-queue-item");
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let name = label(
-            &path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            &["fx-queue-name"],
-        );
+        let name = label(&self.shown_name(&path, doc), &["fx-queue-name"]);
         name.set_hexpand(true);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let status = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -591,6 +628,7 @@ impl FilesPage {
                             done_ms: 0,
                             total_ms: 0,
                         };
+                        p.report_to_phone(item.doc, &item.status);
                         let _ = jobs.send(Job {
                             item: item.id,
                             path: item.path.clone(),
@@ -610,6 +648,7 @@ impl FilesPage {
                         .filter(|i| i.status == ItemStatus::Waiting)
                     {
                         item.status = ItemStatus::Failed(format!("Could not load the speech model: {e}"));
+                        p.report_to_phone(item.doc, &item.status);
                     }
                     p.refresh_rows();
                     p.render_transcript();
@@ -723,6 +762,7 @@ impl FilesPage {
                         Err(e) if e == "cancelled" => ItemStatus::Cancelled,
                         Err(e) => ItemStatus::Failed(e),
                     };
+                    self.report_to_phone(item.doc, &item.status);
                     rerender = is_selected;
                     header = is_selected;
                 }
@@ -880,12 +920,14 @@ impl FilesPage {
             .project_id
             .and_then(|p| self.store.projects().ok()?.into_iter().find(|x| x.id == p))
             .map(|p| p.name);
-        let file = doc
-            .audio_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let file = match doc.audio_path.as_ref() {
+            Some(p) if from_phone(p) => "From your phone".to_string(),
+            Some(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            None => String::new(),
+        };
         let length = self.selected_item_duration().map(duration);
         let details = match (file.is_empty(), length) {
             (false, Some(l)) => format!("{file} · {l}"),
@@ -1258,4 +1300,10 @@ fn model_name(settings: &crate::config::Settings) -> String {
         .find(|m| m.file_name == settings.model)
         .map(|m| m.name.to_string())
         .unwrap_or_else(|| settings.model.trim_end_matches(".bin").to_string())
+}
+
+/// Recordings from Fennec Recorder are stored as `phone-<id>.<ext>`.
+fn from_phone(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("phone-"))
 }

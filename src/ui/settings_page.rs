@@ -17,7 +17,9 @@ use gtk::{gio, glib};
 
 use super::engine::EngineHolder;
 use super::mic_test::MicTest;
+use super::phone::PhoneLink;
 use super::settings_ai::AiSettingsUi;
+use super::settings_phone::PhoneSettingsUi;
 use super::{Deps, Handler, label};
 use crate::audio::capture::input_devices;
 use crate::config::Backend;
@@ -34,12 +36,13 @@ const RETENTION: [(&str, Option<u32>); 4] = [
 ];
 
 /// The sections: id and title, in sidebar order.
-const SECTIONS: [(&str, &str); 6] = [
+const SECTIONS: [(&str, &str); 7] = [
     ("model", "Speech model"),
     ("dictation", "Dictation"),
     ("ai", "AI providers"),
     ("ai-defaults", "AI defaults"),
     ("privacy", "Privacy"),
+    ("phone", "Phone"),
     ("storage", "Storage"),
 ];
 
@@ -97,6 +100,7 @@ pub struct SettingsPage {
     disk_bar: gtk::DrawingArea,
     disk_legend: Vec<gtk::Label>,
     pub ai: Rc<AiSettingsUi>,
+    pub phone: Rc<PhoneSettingsUi>,
     pub mic_test: Rc<MicTest>,
     pub input_gain: RefCell<Option<gtk::Scale>>,
     /// "Delete audio after" (Storage).
@@ -106,7 +110,7 @@ pub struct SettingsPage {
 }
 
 impl SettingsPage {
-    pub fn new(deps: Deps, engine: Rc<EngineHolder>) -> Rc<Self> {
+    pub fn new(deps: Deps, engine: Rc<EngineHolder>, link: Rc<PhoneLink>) -> Rc<Self> {
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         let inspector = gtk::Stack::new();
@@ -154,12 +158,14 @@ impl SettingsPage {
 
         let disk_legend = (0..4).map(|_| label("", &["fx-mono"])).collect();
         let ai = AiSettingsUi::new(deps.clone());
+        let phone = PhoneSettingsUi::new(deps.clone(), link);
         let mic_test = MicTest::new(deps.clone());
         let page = Rc::new(Self {
             root: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             header_actions: gtk::Box::new(gtk::Orientation::Horizontal, 8),
             nav_panel,
             ai,
+            phone,
             mic_test,
             input_gain: RefCell::default(),
             audio_retention,
@@ -193,6 +199,7 @@ impl SettingsPage {
             page.ai.providers_section(),
             page.ai.defaults_section(),
             page.ai.privacy_section(),
+            page.phone.section(),
             page.storage_section(),
         ];
         let mut nav = Vec::new();
@@ -248,6 +255,12 @@ impl SettingsPage {
             }
         });
         let weak = Rc::downgrade(&page);
+        page.phone.connect_changed(move |()| {
+            if let Some(p) = weak.upgrade() {
+                p.refresh_nav();
+            }
+        });
+        let weak = Rc::downgrade(&page);
         page.root.connect_map(move |_| {
             if let Some(p) = weak.upgrade() {
                 p.refresh_local_projects();
@@ -297,6 +310,7 @@ impl SettingsPage {
         }
         match id {
             "ai" => self.refresh_local_projects(),
+            "phone" => self.phone.refresh(),
             "storage" => self.measure_storage(),
             _ => {}
         }
@@ -359,6 +373,7 @@ impl SettingsPage {
                     .map_or_else(|| plural(d as usize, "day"), |(l, _)| l.to_string())
             ),
         };
+        let phone = self.phone.summary();
         for (id, _, sub) in self.nav.borrow().iter() {
             sub.set_text(&match id.as_str() {
                 "model" => model_label(&s),
@@ -366,6 +381,7 @@ impl SettingsPage {
                 "ai" => ai_line.clone(),
                 "ai-defaults" => defaults.clone(),
                 "privacy" => privacy.clone(),
+                "phone" => phone.clone(),
                 _ => storage.clone(),
             });
         }
@@ -1641,7 +1657,7 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-fn plural(n: usize, word: &str) -> String {
+pub(super) fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
@@ -1807,7 +1823,7 @@ fn model_row(
 }
 
 /// A section's heading and a line under it, with an optional button on the right.
-fn title_block(title: &str, lede: &str, action: Option<&gtk::Button>) -> gtk::Box {
+pub(super) fn title_block(title: &str, lede: &str, action: Option<&gtk::Button>) -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     let text = gtk::Box::new(gtk::Orientation::Vertical, 4);
     text.set_hexpand(true);

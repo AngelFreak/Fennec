@@ -97,6 +97,31 @@ pub struct Settings {
     pub default_template: String,
     pub commands: CommandTable,
     pub ai: crate::ai::AiSettings,
+    pub phone: PhoneSettings,
+}
+
+/// Receiving recordings from Fennec Recorder on a phone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PhoneSettings {
+    /// Listen on the local network for paired phones.
+    pub enabled: bool,
+    pub port: u16,
+    /// Project for recordings that name none, or one that no longer exists.
+    pub default_project: Option<i64>,
+    /// Offer to import recordings from a phone plugged in over USB.
+    pub usb_import: bool,
+}
+
+impl Default for PhoneSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: crate::sync::DEFAULT_PORT,
+            default_project: None,
+            usb_import: true,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -116,6 +141,7 @@ impl Default for Settings {
             default_template: "notat".into(),
             commands: CommandTable::default(),
             ai: crate::ai::AiSettings::default(),
+            phone: PhoneSettings::default(),
         }
     }
 }

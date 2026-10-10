@@ -35,6 +35,25 @@ fn reopening_the_database_keeps_data_and_does_not_rerun_migrations() {
 }
 
 #[test]
+fn threads_opening_a_new_database_together_all_succeed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fennec.db");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (path, barrier) = (path.clone(), std::sync::Arc::clone(&barrier));
+            std::thread::spawn(move || {
+                barrier.wait();
+                Store::open(&path).map(|_| ()).map_err(|e| e.to_string())
+            })
+        })
+        .collect();
+    for t in threads {
+        assert_eq!(t.join().unwrap(), Ok(()));
+    }
+}
+
+#[test]
 fn documents_belong_to_one_project_and_list_counts_follow() {
     let (_d, s) = store();
     let harbour = s.create_project("Operation Harbour", "#1D4ED8").unwrap();

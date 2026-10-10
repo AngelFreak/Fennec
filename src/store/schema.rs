@@ -1,6 +1,6 @@
 //! Schema migrations, applied in order and tracked with `PRAGMA user_version`.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 const MIGRATIONS: &[&str] = &[
     // 1: initial schema
@@ -105,15 +105,45 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (heard, wanted)
     );
     "#,
+    // 5: phones paired with Fennec Recorder and the recordings they send
+    r#"
+    CREATE TABLE devices (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        secret_hash  TEXT NOT NULL UNIQUE,
+        paired_at    INTEGER NOT NULL,
+        last_seen_at INTEGER
+    );
+    CREATE TABLE inbound_recordings (
+        uuid        TEXT PRIMARY KEY,
+        device_id   INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        title       TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+        template_id TEXT,
+        ext         TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        sha256      TEXT NOT NULL,
+        received    INTEGER NOT NULL DEFAULT 0,
+        state       TEXT NOT NULL CHECK (state IN ('receiving', 'queued', 'transcribing', 'done', 'failed')),
+        document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+        error       TEXT,
+        updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX inbound_document ON inbound_recordings(document_id);
+    "#,
 ];
 
+/// Brings the schema up to date. Threads may open a new database at the
+/// same moment (the window, audio clean-up, the phone receiver): the write
+/// lock is taken before the version is read, so only one of them migrates.
 pub(super) fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
-    let current: usize = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current: usize = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
-        let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", i + 1)?;
-        tx.commit()?;
     }
-    Ok(())
+    tx.commit()
 }

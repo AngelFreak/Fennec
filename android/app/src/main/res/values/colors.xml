@@ -1,0 +1,5 @@
+<resources>
+    <color name="fennec_accent">#C2410C</color>
+    <color name="fennec_surface">#FFFFFF</color>
+    <color name="widget_text">#15171C</color>
+</resources>
