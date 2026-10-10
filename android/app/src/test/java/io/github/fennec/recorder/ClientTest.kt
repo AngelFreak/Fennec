@@ -46,6 +46,14 @@ class ClientTest {
     }
 
     @Test
+    fun `a pin mismatch is recognised when a later attempt failed too`() {
+        val first = javax.net.ssl.SSLHandshakeException("handshake").apply { initCause(io.github.fennec.recorder.net.PinMismatch("x")) }
+        val last = java.net.ConnectException("refused").apply { addSuppressed(first) }
+        assertTrue(Api.Unreachable(last).wrongComputer)
+        assertTrue(!Api.Unreachable(java.net.ConnectException("refused")).wrongComputer)
+    }
+
+    @Test
     fun `nobody listening is unreachable, not a wrong computer`() = runBlocking {
         val address = fennec.address
         fennec.server.close()

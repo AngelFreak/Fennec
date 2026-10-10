@@ -125,7 +125,8 @@ class ScreenshotTest(private val dark: Boolean) {
 
     @Test
     fun recordUnpaired() = shot("record-unpaired") {
-        RecordScreen(Recorder.Status.Idle, NextRecording(), DesktopInfo(), true, null, {}, {}, {}, {}, {}, {}, {})
+        // A title of its own: the placeholder is the current time.
+        RecordScreen(Recorder.Status.Idle, NextRecording("Interview"), DesktopInfo(), true, null, {}, {}, {}, {}, {}, {}, {})
     }
 
     @Test

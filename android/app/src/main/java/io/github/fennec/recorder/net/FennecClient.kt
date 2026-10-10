@@ -37,7 +37,14 @@ sealed interface Api<out T> {
 
     /** Fennec could not be reached (or another computer answered). */
     data class Unreachable(val cause: Throwable) : Api<Nothing> {
-        val wrongComputer: Boolean get() = generateSequence(cause) { it.cause }.any { it is PinMismatch }
+        /** A pin mismatch anywhere in the failure: as its cause, or suppressed
+         *  under a later attempt (OkHttp tries each address of a host). */
+        val wrongComputer: Boolean get() = involves(cause, mutableSetOf())
+
+        private fun involves(e: Throwable?, seen: MutableSet<Throwable>): Boolean {
+            if (e == null || !seen.add(e)) return false
+            return e is PinMismatch || involves(e.cause, seen) || e.suppressed.any { involves(it, seen) }
+        }
     }
 }
 
