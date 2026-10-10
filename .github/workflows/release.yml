@@ -29,6 +29,12 @@ permissions:
 jobs:
   deb:
     runs-on: ubuntu-24.04
+    env:
+      # whisper.cpp otherwise compiles for this runner's own CPU, and the
+      # package then crashes (illegal instruction) on computers without its
+      # extensions, AVX-512 above all. Off, it builds for any x86-64 CPU from
+      # 2013 on (AVX2, FMA, F16C).
+      GGML_NATIVE: "OFF"
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +48,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # whisper-rs-sys does not rebuild when GGML_* changes, so the
+          # setting is part of the cache's key.
+          key: ggml-native-${{ env.GGML_NATIVE }}
 
       - name: Check the tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')
