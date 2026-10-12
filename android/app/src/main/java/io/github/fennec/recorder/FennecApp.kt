@@ -21,6 +21,7 @@ import io.github.fennec.recorder.sync.SharedCopies
 import io.github.fennec.recorder.sync.usbSidecar
 import io.github.fennec.recorder.sync.UploadWorker
 import io.github.fennec.recorder.sync.Uploader
+import io.github.fennec.recorder.sync.findFennec
 import io.github.fennec.recorder.sync.follow
 import io.github.fennec.recorder.sync.recordingsDir
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 /** When the phone last heard from Fennec. */
@@ -49,6 +52,8 @@ class AppGraph(
     val copies: SharedCopies,
     /** Asks WorkManager to send waiting recordings (tests pass their own). */
     private val schedule: (AppGraph) -> Unit,
+    /** Where Fennec with this id is announced on the network (tests pass their own). */
+    private val find: suspend (String) -> List<String> = { id -> findFennec(context, id) },
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val lastContact = MutableStateFlow(Contact())
@@ -64,27 +69,56 @@ class AppGraph(
         lastContact.value = Contact()
     }
 
-    /** Unpairs here and tells Fennec, if it can be reached. */
-    suspend fun unpair() {
-        pairing.paired.value?.let { client(it).unpair() }
+    /**
+     * Unpairs here at once, then tells Fennec if it can be reached: away from
+     * Fennec's network that can take a while, and the phone is unpaired either way.
+     */
+    fun unpair() {
+        val p = pairing.paired.value ?: return
         pairing.forget()
         lastContact.value = Contact()
+        scope.launch { runCatching { client(p, timeoutSeconds = 10).unpair() } }
     }
 
     /** Reads Fennec's projects and templates for the pickers. */
     suspend fun refreshInfo() {
         val p = pairing.paired.value ?: return
-        when (val info = client(p).info()) {
+        var r = client(p).info()
+        if (r is Api.Unreachable && relocate()) r = client(pairing.paired.value ?: return).info()
+        when (r) {
             is Api.Ok -> {
-                pairing.saveInfo(info.value)
+                pairing.saveInfo(r.value)
                 lastContact.value = Contact(reachable = true, at = System.currentTimeMillis())
             }
-            is Api.Refused -> if (info.status == 401) unpairedByFennec()
+            is Api.Refused -> if (r.status == 401) unpairedByFennec()
             is Api.Unreachable -> lastContact.value = lastContact.value.copy(
                 reachable = false,
-                wrongComputer = info.wrongComputer,
+                wrongComputer = r.wrongComputer,
             )
         }
+    }
+
+    private val relocating = Mutex()
+    private var lastSearch = 0L
+
+    /**
+     * Fennec did not answer at its address: looks for it by name on this
+     * network and keeps the address that answers with its certificate. True
+     * when it was found somewhere new. Searches at most every 20 seconds.
+     */
+    suspend fun relocate(): Boolean = relocating.withLock {
+        val p = pairing.paired.value ?: return false
+        val now = System.currentTimeMillis()
+        if (now - lastSearch < 20_000) return pairing.paired.value?.address != p.address
+        lastSearch = now
+        for (address in find(p.id)) {
+            if (address == p.address) continue
+            if (client(p.copy(address = address), timeoutSeconds = 10).info() is Api.Ok) {
+                pairing.moved(address)
+                return true
+            }
+        }
+        false
     }
 
     /** Adds a project (no [id]) or changes one in Fennec. Null when saved, else why not. */
@@ -239,6 +273,7 @@ class FennecApp : Application() {
             inMemory: Boolean = false,
             copies: SharedCopies? = null,
             schedule: ((AppGraph) -> Unit)? = null,
+            find: (suspend (String) -> List<String>)? = null,
         ): AppGraph {
             val db = if (inMemory) {
                 Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
@@ -253,6 +288,7 @@ class FennecApp : Application() {
                 recordingsDir(context),
                 copies ?: MediaStoreCopies(context.contentResolver),
                 schedule ?: { g -> UploadWorker.enqueue(g.context, g.settings.settings.value.unmeteredOnly) },
+                find ?: { id -> findFennec(context.applicationContext, id) },
             )
         }
     }

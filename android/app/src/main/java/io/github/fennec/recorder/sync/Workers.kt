@@ -24,13 +24,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         app.checkUsb()
         val paired = app.pairing.paired.value ?: return Result.success()
         var outcome = app.uploader(paired).sendAll()
-        if (outcome == Outcome.RETRY) {
-            // Fennec may have a new address on this network.
-            val moved = findFennec(applicationContext, paired.id)
-            if (moved != null && moved != paired.address) {
-                app.pairing.moved(moved)
-                outcome = app.uploader(app.pairing.paired.value!!).sendAll()
-            }
+        if (outcome == Outcome.RETRY && app.relocate()) {
+            // Fennec has a new address on this network.
+            outcome = app.pairing.paired.value?.let { app.uploader(it).sendAll() } ?: Outcome.UNPAIRED
         }
         app.lastContact.value = when (outcome) {
             Outcome.RETRY -> app.lastContact.value.copy(reachable = false)

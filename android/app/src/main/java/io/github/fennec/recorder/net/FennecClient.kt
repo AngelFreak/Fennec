@@ -104,10 +104,10 @@ class FennecClient(
 
     private suspend fun call(method: String, path: String, body: RequestBody? = null): Api<JsonObject> =
         withContext(Dispatchers.IO) {
-            val req = Request.Builder().url("https://$address$path").method(method, body)
-                .apply { secret?.let { header("Authorization", "Bearer $it") } }
-                .build()
             try {
+                val req = Request.Builder().url("https://$address$path").method(method, body)
+                    .apply { secret?.let { header("Authorization", "Bearer $it") } }
+                    .build()
                 http.newCall(req).execute().use { resp ->
                     val text = resp.body.string()
                     val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrDefault(JsonObject(emptyMap()))
@@ -125,6 +125,9 @@ class FennecClient(
             } catch (e: SSLHandshakeException) {
                 Api.Unreachable(e)
             } catch (e: IOException) {
+                Api.Unreachable(e)
+            } catch (e: IllegalArgumentException) {
+                // An address no URL can hold (saved by an older version): find Fennec again.
                 Api.Unreachable(e)
             }
         }

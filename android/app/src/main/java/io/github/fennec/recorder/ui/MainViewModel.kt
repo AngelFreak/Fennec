@@ -119,7 +119,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** While a screen shows: read Fennec's projects and follow recordings it has. */
     fun watch(): Job = viewModelScope.launch {
         app.refreshInfo()
+        var tick = 0
         while (isActive) {
+            // Not reachable: look again now and then (another Wi-Fi, Fennec opened).
+            if (++tick % 10 == 0 && app.lastContact.value.reachable == false) app.refreshInfo()
             app.checkUsb()
             app.refreshStatuses()
             if (app.db.recordings().toSend().isNotEmpty() && app.pairing.paired.value != null) app.sendSoon()
@@ -241,7 +244,5 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun unpair() {
-        viewModelScope.launch { app.unpair() }
-    }
+    fun unpair() = app.unpair()
 }
