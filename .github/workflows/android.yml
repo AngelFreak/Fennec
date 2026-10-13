@@ -1,0 +1,51 @@
+# Fennec Recorder's tests on every change to the app or to what it shares
+# with Fennec: the phone protocol (src/sync) and the colour tokens the theme
+# must match (src/ui/style-*.css). The end-to-end run against the real Fennec
+# needs an emulator and stays local: android/e2e/run-e2e.sh.
+name: Android
+
+on:
+  pull_request:
+    paths:
+      - android/**
+      - src/sync/**
+      - src/ui/style-light.css
+      - src/ui/style-dark.css
+      - .github/workflows/android.yml
+  push:
+    branches: [main]
+    paths:
+      - android/**
+      - src/sync/**
+      - src/ui/style-light.css
+      - src/ui/style-dark.css
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit and screenshot tests, debug build
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports
+          path: |
+            android/app/build/reports/tests
+            android/app/build/outputs/roborazzi

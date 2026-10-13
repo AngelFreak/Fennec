@@ -15,6 +15,7 @@ use super::dictation::DictationPage;
 use super::engine::EngineHolder;
 use super::export_page::{ExportPage, Target};
 use super::files::FilesPage;
+use super::phone::PhoneLink;
 use super::project::{ProjectPage, Scope};
 use super::settings_page::{SettingsPage, model_label};
 use super::sidebar::{Nav, Sidebar};
@@ -36,6 +37,10 @@ pub struct MainWindow {
     pub project: Rc<ProjectPage>,
     pub templates: Rc<TemplatesPage>,
     pub settings: Rc<SettingsPage>,
+    /// Receives recordings from Fennec Recorder.
+    pub phone: Rc<PhoneLink>,
+    /// Imports recordings from a phone plugged in over USB.
+    pub usb: Rc<super::usb::UsbImport>,
     model_chips: Vec<gtk::Button>,
     pub sidebar: Rc<Sidebar>,
     pub store: Rc<Store>,
@@ -136,7 +141,8 @@ impl MainWindow {
         let project = ProjectPage::new(Rc::clone(&store), deps.clone());
         let templates = TemplatesPage::new(deps.paths.templates());
         sidebar.add_context("templates", &templates.list_panel);
-        let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine));
+        let phone = PhoneLink::new(deps.clone());
+        let settings = SettingsPage::new(deps.clone(), Rc::clone(&engine), Rc::clone(&phone));
         sidebar.add_context("settings", &settings.nav_panel);
 
         // Header actions per screen; the model chip appears on two of them.
@@ -201,6 +207,8 @@ impl MainWindow {
             project,
             templates,
             settings,
+            phone,
+            usb: super::usb::UsbImport::new(deps.clone()),
             model_chips,
             sidebar,
             store,
@@ -219,6 +227,7 @@ impl MainWindow {
         win.update_header();
         if show {
             win.open_initial_document();
+            win.start_phone_link();
         }
         win
     }
@@ -460,6 +469,50 @@ impl MainWindow {
             self.stack.set_visible_child_name(&to);
         }
         self.update_header();
+    }
+
+    /// Starts receiving from phones if Settings says so, and queues phone
+    /// recordings that arrived before Fennec last closed but were not
+    /// transcribed to the end.
+    fn start_phone_link(self: &Rc<Self>) {
+        self.phone.set_parent(&self.window);
+        let files = Rc::clone(&self.files);
+        self.phone
+            .connect_received(move |(doc, path)| files.add_document(doc, path));
+        let sidebar = Rc::clone(&self.sidebar);
+        self.phone.connect_projects_changed(move |()| sidebar.refresh());
+        self.usb.set_parent(&self.window);
+        let files = Rc::clone(&self.files);
+        self.usb
+            .connect_received(move |(doc, path)| files.add_document(doc, path));
+        let sidebar = Rc::clone(&self.sidebar);
+        self.usb.connect_imported(move |()| sidebar.go(Nav::Files));
+        self.usb.watch();
+        match self.store.inbound_to_resume() {
+            Ok(unfinished) => {
+                for r in unfinished {
+                    let Some(doc) = r.document_id else { continue };
+                    let Ok(d) = self.store.document(doc) else { continue };
+                    let Some(path) = d.audio_path.filter(|p| p.exists()) else {
+                        let _ = self.store.set_inbound_state(
+                            &r.info.uuid,
+                            crate::store::InboundState::Failed,
+                            None,
+                            Some("The recording's audio is gone from this computer."),
+                        );
+                        continue;
+                    };
+                    // Start over: a stopped transcription left part of the text.
+                    if let Err(e) = self.store.replace_paragraphs(doc, &[]) {
+                        tracing::warn!("restarting document {doc}: {e}");
+                        continue;
+                    }
+                    self.files.add_document(doc, path);
+                }
+            }
+            Err(e) => tracing::warn!("looking for unfinished phone recordings: {e}"),
+        }
+        self.phone.apply();
     }
 
     pub fn open_in_editor(&self, doc: crate::store::DocumentId) {

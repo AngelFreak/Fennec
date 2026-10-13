@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.Fennec" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/fennec_surface</item>
+    </style>
+</resources>

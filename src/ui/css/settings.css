@@ -142,3 +142,13 @@ button.fx-primary.small { min-height: 32px; padding: 0 12px; font-size: 12.5px; 
 /* Storage */
 .fx-storage-size { color: @fx_text_soft; }
 .fx-disk-bar { color: @fx_accent; }
+
+/* Phone */
+.fx-network-note { background-color: @fx_accent_soft; border-radius: 10px; padding: 12px 14px; color: @fx_accent_text; }
+.fx-network-note-text { color: @fx_text; font-size: 13px; }
+.fx-pair-qr { border: 1px solid @fx_divider; border-radius: 8px; }
+.fx-pair-offer { padding: 16px; }
+.fx-pair-token { font-size: 13px; color: @fx_text; }
+.fx-pair-waiting { font-size: 12.5px; font-weight: 500; color: @fx_accent_text; margin-top: 6px; }
+.fx-pair-code { letter-spacing: 2px; margin-top: 8px; }
+button.fx-secondary.danger label { color: @fx_error; }

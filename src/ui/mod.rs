@@ -14,11 +14,14 @@ mod export_page;
 mod files;
 mod inspector;
 mod mic_test;
+pub mod phone;
 pub mod project;
 mod settings_ai;
 mod settings_page;
+mod settings_phone;
 pub mod sidebar;
 mod templates_page;
+pub mod usb;
 mod window;
 mod wrap;
 
@@ -91,6 +94,9 @@ pub struct Deps {
     pub confirm_cloud: ConfirmCloud,
     /// True while dictation runs (local AI models wait for it).
     pub dictation_live: Arc<AtomicBool>,
+    /// Receive phone recordings on this computer only, without announcing
+    /// Fennec on the network (tests).
+    pub phone_local_only: bool,
 }
 
 impl Deps {
@@ -144,6 +150,7 @@ impl Deps {
             secrets: Arc::new(crate::ai::Keyring),
             confirm_cloud: Rc::new(ai::confirm_with_dialog),
             dictation_live: Arc::new(AtomicBool::new(false)),
+            phone_local_only: false,
         }
     }
 }

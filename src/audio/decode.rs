@@ -201,6 +201,25 @@ mod tests {
         assert_eq!(resample_to_16k(&t, 16_000).unwrap(), t);
     }
 
+    /// Fennec Recorder records raw AAC (ADTS); `tests/fixtures/phone_recorder.aac`
+    /// came from the Android emulator.
+    #[test]
+    fn phone_recordings_decode_and_a_cut_short_one_still_does() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/phone_recorder.aac");
+        let whole = decode_file(&fixture).unwrap();
+        let secs = whole.len() as f64 / 16_000.0;
+        assert!((secs - 15.8).abs() < 0.5, "{secs} s");
+
+        // The app killed mid-recording: the file just stops.
+        let dir = tempfile::tempdir().unwrap();
+        let cut = dir.path().join("cut.aac");
+        let bytes = std::fs::read(&fixture).unwrap();
+        std::fs::write(&cut, &bytes[..bytes.len() / 2 + 333]).unwrap();
+        let part = decode_file(&cut).unwrap();
+        let ratio = part.len() as f64 / whole.len() as f64;
+        assert!((0.4..0.6).contains(&ratio), "{ratio}");
+    }
+
     #[test]
     fn missing_file_is_an_open_error_naming_the_path() {
         let err = decode_file(Path::new("/nope/lyd.mp3")).unwrap_err();

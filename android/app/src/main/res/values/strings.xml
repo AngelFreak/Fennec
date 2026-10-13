@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Fennec Recorder</string>
+    <string name="tile_label">Record</string>
+    <string name="widget_description">Start a recording</string>
+</resources>

@@ -1,7 +1,10 @@
 //! Documents, projects, tags and everything attached to them, in SQLite.
 
+mod phone;
 pub mod retention;
 mod schema;
+
+pub use phone::{Device, DeviceId, Inbound, InboundState, NewInbound};
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -11,6 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
 
 pub type ProjectId = i64;
+
+/// Colours a new project can have, in the order the sidebar hands them out
+/// (the phone app offers the same).
+pub const PROJECT_COLORS: [&str; 5] = ["#C2410C", "#1D4ED8", "#0F766E", "#6B21A8", "#9AA1AE"];
 pub type DocumentId = i64;
 pub type ParagraphId = i64;
 pub type ActionItemId = i64;
@@ -248,10 +255,30 @@ impl Store {
     }
 
     fn init(mut conn: Connection) -> Result<Self> {
+        // Threads that open a new database together can get "busy" at once,
+        // without SQLite's usual wait (switching to WAL, starting the
+        // migration). Waiting a moment and trying again settles it.
+        let mut tries = 0;
+        loop {
+            match Self::set_up(&mut conn) {
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if e.code == rusqlite::ErrorCode::DatabaseBusy && tries < 100 =>
+                {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                result => {
+                    result?;
+                    return Ok(Self { conn });
+                }
+            }
+        }
+    }
+
+    fn set_up(conn: &mut Connection) -> rusqlite::Result<()> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
-        schema::migrate(&mut conn)?;
-        Ok(Self { conn })
+        schema::migrate(conn)
     }
 
     // ---- projects ----

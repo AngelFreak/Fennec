@@ -7,7 +7,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 
 use super::label;
-use crate::store::{ProjectFilter, Store};
+use crate::store::{PROJECT_COLORS, ProjectFilter, Store};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Nav {
@@ -18,8 +18,6 @@ pub enum Nav {
     Project(ProjectFilter),
     Tag(String),
 }
-
-const PROJECT_COLORS: [&str; 5] = ["#C2410C", "#1D4ED8", "#0F766E", "#6B21A8", "#9AA1AE"];
 
 pub struct Sidebar {
     pub root: gtk::Box,
