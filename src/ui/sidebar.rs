@@ -7,7 +7,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 
 use super::label;
-use crate::store::{PROJECT_COLORS, ProjectFilter, Store};
+use crate::store::{DocumentId, PROJECT_COLORS, ProjectFilter, Store};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Nav {
@@ -30,6 +30,10 @@ pub struct Sidebar {
     store: Rc<Store>,
     on_nav: super::Handler<Nav>,
     active: RefCell<Nav>,
+    /// Documents deleted but still offered for Undo: not counted.
+    hidden: RefCell<Vec<DocumentId>>,
+    /// The counts shown, by project name (tests).
+    counts: RefCell<Vec<(String, usize)>>,
 }
 
 impl Sidebar {
@@ -99,6 +103,8 @@ impl Sidebar {
             store,
             on_nav: RefCell::default(),
             active: RefCell::new(Nav::Dictate),
+            hidden: RefCell::default(),
+            counts: RefCell::default(),
         });
         sidebar.wire(&add);
         sidebar.refresh();
@@ -190,6 +196,20 @@ impl Sidebar {
         }
     }
 
+    /// The document count beside a project in the list (tests).
+    pub fn count_of(&self, name: &str) -> Option<usize> {
+        self.counts
+            .borrow()
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| *c)
+    }
+
+    /// The screen marked as current.
+    pub fn active(&self) -> Nav {
+        self.active.borrow().clone()
+    }
+
     pub fn set_active(&self, nav: &Nav) {
         *self.active.borrow_mut() = nav.clone();
         let key = match nav {
@@ -209,18 +229,34 @@ impl Sidebar {
         self.refresh();
     }
 
+    /// Documents waiting for Undo, left out of the counts and tags.
+    pub fn set_hidden(&self, ids: Vec<DocumentId>) {
+        *self.hidden.borrow_mut() = ids;
+    }
+
     /// Rebuilds the project and tag lists from the store.
     pub fn refresh(&self) {
         while let Some(c) = self.projects.first_child() {
             self.projects.remove(&c);
         }
-        let projects = self.store.projects().unwrap_or_default();
+        let hidden: Vec<_> = self
+            .hidden
+            .borrow()
+            .iter()
+            .filter_map(|id| self.store.document(*id).ok())
+            .collect();
+        let mut projects = self.store.projects().unwrap_or_default();
+        for p in &mut projects {
+            let gone = hidden.iter().filter(|d| d.project_id == Some(p.id)).count();
+            p.document_count = p.document_count.saturating_sub(gone);
+        }
         let all = self
             .store
             .documents(&Default::default())
             .map(|d| d.len())
-            .unwrap_or(0);
-        let unsorted: usize = all - projects.iter().map(|p| p.document_count).sum::<usize>();
+            .unwrap_or(0)
+            .saturating_sub(hidden.len());
+        let unsorted: usize = all.saturating_sub(projects.iter().map(|p| p.document_count).sum::<usize>());
         let active = self.active.borrow().clone();
         let mut rows: Vec<(String, String, usize, ProjectFilter)> =
             vec![("All documents".into(), "#9AA1AE".into(), all, ProjectFilter::All)];
@@ -235,6 +271,7 @@ impl Sidebar {
             unsorted,
             ProjectFilter::Unsorted,
         ));
+        *self.counts.borrow_mut() = rows.iter().map(|r| (r.0.clone(), r.2)).collect();
         for (name, color, count, filter) in rows {
             let row = gtk::Button::new();
             row.add_css_class("fx-project-row");
@@ -278,6 +315,10 @@ impl Sidebar {
         }
         // Most used first, as in the mockup.
         let mut tags = self.store.tags().unwrap_or_default();
+        for (tag, count) in &mut tags {
+            *count = count.saturating_sub(hidden.iter().filter(|d| d.tags.contains(tag)).count());
+        }
+        tags.retain(|(_, count)| *count > 0);
         tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         for (tag, _count) in tags {
             let b = gtk::Button::with_label(&format!("#{tag}"));

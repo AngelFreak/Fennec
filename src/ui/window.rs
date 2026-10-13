@@ -21,7 +21,7 @@ use super::settings_page::{SettingsPage, model_label};
 use super::sidebar::{Nav, Sidebar};
 use super::templates_page::TemplatesPage;
 use super::{Deps, icon_button, label};
-use crate::store::{DocumentFilter, Store};
+use crate::store::{DocumentFilter, ProjectFilter, Store};
 
 /// Screens that replace the whole window body and come with a back button.
 const SUB_PAGES: [&str; 2] = ["export", "cleanup"];
@@ -228,6 +228,8 @@ impl MainWindow {
         if show {
             win.open_initial_document();
             win.start_phone_link();
+            // Opens on the overview; the editor already holds the latest document.
+            win.sidebar.go(Nav::Project(ProjectFilter::All));
         }
         win
     }
@@ -325,6 +327,7 @@ impl MainWindow {
         let weak = Rc::downgrade(self);
         self.project.connect_changed(move |()| {
             if let Some(w) = weak.upgrade() {
+                w.sidebar.set_hidden(w.project.hidden_ids());
                 w.sidebar.refresh();
                 w.update_header();
             }

@@ -1590,6 +1590,7 @@ impl ProjectPage {
         self.toast_undo.set_visible(true);
         self.toast.set_visible(true);
         self.render_list();
+        self.notify_changed();
     }
 
     pub fn undo_delete(self: &Rc<Self>) {
@@ -1599,6 +1600,7 @@ impl ProjectPage {
         pending.timer.remove();
         self.toast.set_visible(false);
         self.render_list();
+        self.notify_changed();
     }
 
     /// Deletes the documents waiting for Undo now.
@@ -1672,7 +1674,8 @@ impl ProjectPage {
         });
     }
 
-    fn hidden_ids(&self) -> Vec<DocumentId> {
+    /// Documents deleted but still offered for Undo.
+    pub fn hidden_ids(&self) -> Vec<DocumentId> {
         self.pending_delete
             .borrow()
             .as_ref()
