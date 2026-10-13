@@ -15,8 +15,8 @@ android {
         applicationId = "io.github.fennec.recorder"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 7
-        versionName = "0.2.0"
+        versionCode = 8
+        versionName = "0.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing only from Gradle properties or environment variables,
