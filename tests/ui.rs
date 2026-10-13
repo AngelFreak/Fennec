@@ -228,7 +228,12 @@ fn main() {
         ],
         true,
     ));
-    check("opens on the Dictate screen", w.visible_page() == "dictate");
+    check("opens on All documents", w.visible_page() == "project");
+    check(
+        "the sidebar marks All documents",
+        w.sidebar.active() == fennec::ui::Nav::Project(fennec::store::ProjectFilter::All),
+    );
+    w.sidebar.go(fennec::ui::Nav::Dictate);
     check(
         "the speech model loads at launch, so the first recording starts at once",
         pump_until(Duration::from_secs(5), || w.dictation.model_loaded()),
@@ -1020,6 +1025,7 @@ fn document_checks(root: &std::path::Path) {
     std::fs::write(&recording, b"stand-in").unwrap();
     store.set_audio_path(ids[0], Some(&recording)).unwrap();
     w.project.clear_selection();
+    let (all_before, meetings_before) = (w.sidebar.count_of("All documents"), w.sidebar.count_of("Møder"));
     w.project.select_document(ids[0], true);
     w.project.delete_selected();
     check(
@@ -1028,10 +1034,20 @@ fn document_checks(root: &std::path::Path) {
             && w.project.toast_text().as_deref() == Some("Deleted «Møde om tilbud»")
             && store.document(ids[0]).is_ok(),
     );
+    check(
+        "the sidebar counts leave out a document waiting for Undo",
+        meetings_before.is_some_and(|n| n > 0)
+            && w.sidebar.count_of("All documents") == all_before.map(|n| n - 1)
+            && w.sidebar.count_of("Møder") == meetings_before.map(|n| n - 1),
+    );
     w.project.undo_delete();
     check(
         "Undo brings the document back",
         w.project.shown_titles().contains(&"Møde om tilbud".to_string()) && w.project.toast_text().is_none(),
+    );
+    check(
+        "and its counts",
+        w.sidebar.count_of("All documents") == all_before && w.sidebar.count_of("Møder") == meetings_before,
     );
     w.project.select_document(ids[0], true);
     w.project.delete_selected();
@@ -1039,6 +1055,11 @@ fn document_checks(root: &std::path::Path) {
     check(
         "without Undo the document is deleted, with its recording",
         store.document(ids[0]).is_err() && !recording.exists() && count(meetings) == 1,
+    );
+    check(
+        "once deleted it stays out of the counts",
+        w.sidebar.count_of("All documents") == all_before.map(|n| n - 1)
+            && w.sidebar.count_of("Møder") == meetings_before.map(|n| n - 1),
     );
 
     // Closing the window (or quitting) carries out a delete waiting for Undo.
