@@ -57,16 +57,27 @@ impl LevelWindow {
 /// decibels above the room's noise, so a quiet room shows low bars and
 /// speech moves them, whatever the microphone's own hiss. The noise floor
 /// drops to quieter readings quickly and creeps up 1 dB a second.
+///
+/// A full bar is at least 20 dB above the floor, more when recent speech
+/// was louder: in a quiet room speech sits 30-45 dB above it, and a fixed
+/// 20 dB held every bar at the top. The loudest recent reading then fills
+/// about 85 % of a bar, and the top relaxes 3 dB a second.
 #[derive(Debug, Default)]
 pub struct Meter {
     floor: Option<f32>,
+    /// The loudest recent reading, in dB above the floor.
+    peak_db: f32,
 }
 
 impl Meter {
-    /// Decibels above the floor that fill a bar.
+    /// Decibels above the floor that fill a bar, at the least.
     const SPAN_DB: f32 = 20.0;
     /// 1 dB a second at 20 readings a second.
     const RISE: f32 = 1.005_773;
+    /// How high the loudest recent reading reaches.
+    const PEAK_HEIGHT: f32 = 0.85;
+    /// 3 dB a second at 20 readings a second.
+    const PEAK_FALL_DB: f32 = 0.15;
 
     /// Height from 0 to 1 for one level reading.
     pub fn height(&mut self, rms: f32) -> f32 {
@@ -77,7 +88,10 @@ impl Meter {
             Some(f) => f * Self::RISE,
         };
         self.floor = Some(floor);
-        (20.0 * (rms / floor).log10() / Self::SPAN_DB).clamp(0.0, 1.0)
+        let db = (20.0 * (rms / floor).log10()).max(0.0);
+        self.peak_db = db.max(self.peak_db - Self::PEAK_FALL_DB);
+        let span = Self::SPAN_DB.max(self.peak_db / Self::PEAK_HEIGHT);
+        (db / span).clamp(0.0, 1.0)
     }
 }
 
@@ -199,11 +213,37 @@ mod tests {
     }
 
     #[test]
-    fn speech_moves_the_bars_and_loud_speech_fills_them() {
+    fn speech_moves_the_bars_and_loud_speech_nears_the_top() {
         let mut m = settled();
         let normal = m.height(0.045);
         assert!((0.4..0.75).contains(&normal), "{normal}");
-        assert!(m.height(0.1) > 0.85);
+        // The loudest recent reading stops short of the top, for headroom.
+        let loud = m.height(0.1);
+        assert!((0.8..0.95).contains(&loud), "{loud}");
+    }
+
+    #[test]
+    fn with_a_quiet_room_speech_still_rises_and_falls() {
+        // A good microphone in a quiet room: speech sits 30-45 dB above the
+        // room, more than the 20 dB that used to fill a bar.
+        let mut m = Meter::default();
+        for _ in 0..40 {
+            m.height(0.0005);
+        }
+        let syllables = [0.03, 0.1, 0.05, 0.08, 0.03, 0.06, 0.1, 0.04];
+        let mut heights = Vec::new();
+        for _ in 0..10 {
+            for rms in syllables {
+                heights.push(m.height(rms));
+            }
+        }
+        let last = &heights[heights.len() - syllables.len()..];
+        let (low, high) = last
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), h| (lo.min(*h), hi.max(*h)));
+        assert!(high < 0.95, "the loudest syllable leaves headroom: {last:?}");
+        assert!(high - low > 0.15, "syllables show as different heights: {last:?}");
+        assert!(m.height(0.0005) < 0.1, "a pause drops back down");
     }
 
     #[test]
