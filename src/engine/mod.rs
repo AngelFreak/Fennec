@@ -1,12 +1,15 @@
 //! Speech-to-text engines. The rest of the app only sees [`Transcriber`].
 
+mod bilingual;
 pub mod sidecar;
 mod whisper;
 
+pub use bilingual::Bilingual;
 pub use sidecar::SidecarEngine;
 pub use whisper::WhisperEngine;
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// Audio sample rate every engine expects (mono f32).
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -24,8 +27,10 @@ pub struct Segment {
 
 #[derive(Debug, Clone)]
 pub struct TranscribeOptions {
-    /// ISO 639-1 code; Fennec always passes "da".
+    /// ISO 639-1 code, used when `spoken` is `None`.
     pub language: String,
+    /// The language of a whole dictation or file, chosen or detected.
+    pub spoken: Option<SpokenLanguage>,
     /// Vocabulary that steers the spelling of names and terms.
     pub initial_prompt: Option<String>,
     pub threads: usize,
@@ -41,6 +46,7 @@ impl Default for TranscribeOptions {
     fn default() -> Self {
         Self {
             language: "da".into(),
+            spoken: None,
             initial_prompt: None,
             threads: default_threads(),
             low_confidence_threshold: 0.4,
@@ -85,6 +91,62 @@ pub fn load_engine(path: &std::path::Path, gpu: bool) -> Result<Box<dyn Transcri
 pub trait Transcriber: Send {
     /// Transcribes 16 kHz mono samples.
     fn transcribe(&mut self, pcm: &[f32], opts: &TranscribeOptions) -> Result<Vec<Segment>, EngineError>;
+
+    /// Which of `among` (ISO 639-1 codes) the speech is in, and how sure
+    /// the model is (0–1). `None` from models that cannot tell.
+    fn detect_language(
+        &mut self,
+        _pcm: &[f32],
+        _among: &[&str],
+        _threads: usize,
+    ) -> Result<Option<(String, f32)>, EngineError> {
+        Ok(None)
+    }
+}
+
+/// The language of one dictation or file: chosen in Settings, or detected
+/// from its first words and then kept, so a session never switches model
+/// halfway. Clones share what was detected.
+#[derive(Debug, Clone, Default)]
+pub struct SpokenLanguage {
+    chosen: Option<String>,
+    detected: Arc<Mutex<Option<String>>>,
+}
+
+impl SpokenLanguage {
+    pub fn chosen(code: &str) -> Self {
+        Self {
+            chosen: Some(code.to_string()),
+            ..Default::default()
+        }
+    }
+
+    pub fn detect() -> Self {
+        Self::default()
+    }
+
+    /// The same choice for a new dictation or file, which detects afresh.
+    pub fn fresh(&self) -> Self {
+        Self {
+            chosen: self.chosen.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// The language, once chosen or detected.
+    pub fn current(&self) -> Option<String> {
+        self.chosen
+            .clone()
+            .or_else(|| self.detected.lock().expect("language poisoned").clone())
+    }
+
+    pub fn is_english(&self) -> bool {
+        self.current().as_deref() == Some("en")
+    }
+
+    fn remember(&self, code: &str) {
+        *self.detected.lock().expect("language poisoned") = Some(code.to_string());
+    }
 }
 
 /// Edda now and then writes no space after a full stop ("positivt.Denne");

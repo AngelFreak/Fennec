@@ -55,6 +55,19 @@ impl Default for CommandTable {
                 ("spørgsmålstegn".into(), Command::Punctuate('?')),
                 ("udråbstegn".into(), Command::Punctuate('!')),
                 ("kolon".into(), Command::Punctuate(':')),
+                // English dictation.
+                ("new paragraph".into(), Command::NewParagraph),
+                ("new line".into(), Command::NewLine),
+                ("delete last sentence".into(), Command::DeleteLastSentence),
+                ("stop dictation".into(), Command::StopDictation),
+                ("stop recording".into(), Command::StopDictation),
+                ("full stop".into(), Command::Punctuate('.')),
+                ("period".into(), Command::Punctuate('.')),
+                ("comma".into(), Command::Punctuate(',')),
+                ("question mark".into(), Command::Punctuate('?')),
+                ("exclamation mark".into(), Command::Punctuate('!')),
+                ("exclamation point".into(), Command::Punctuate('!')),
+                ("colon".into(), Command::Punctuate(':')),
             ],
         }
     }
@@ -141,6 +154,16 @@ mod tests {
         );
         assert_eq!(t.match_utterance("Udråbstegn!"), Some(Command::Punctuate('!')));
         assert_eq!(t.match_utterance("Kolon"), Some(Command::Punctuate(':')));
+    }
+
+    #[test]
+    fn english_commands_work_too() {
+        let t = CommandTable::default();
+        assert_eq!(t.match_utterance("New paragraph."), Some(Command::NewParagraph));
+        assert_eq!(t.match_utterance("Full stop."), Some(Command::Punctuate('.')));
+        assert_eq!(t.match_utterance("Question mark?"), Some(Command::Punctuate('?')));
+        assert_eq!(t.match_utterance("Stop dictation."), Some(Command::StopDictation));
+        assert_eq!(t.match_utterance("I started a new paragraph."), None);
     }
 
     #[test]

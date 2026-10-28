@@ -281,6 +281,8 @@ impl MainWindow {
                 for chip in &w.model_chips {
                     set_chip_text(chip, &text);
                 }
+                // Another language may need another model downloaded.
+                w.dictation.refresh_setup();
             }
         });
         let weak = Rc::downgrade(self);

@@ -34,6 +34,10 @@ struct Punctuation {
     queued: Option<bool>,
     /// The paragraph last punctuated with its end left open.
     open: Option<usize>,
+    /// The language of the latest dictation: the model is for Danish only.
+    spoken: Option<crate::engine::SpokenLanguage>,
+    /// The detected language has been shown in the dock.
+    announced: bool,
 }
 
 #[derive(Default)]
@@ -645,7 +649,9 @@ impl DictationPage {
         let dir = self.deps.paths.models().join(crate::punctuation::DIR);
         {
             let p = self.punctuation.borrow();
-            if !self.deps.settings().punctuate || p.model.is_some() || p.loading {
+            let s = self.deps.settings();
+            let english_only = s.language == crate::config::Language::English;
+            if !s.punctuate || english_only || p.model.is_some() || p.loading {
                 return;
             }
         }
@@ -678,8 +684,26 @@ impl DictationPage {
         });
     }
 
+    /// Says which language detection settled on, once per dictation.
+    fn announce_language(&self) {
+        let heard = {
+            let mut p = self.punctuation.borrow_mut();
+            let heard = p
+                .spoken
+                .as_ref()
+                .and_then(|s| s.current())
+                .filter(|_| !p.announced);
+            p.announced |= heard.is_some();
+            heard
+        };
+        if let Some(code) = heard {
+            let name = if code == "en" { "English" } else { "Danish" };
+            self.dock.set_status(&format!("Hearing {name}."), false);
+        }
+    }
+
     /// Shows the first-run offer if dictation still needs downloads.
-    fn refresh_setup(&self) {
+    pub fn refresh_setup(&self) {
         let missing = crate::models::missing_for_dictation(&self.deps.paths, &self.deps.settings());
         let Some((last, rest)) = missing.split_last() else {
             self.setup_bar.set_reveal_child(false);
@@ -691,7 +715,7 @@ impl DictationPage {
             format!("{} and {last}", rest.join(", "))
         };
         self.setup_label.set_text(&format!(
-            "To dictate, Fennec needs {list} (up to about 1 GB). They run on this computer; nothing you say leaves it."
+            "To dictate, Fennec needs {list} (up to about 1.6 GB). They run on this computer; nothing you say leaves it."
         ));
         self.setup_button.set_label("Download");
         self.setup_button.set_sensitive(true);
@@ -827,7 +851,13 @@ impl DictationPage {
     /// while dictation goes on: its last word then waits. A paragraph left
     /// open earlier is closed first.
     fn repunctuate(self: &Rc<Self>, open: bool) {
-        if !self.deps.settings().punctuate {
+        let english = self
+            .punctuation
+            .borrow()
+            .spoken
+            .as_ref()
+            .is_some_and(|s| s.is_english());
+        if !self.deps.settings().punctuate || english {
             return;
         }
         let model = {
@@ -971,7 +1001,17 @@ impl DictationPage {
         {
             tracing::warn!("could not record the audio path: {e}");
         }
+        let spoken = settings.language.spoken();
+        {
+            let mut p = self.punctuation.borrow_mut();
+            p.spoken = Some(spoken.clone());
+            p.announced = settings.language != crate::config::Language::Auto;
+        }
         let cfg = LiveConfig {
+            transcribe: crate::engine::TranscribeOptions {
+                spoken: Some(spoken),
+                ..Default::default()
+            },
             utterance: UtteranceConfig {
                 pause_ms: settings.pause_ms,
                 ..Default::default()
@@ -989,7 +1029,6 @@ impl DictationPage {
                     .collect::<Vec<_>>()
                     .join(" ")
             }),
-            ..Default::default()
         };
         let (tx, rx) = async_channel::unbounded();
         let session = LiveSession::start(
@@ -1072,6 +1111,7 @@ impl DictationPage {
                 self.editor.insert_final(&text, start_ms, end_ms, &low_confidence);
                 self.save_now();
                 self.sync_context();
+                self.announce_language();
                 self.repunctuate(true);
             }
             LiveEvent::Command(crate::commands::Command::StopDictation) => self.stop_recording(),

@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! fennec-bench --manifest set.tsv [--skip N] [--limit N] [--speed N] [--gpu]
-//!              [--prompt TEXT] [--fast] [--pairs] [--context] [--vocab TERMS] [--dump FILE] model.bin...
+//!              [--prompt TEXT] [--fast] [--pairs] [--context] [--vocab TERMS] [--dump FILE]
+//!              [--language CODE] [--threads N] model.bin...
 //! ```
 //!
 //! `--pairs` joins the clips two by two with a short pause, like dictating
@@ -40,6 +41,10 @@ struct Args {
     vocab: Option<String>,
     /// Writes every `reference<TAB>hypothesis` here.
     dump: Option<PathBuf>,
+    /// ISO 639-1 code of the speech (default: Danish).
+    language: String,
+    /// CPU threads per model (default: as the app uses).
+    threads: Option<usize>,
     models: Vec<PathBuf>,
 }
 
@@ -82,7 +87,7 @@ fn main() -> Result<()> {
         // inside ggml, so GPU models take turns.
         args.models
             .iter()
-            .map(|m| accuracy_of(m, &args, &clips, default_threads()))
+            .map(|m| accuracy_of(m, &args, &clips, args.threads.unwrap_or_else(default_threads)))
             .collect::<Result<Vec<_>>>()?
     } else {
         run_accuracy_in_parallel(&args, &clips)?
@@ -129,7 +134,9 @@ fn main() -> Result<()> {
 }
 
 fn run_accuracy_in_parallel(args: &Args, clips: &[Clip]) -> Result<Vec<Accuracy>> {
-    let threads_each = (default_threads() / args.models.len()).max(1);
+    let threads_each = args
+        .threads
+        .unwrap_or_else(|| (default_threads() / args.models.len()).max(1));
     std::thread::scope(|scope| {
         let handles: Vec<_> = args
             .models
@@ -149,6 +156,7 @@ fn accuracy_of(model: &Path, args: &Args, clips: &[Clip], threads: usize) -> Res
         threads,
         initial_prompt: args.prompt.clone(),
         fast: args.fast,
+        language: args.language.clone(),
         ..Default::default()
     };
     let mut acc = Accuracy {
@@ -189,7 +197,11 @@ fn run_speed_sequentially(args: &Args, clips: &[Clip]) -> Result<Vec<(f64, f64)>
         .iter()
         .map(|c| c.pcm.len() as f64 / SAMPLE_RATE as f64)
         .sum();
-    let opts = TranscribeOptions::default();
+    let opts = TranscribeOptions {
+        language: args.language.clone(),
+        threads: args.threads.unwrap_or_else(default_threads),
+        ..Default::default()
+    };
     args.models
         .iter()
         .map(|model| {
@@ -289,6 +301,8 @@ fn parse_args() -> Result<Args> {
         context: false,
         vocab: None,
         dump: None,
+        language: TranscribeOptions::default().language,
+        threads: None,
         models: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -305,6 +319,8 @@ fn parse_args() -> Result<Args> {
             "--context" => args.context = true,
             "--vocab" => args.vocab = Some(it.next().context("--vocab needs terms")?),
             "--dump" => args.dump = Some(it.next().context("--dump needs a path")?.into()),
+            "--language" => args.language = it.next().context("--language needs a code, like en")?,
+            "--threads" => args.threads = Some(it.next().context("--threads needs a number")?.parse()?),
             _ if a.starts_with("--") => bail!("unknown option {a}"),
             _ => args.models.push(a.into()),
         }

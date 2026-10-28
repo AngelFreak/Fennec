@@ -124,6 +124,31 @@ pub fn catalog() -> Vec<CatalogModel> {
     ]
 }
 
+/// The English model: OpenAI's Whisper large-v3-turbo. On 100 English
+/// FLEURS clips it matched NVIDIA's Parakeet TDT v3 (WER 5.6% vs 5.5%) and
+/// punctuated better (sentence ends F1 0.90 vs 0.61), and it runs in the
+/// same engine as the Danish models. It also tells Danish from English
+/// (100 of 100 FLEURS clips right).
+pub fn english() -> CatalogModel {
+    CatalogModel {
+        id: "whisper-turbo",
+        name: "Whisper large-v3-turbo",
+        publisher: "OpenAI",
+        description: "Whisper large-v3-turbo, 0.8B parameters. Writes English, and tells Danish from English.",
+        license: "MIT",
+        non_commercial: false,
+        size: "q5_0 · ~550 MB",
+        mean_wer: None,
+        file_name: "ggml-large-v3-turbo-q5_0.bin",
+        source: Source::Ggml {
+            repo: "ggerganov/whisper.cpp",
+            file: "ggml-large-v3-turbo-q5_0.bin",
+        },
+        // Stock Whisper takes a prompt in its stride.
+        takes_context: true,
+    }
+}
+
 /// Whether the model in this file (a catalogue file name or a path) takes
 /// the previous sentence as context.
 pub fn takes_context(model: &str) -> bool {
@@ -260,6 +285,9 @@ pub fn missing_for_dictation(paths: &Paths, settings: &crate::config::Settings) 
     if !settings.model_path(paths).exists() {
         missing.push("the Danish speech model");
     }
+    if settings.language.needs_english() && !settings.english_model_path(paths).exists() {
+        missing.push("the English speech model");
+    }
     if !paths.models().join(VAD_FILE).exists() {
         missing.push("the voice detector");
     }
@@ -270,8 +298,9 @@ pub fn missing_for_dictation(paths: &Paths, settings: &crate::config::Settings) 
 }
 
 /// Downloads everything dictation needs that is missing: the chosen speech
-/// model (if it can be downloaded ready to use), the voice detector and,
-/// if wanted, the punctuation model.
+/// model (if it can be downloaded ready to use), the English model if
+/// English may be spoken, the voice detector and, if wanted, the
+/// punctuation model.
 pub fn fetch_for_dictation(
     paths: &Paths,
     settings: &crate::config::Settings,
@@ -294,6 +323,14 @@ pub fn fetch_for_dictation(
                     "{name} cannot be downloaded ready to use; choose a model in Settings"
                 ));
             }
+        }
+    }
+    if settings.language.needs_english() {
+        let dest = settings.english_model_path(paths);
+        if !dest.exists()
+            && let Source::Ggml { repo, file } = english().source
+        {
+            download(&hf_url(repo, file), &dest, cancel, &mut progress)?;
         }
     }
     ensure_vad(paths, cancel, &mut progress)?;
@@ -554,13 +591,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let mut s = crate::config::Settings::default();
-        assert_eq!(missing_for_dictation(&paths, &s).len(), 3);
+        assert_eq!(missing_for_dictation(&paths, &s).len(), 4);
         std::fs::create_dir_all(paths.models()).unwrap();
         std::fs::write(paths.models().join(&s.model), b"x").unwrap();
         std::fs::write(paths.models().join(VAD_FILE), b"x").unwrap();
-        assert_eq!(missing_for_dictation(&paths, &s), ["the punctuation model"]);
+        assert_eq!(
+            missing_for_dictation(&paths, &s),
+            ["the English speech model", "the punctuation model"]
+        );
         s.punctuate = false;
+        s.language = crate::config::Language::Danish;
         assert!(missing_for_dictation(&paths, &s).is_empty());
+    }
+
+    #[test]
+    fn english_is_needed_unless_dictation_is_danish_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let mut s = crate::config::Settings {
+            punctuate: false,
+            ..Default::default()
+        };
+        std::fs::create_dir_all(paths.models()).unwrap();
+        std::fs::write(paths.models().join(&s.model), b"x").unwrap();
+        std::fs::write(paths.models().join(VAD_FILE), b"x").unwrap();
+        for (language, missing) in [
+            (crate::config::Language::Auto, vec!["the English speech model"]),
+            (crate::config::Language::English, vec!["the English speech model"]),
+            (crate::config::Language::Danish, vec![]),
+        ] {
+            s.language = language;
+            assert_eq!(missing_for_dictation(&paths, &s), missing, "{language:?}");
+        }
+        std::fs::write(s.english_model_path(&paths), b"x").unwrap();
+        s.language = crate::config::Language::Auto;
+        assert!(missing_for_dictation(&paths, &s).is_empty());
+        assert!(matches!(english().source, Source::Ggml { file, .. } if file == english().file_name));
     }
 
     #[test]

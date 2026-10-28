@@ -126,6 +126,11 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
     }
     let models = Paths::under(root).models();
     std::fs::write(models.join(&Settings::default().model), b"stand-in").unwrap();
+    std::fs::write(
+        Settings::default().english_model_path(&Paths::under(root)),
+        b"stand-in",
+    )
+    .unwrap();
     std::fs::write(models.join(fennec::models::VAD_FILE), b"stand-in").unwrap();
     let n_tones = lines.len().max(3);
     let lines = Arc::new(lines);
@@ -155,6 +160,7 @@ fn deps(root: &std::path::Path, lines: Vec<&'static str>, engine_ok: bool) -> De
             });
             std::fs::create_dir_all(p.models().join(fennec::punctuation::DIR)).unwrap();
             std::fs::write(s.model_path(p), b"stand-in").unwrap();
+            std::fs::write(s.english_model_path(p), b"stand-in").unwrap();
             std::fs::write(p.models().join(fennec::models::VAD_FILE), b"stand-in").unwrap();
             for f in fennec::punctuation::FILES {
                 std::fs::write(p.models().join(fennec::punctuation::DIR).join(f), b"stand-in").unwrap();
@@ -794,6 +800,12 @@ fn main() {
         "the choice is saved to settings.toml",
         on_disk.model == "min-model.bin",
     );
+    // Installed: choosing a model that is not would bring back the download offer.
+    std::fs::write(
+        Paths::under(&root).models().join("edda-v0.1-q5_0.bin"),
+        b"stand-in",
+    )
+    .unwrap();
     w.settings.use_model("edda-v0.1-q5_0.bin");
     w.settings.run_speed_test();
     let measured = pump_until(Duration::from_secs(10), || {
@@ -847,11 +859,21 @@ fn main() {
     w.settings.show_section("dictation");
     let settings_text = ui::texts_in(&w.settings.root);
     check(
-        "Settings lists spoken punctuation and the other ways to say a command",
-        settings_text.iter().any(|t| t == "«punktum»")
+        "Settings lists spoken punctuation, in Danish and English, and the other ways to say a command",
+        settings_text
+            .iter()
+            .any(|t| t.starts_with("«punktum» or ") && t.contains("«full stop»"))
             && settings_text
                 .iter()
                 .any(|t| t.contains("«stop diktat» or «stop optagelse»")),
+    );
+    check(
+        "Settings offers Danish, English or detecting the language, detecting by default",
+        settings_text.iter().any(|t| t == "Language")
+            && settings_text
+                .iter()
+                .any(|t| t.contains("Detecting decides from the first words"))
+            && Settings::default().language == fennec::config::Language::Auto,
     );
     check(
         "Settings offers automatic punctuation, on and ready",
@@ -880,15 +902,18 @@ fn main() {
     let d = deps(&root_s, vec![], true);
     let models = d.paths.models();
     std::fs::remove_file(models.join(&Settings::default().model)).unwrap();
+    std::fs::remove_file(Settings::default().english_model_path(&d.paths)).unwrap();
     std::fs::remove_file(models.join(fennec::models::VAD_FILE)).unwrap();
     std::fs::remove_dir_all(models.join(fennec::punctuation::DIR)).unwrap();
     let ws = ui::build_window(d);
     check(
         "a fresh install offers to download what dictation needs",
         ws.dictation.setup_shown()
-            && ui::texts_in(&ws.dictation.root)
-                .iter()
-                .any(|t| t.contains("speech model") && t.contains("punctuation model")),
+            && ui::texts_in(&ws.dictation.root).iter().any(|t| {
+                t.contains("Danish speech model")
+                    && t.contains("English speech model")
+                    && t.contains("punctuation model")
+            }),
     );
     ws.dictation.start_setup();
     check(

@@ -681,6 +681,10 @@ impl FilesPage {
                     }
                 };
                 let mut opts = IngestOptions {
+                    transcribe: crate::engine::TranscribeOptions {
+                        spoken: Some(settings.language.spoken()),
+                        ..Default::default()
+                    },
                     vocabulary: settings.vocabulary.clone(),
                     context: crate::models::takes_context(&settings.model),
                     ..Default::default()

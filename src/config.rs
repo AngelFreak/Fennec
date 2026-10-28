@@ -73,11 +73,50 @@ pub enum Backend {
     Cpu,
 }
 
+/// The language dictation and imports are in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    /// Detected from the first words of each dictation or file.
+    #[default]
+    Auto,
+    Danish,
+    English,
+}
+
+impl Language {
+    pub const ALL: [Language; 3] = [Language::Auto, Language::Danish, Language::English];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Language::Auto => "Detect automatically",
+            Language::Danish => "Danish",
+            Language::English => "English",
+        }
+    }
+
+    /// For one new dictation or file.
+    pub fn spoken(self) -> crate::engine::SpokenLanguage {
+        match self {
+            Language::Auto => crate::engine::SpokenLanguage::detect(),
+            Language::Danish => crate::engine::SpokenLanguage::chosen("da"),
+            Language::English => crate::engine::SpokenLanguage::chosen("en"),
+        }
+    }
+
+    /// Whether the English model is needed.
+    pub fn needs_english(self) -> bool {
+        self != Language::Danish
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// GGML model file name inside the models directory, or an absolute path.
+    /// The Danish model; English always uses [`crate::models::ENGLISH`].
     pub model: String,
+    pub language: Language,
     pub backend: Backend,
     /// cpal device id; empty means the default microphone.
     pub microphone: String,
@@ -85,7 +124,8 @@ pub struct Settings {
     pub input_gain_db: f32,
     pub pause_ms: u32,
     pub show_preview: bool,
-    /// Add commas, full stops and capitals with the Danish punctuation model.
+    /// Add commas, full stops and capitals to Danish with the punctuation
+    /// model (English comes punctuated).
     pub punctuate: bool,
     pub keep_dictation_audio: bool,
     /// Recordings older than this many days are deleted at startup (the
@@ -128,6 +168,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             model: "edda-v0.2-q5_0.bin".into(),
+            language: Language::Auto,
             backend: Backend::Auto,
             microphone: String::new(),
             input_gain_db: 0.0,
@@ -191,6 +232,10 @@ impl Settings {
         } else {
             paths.models().join(p)
         }
+    }
+
+    pub fn english_model_path(&self, paths: &Paths) -> PathBuf {
+        crate::models::path_of(&crate::models::english(), paths)
     }
 
     pub fn vad_path(&self, paths: &Paths) -> PathBuf {

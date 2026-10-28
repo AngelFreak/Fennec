@@ -121,6 +121,31 @@ impl Transcriber for WhisperEngine {
         }
         Ok(segments)
     }
+
+    /// Whisper's own language guess over the first 30 s, among `among` only:
+    /// telling Danish from English, other languages' odds do not count.
+    fn detect_language(
+        &mut self,
+        pcm: &[f32],
+        among: &[&str],
+        threads: usize,
+    ) -> Result<Option<(String, f32)>, EngineError> {
+        self.state.pcm_to_mel(pcm, threads)?;
+        let (_, probs) = self.state.lang_detect(0, threads)?;
+        let odds: Vec<(&str, f32)> = among
+            .iter()
+            .filter_map(|code| {
+                let id = whisper_rs::get_lang_id(code)?;
+                Some((*code, *probs.get(usize::try_from(id).ok()?)?))
+            })
+            .collect();
+        let total: f32 = odds.iter().map(|(_, p)| p).sum();
+        Ok(odds
+            .into_iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .filter(|_| total > 0.0)
+            .map(|(code, p)| (code.to_string(), p / total)))
+    }
 }
 
 /// Joins adjacent or overlapping ranges so a word split over several unsure
