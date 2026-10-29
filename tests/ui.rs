@@ -784,6 +784,15 @@ fn main() {
         "the catalog lists Edda first",
         w.settings.model_names().first().map(String::as_str) == Some("Edda v0.2"),
     );
+    let model_text = ui::texts_in(&w.settings.root);
+    check(
+        "the Speech model page lists the English model and links to more models",
+        w.settings
+            .model_names()
+            .contains(&"Whisper large-v3-turbo".to_string())
+            && model_text.iter().any(|t| t == "English")
+            && model_text.iter().any(|t| t == "More models on Hugging Face"),
+    );
     let custom = tmp.path().join("min-model.bin");
     std::fs::write(&custom, b"not a real model").unwrap();
     w.settings.add_custom(&custom);
@@ -802,11 +811,11 @@ fn main() {
     );
     // Installed: choosing a model that is not would bring back the download offer.
     std::fs::write(
-        Paths::under(&root).models().join("edda-v0.1-q5_0.bin"),
+        Paths::under(&root).models().join("edda-v0.2-q4_k.bin"),
         b"stand-in",
     )
     .unwrap();
-    w.settings.use_model("edda-v0.1-q5_0.bin");
+    w.settings.use_model("edda-v0.2-q4_k.bin");
     w.settings.run_speed_test();
     let measured = pump_until(Duration::from_secs(10), || {
         w.settings.speed_text().contains("real time")
@@ -821,7 +830,7 @@ fn main() {
         w.settings
             .nav_summaries()
             .iter()
-            .any(|(id, line)| id == "model" && line.starts_with("Edda v0.1")),
+            .any(|(id, line)| id == "model" && line.starts_with("Edda v0.2")),
     );
     check(
         "the header names the open section",

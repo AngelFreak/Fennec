@@ -413,7 +413,7 @@ impl SettingsPage {
         add.add_css_class("fx-secondary");
         add.set_valign(gtk::Align::Start);
         add.set_tooltip_text(Some(
-            "Copies a GGML .bin file into the models folder. Converting catalog models needs Python with torch.",
+            "Copies a GGML .bin file into the models folder, for example one from the Hugging Face links below.",
         ));
         b.append(&title_block(
             "Speech model",
@@ -479,7 +479,7 @@ impl SettingsPage {
         b.append(&speed);
 
         let wer = label(
-            "WER is the share of words a model gets wrong on Danish test speech. Lower is better.",
+            "WER is the share of words a model gets wrong on test speech in its language. Lower is better.",
             &["fx-field-note"],
         );
         wer.set_wrap(true);
@@ -577,11 +577,16 @@ impl SettingsPage {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let is_active = name == active;
+            let folder = p.is_dir();
             let row = model_row(
                 &name,
                 "Custom · added from a file",
-                "A GGML model you added.",
-                &[("GGML".to_string(), false)],
+                if folder {
+                    "A model folder that runs in a Python helper."
+                } else {
+                    "A GGML model you added."
+                },
+                &[(if folder { "Python helper" } else { "GGML" }.to_string(), false)],
                 None,
                 is_active,
                 true,
@@ -601,6 +606,47 @@ impl SettingsPage {
             }
             self.models_box.append(&group);
         }
+        self.models_box.append(&self.english_group());
+        self.models_box.append(&more_models());
+    }
+
+    /// The English model. It is not chosen here like the Danish ones: it
+    /// works beside them whenever Language lets English be spoken.
+    fn english_group(self: &Rc<Self>) -> gtk::Box {
+        let m = models::english();
+        let installed = models::is_installed(&m, &self.deps.paths);
+        let wanted = self.deps.settings().language.needs_english();
+        let (arch, description) = split_description(m.description);
+        let meta = match arch {
+            Some(a) => format!("{} · {a}", m.publisher),
+            None => m.publisher.to_string(),
+        };
+        // Not installed as far as the radio goes: there is nothing to choose.
+        let row = model_row(m.name, &meta, description, &tags(&m), m.mean_wer, false, false);
+        if installed {
+            let area = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            area.add_css_class("fx-model-action");
+            area.set_size_request(180, -1);
+            area.set_valign(gtk::Align::Start);
+            let note = label(
+                if wanted {
+                    "On this computer. Writes what you say in English."
+                } else {
+                    "On this computer, but not used: Language is Danish (Dictation)."
+                },
+                &["fx-model-desc"],
+            );
+            note.set_wrap(true);
+            note.set_xalign(1.0);
+            note.set_justify(gtk::Justification::Right);
+            area.append(&note);
+            row.append(&area);
+        } else {
+            row.append(&self.model_action(m.file_name, false, false, false, Some(m.clone())));
+        }
+        let (group, list) = group("English", None);
+        list.append(&row);
+        group
     }
 
     /// The right of a model row: Use / Download, or nothing for the model in
@@ -808,6 +854,10 @@ impl SettingsPage {
                             Ok(()) if !cancelled => {
                                 p.show_message("");
                                 p.replace_earlier(&updated);
+                                // Dictation may no longer need a download.
+                                if let Some(f) = p.on_model_changed.borrow().clone() {
+                                    f(());
+                                }
                             }
                             _ => p.show_message(""),
                         }
@@ -1003,6 +1053,7 @@ impl SettingsPage {
             };
             p.deps.settings.borrow_mut().language = *l;
             p.save();
+            p.render_models();
             if let Some(f) = p.on_model_changed.borrow().clone() {
                 f(());
             }
@@ -1883,6 +1934,43 @@ fn model_row(
     score.append(&caption);
     r.append(&score);
     r
+}
+
+/// Links to other speech models, which install with "Add GGML model…".
+fn more_models() -> gtk::Box {
+    let (group, list) = group("More models on Hugging Face", None);
+    let intro = label(
+        "Edda v0.2 is the one Fennec recommends. To try another, download its .bin file and add it with Add GGML model.",
+        &["fx-model-desc"],
+    );
+    intro.set_wrap(true);
+    intro.set_xalign(0.0);
+    let intro_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    intro_row.add_css_class("fx-set-row");
+    intro_row.append(&intro);
+    list.append(&intro_row);
+    for (name, note, repo) in models::MORE_MODELS {
+        let url = format!("https://huggingface.co/{repo}");
+        let open = gtk::Button::with_label("Open");
+        open.add_css_class("fx-secondary");
+        open.set_tooltip_text(Some(&format!("huggingface.co/{repo}")));
+        open.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Open {name} on Hugging Face"
+        ))]);
+        open.connect_clicked(move |b| {
+            gtk::UriLauncher::new(&url).launch(
+                b.root().and_downcast::<gtk::Window>().as_ref(),
+                gio::Cancellable::NONE,
+                |res| {
+                    if let Err(e) = res {
+                        tracing::warn!("could not open the link: {e}");
+                    }
+                },
+            );
+        });
+        list.append(&row(name, Some(note), &open));
+    }
+    group
 }
 
 /// A section's heading and a line under it, with an optional button on the right.
