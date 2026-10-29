@@ -50,8 +50,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # whisper-rs-sys does not rebuild when GGML_* changes, so the
-          # setting is part of the cache's key.
-          key: ggml-native-${{ env.GGML_NATIVE }}
+          # settings (here and in .cargo/config.toml) are part of the key.
+          key: ggml-native-${{ env.GGML_NATIVE }}-llamafile
 
       - name: Check the tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')

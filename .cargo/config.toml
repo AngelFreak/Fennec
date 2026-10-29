@@ -1,0 +1,7 @@
+[env]
+# whisper.cpp's llamafile matrix kernels (off by default in whisper.cpp
+# 1.8.3). They cover Edda's q5_0 weights: about 1.4× faster on the CPU in a
+# portable build, 1.7× in a native one, at the same WER (10 Danish FLEURS
+# clips, best of three). whisper-rs-sys passes GGML_* settings to cmake but
+# does not rebuild when they change: `cargo clean -p whisper-rs-sys`.
+GGML_LLAMAFILE = "ON"
