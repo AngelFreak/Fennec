@@ -1301,7 +1301,7 @@ impl FilesPage {
 fn model_name(settings: &crate::config::Settings) -> String {
     crate::models::catalog()
         .into_iter()
-        .find(|m| m.file_name == settings.model)
+        .find(|m| m.is(&settings.model))
         .map(|m| m.name.to_string())
         .unwrap_or_else(|| settings.model.trim_end_matches(".bin").to_string())
 }

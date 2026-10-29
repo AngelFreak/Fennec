@@ -144,7 +144,7 @@ to the CPU.
 
 | Model | Publisher | Licence | Size | WER |
 |---|---|---|---|---|
-| **Edda v0.2** (default) | Danish Foundation Models | Apache 2.0 | ~550 MB | 8.8 % |
+| **Edda v0.2** (default) | Danish Foundation Models | Apache 2.0 | ~470 MB | 8.8 % |
 | Edda v0.1 | Danish Foundation Models | Apache 2.0 | ~550 MB | 9.2 % |
 | Hviske v3 conversation | syv.ai | OpenRAIL, non-commercial | ~1.1 GB | – |
 | Røst v3 Whisper 1.5B | CoRal project | OpenRAIL | 1.7 GB | 13.7 % |
@@ -167,7 +167,10 @@ so English text comes punctuated by Whisper itself.
 sentence as context, which keeps its punctuation consistent across pauses.
 Fennec downloads a ready-converted GGML file
 ([`tec-7/edda-v0.2-ggml`](https://huggingface.co/tec-7/edda-v0.2-ggml)), so
-installing it needs no Python.
+installing it needs no Python. It is quantised to q4_k, which is as accurate
+as q5_0 on 300 Danish FLEURS clips (WER 8.3 % vs 8.5 %, CER 3.1 % both),
+100 MB smaller and about 1.5× faster on the CPU. Installs that have the
+earlier q5_0 file keep using it, and Settings offers the update.
 
 You can also add any whisper.cpp GGML file with **Add custom GGML model…**.
 
@@ -270,7 +273,7 @@ sentence-end F1:
 ```sh
 python scripts/prepare_fleurs.py      # Danish FLEURS test split → manifest.tsv
 fennec-bench --manifest ~/.cache/fennec/fleurs-da/manifest.tsv --limit 200 \
-    ~/.local/share/fennec/models/edda-v0.2-q5_0.bin
+    ~/.local/share/fennec/models/edda-v0.2-q4_k.bin
 ```
 
 The design, with its reasoning and measurements, is in

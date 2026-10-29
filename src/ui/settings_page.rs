@@ -505,6 +505,20 @@ impl SettingsPage {
     }
 
     /// Makes `file_name` the active model; the next dictation loads it.
+    /// After a model is installed: if an earlier version of it was in use,
+    /// uses the new one and deletes the old file.
+    fn replace_earlier(self: &Rc<Self>, m: &models::CatalogModel) {
+        let active = self.deps.settings().model;
+        if !m.replaces.contains(&active.as_str()) {
+            return;
+        }
+        self.use_model(m.file_name);
+        let old = self.deps.paths.models().join(&active);
+        if let Err(e) = std::fs::remove_file(&old) {
+            tracing::warn!("could not delete {}: {e}", old.display());
+        }
+    }
+
     pub fn use_model(self: &Rc<Self>, file_name: &str) {
         self.deps.settings.borrow_mut().model = file_name.to_string();
         self.save();
@@ -526,7 +540,10 @@ impl SettingsPage {
         let mut away = Vec::new();
         for m in models::catalog() {
             let installed = models::is_installed(&m, &self.deps.paths);
-            let is_active = m.file_name == active;
+            // An earlier version of a model counts as that model, and is
+            // offered the update.
+            let is_active = m.is(&active);
+            let update = is_active && m.file_name != active && !installed;
             let (arch, description) = split_description(m.description);
             let meta = match arch {
                 Some(a) => format!("{} · {a}", m.publisher),
@@ -541,7 +558,13 @@ impl SettingsPage {
                 is_active,
                 installed,
             );
-            row.append(&self.model_action(m.file_name, installed, is_active, Some(m.clone())));
+            row.append(&self.model_action(
+                m.file_name,
+                installed,
+                is_active && !update,
+                update,
+                Some(m.clone()),
+            ));
             if installed {
                 here.push((is_active, row));
             } else {
@@ -563,7 +586,7 @@ impl SettingsPage {
                 is_active,
                 true,
             );
-            row.append(&self.model_action(&name, true, is_active, None));
+            row.append(&self.model_action(&name, true, is_active, false, None));
             here.push((is_active, row));
         }
         // The model in use leads its list.
@@ -580,12 +603,14 @@ impl SettingsPage {
         }
     }
 
-    /// The right of a model row: Use / Download, or nothing for the model in use.
+    /// The right of a model row: Use / Download, or nothing for the model in
+    /// use. `update`: an earlier version of this model is in use.
     fn model_action(
         self: &Rc<Self>,
         file: &str,
         installed: bool,
         active: bool,
+        update: bool,
         entry: Option<models::CatalogModel>,
     ) -> gtk::Box {
         let area = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -599,7 +624,8 @@ impl SettingsPage {
             gtk::Button::with_label("Use this model")
         } else {
             let size = entry.as_ref().map(download_size).unwrap_or_default();
-            super::icon_text_button("fennec-download-symbolic", &format!("Download · {size}"), &[])
+            let verb = if update { "Update" } else { "Download" };
+            super::icon_text_button("fennec-download-symbolic", &format!("{verb} · {size}"), &[])
         };
         b.add_css_class("fx-secondary");
         b.set_halign(gtk::Align::End);
@@ -617,6 +643,11 @@ impl SettingsPage {
         }
         if active && !installed {
             b.set_tooltip_text(Some("This model is selected but not on this computer yet"));
+        }
+        if update {
+            b.set_tooltip_text(Some(
+                "A faster, smaller version of the model in use, just as accurate. It replaces the one you have.",
+            ));
         }
         area.append(&b);
         let file = file.to_string();
@@ -682,6 +713,7 @@ impl SettingsPage {
         let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
         let paths = self.deps.paths.clone();
         let punctuate = self.deps.settings().punctuate;
+        let updated = m.clone();
         std::thread::spawn(move || {
             let send = |p| {
                 let _ = tx.send_blocking(Ok(p));
@@ -772,6 +804,10 @@ impl SettingsPage {
                         match result {
                             Err(e) if !cancelled => {
                                 p.show_message(&format!("Installing the model failed: {e}"))
+                            }
+                            Ok(()) if !cancelled => {
+                                p.show_message("");
+                                p.replace_earlier(&updated);
                             }
                             _ => p.show_message(""),
                         }
@@ -1702,7 +1738,7 @@ fn split_vocabulary(text: &str) -> Vec<String> {
 pub(super) fn model_label(settings: &crate::config::Settings) -> String {
     let name = models::catalog()
         .into_iter()
-        .find(|m| m.file_name == settings.model)
+        .find(|m| m.is(&settings.model))
         .map(|m| m.name.to_string())
         .unwrap_or_else(|| settings.model.trim_end_matches(".bin").to_string());
     let gpu = models::wants_gpu(settings.backend);
@@ -1980,7 +2016,7 @@ mod tests {
     #[test]
     fn download_buttons_show_the_size() {
         let m = crate::models::catalog().into_iter().next().unwrap();
-        assert_eq!(download_size(&m), "550 MB");
+        assert_eq!(download_size(&m), "470 MB");
     }
 
     #[test]
