@@ -1189,11 +1189,16 @@ impl DictationPage {
             .halign(gtk::Align::End)
             .build();
         type Action = fn(&Rc<DictationPage>);
-        let items: [(&str, &str, Action); 4] = [
+        let items: [(&str, &str, Action); 5] = [
+            (
+                "Meeting notes",
+                "Summary, decisions, tasks and open questions",
+                |p| p.ai_meeting_notes(),
+            ),
             ("Summarise document", "Prompt: Kort resumé", |p| p.ai_summarize()),
             (
-                "Clean up text…",
-                "Remove filler words, fix grammar. Review as a diff.",
+                "Proofread…",
+                "Spelling, grammar and filler words. Review as a diff.",
                 |p| p.ai_cleanup(),
             ),
             (
@@ -1280,7 +1285,12 @@ impl DictationPage {
         let weak = Rc::downgrade(self);
         self.summary.run.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
-                p.ai_summarize();
+                // Regenerate writes again what is shown.
+                if p.summary.prompt_id() == "meeting-notes" {
+                    p.ai_meeting_notes();
+                } else {
+                    p.ai_summarize();
+                }
             }
         });
         let weak = Rc::downgrade(self);
@@ -1420,6 +1430,28 @@ impl DictationPage {
                 })
             },
             self.for_doc(doc, |p, r| p.summary.finish(r)),
+        );
+    }
+
+    /// Meeting notes go in the Summary tab, and their tasks in Actions.
+    pub fn ai_meeting_notes(self: &Rc<Self>) {
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        self.show_view("summary");
+        self.summary.begin();
+        super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, _| ai.meeting_notes(store, doc, cancel)),
+            Rc::new(|_: &str| {}),
+            self.for_doc(doc, move |p, r| {
+                p.summary.finish(r);
+                p.actions
+                    .show(p.store.document_action_items(doc).unwrap_or_default());
+                p.update_actions_tab();
+            }),
         );
     }
 

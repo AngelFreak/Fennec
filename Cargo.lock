@@ -1153,6 +1153,7 @@ dependencies = [
  "httparse",
  "keyring",
  "libadwaita",
+ "libc",
  "mdns-sd",
  "pango",
  "pangocairo",

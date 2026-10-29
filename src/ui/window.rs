@@ -586,7 +586,7 @@ impl MainWindow {
             "export" => (None, "Export".to_string(), Some(self.export.header_subtitle())),
             "cleanup" => (
                 None,
-                "Clean up text".to_string(),
+                "Proofread".to_string(),
                 Some(self.dictation.title.text().trim().to_string()),
             ),
             "project" => (

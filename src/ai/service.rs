@@ -36,6 +36,8 @@ impl Scope {
 pub struct Summarized {
     /// Stored summary id (documents and real projects only).
     pub id: Option<i64>,
+    /// "summary" or "meeting-notes".
+    pub prompt_id: String,
     pub text: String,
     pub provider: String,
     pub model: String,
@@ -193,16 +195,47 @@ impl AiService {
         };
         Ok(Summarized {
             id,
+            prompt_id: "summary".into(),
             text,
             provider: cfg.name.clone(),
             model: cfg.model.clone(),
         })
     }
 
-    /// Proposed clean-ups; the caller decides what to apply.
+    /// Writes meeting notes for a document and stores them as its summary;
+    /// their tasks replace the document's action items.
+    pub fn meeting_notes(
+        &self,
+        store: &Store,
+        doc: DocumentId,
+        cancel: &Cancel,
+    ) -> Result<Summarized, AiError> {
+        let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::MeetingNotes, cancel)?;
+        let notes = actions::meeting_notes(llm.as_ref(), &docs[0], &self.settings.language, cancel)?;
+        let text = notes.to_markdown();
+        let cfg = llm.config();
+        let id = store.add_summary(&NewSummary {
+            document_id: Some(doc),
+            project_id: None,
+            prompt_id: "meeting-notes".into(),
+            provider: cfg.name.clone(),
+            model: cfg.model.clone(),
+            text: text.clone(),
+        })?;
+        store.replace_action_items(doc, &notes.action_items)?;
+        Ok(Summarized {
+            id: Some(id),
+            prompt_id: "meeting-notes".into(),
+            text,
+            provider: cfg.name.clone(),
+            model: cfg.model.clone(),
+        })
+    }
+
+    /// Proposed proofreading changes; the caller decides what to apply.
     pub fn cleanup(&self, store: &Store, doc: DocumentId, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
         let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::Cleanup, cancel)?;
-        actions::cleanup(llm.as_ref(), &docs[0], &self.settings.language, cancel)
+        actions::cleanup(llm.as_ref(), &docs[0], cancel)
     }
 
     /// Finds action items and replaces the document's stored list.

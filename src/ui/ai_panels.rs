@@ -35,6 +35,8 @@ pub struct SummaryPanel {
     edit: gtk::Button,
     editing: Cell<bool>,
     place_of: RefCell<Option<PlaceOf>>,
+    /// What the shown text is: "summary" or "meeting-notes".
+    prompt: RefCell<String>,
 }
 
 impl SummaryPanel {
@@ -118,6 +120,7 @@ impl SummaryPanel {
             edit,
             editing: Cell::new(false),
             place_of: RefCell::default(),
+            prompt: RefCell::new("summary".into()),
         });
         let weak = Rc::downgrade(&panel);
         panel.edit.connect_clicked(move |_| {
@@ -249,6 +252,7 @@ impl SummaryPanel {
             Some(s) => {
                 self.text.buffer().set_text(&s.text);
                 self.set_meta(&s.provider, &s.model, Some(&s.prompt_id), Some(s.created_at));
+                *self.prompt.borrow_mut() = s.prompt_id.clone();
                 self.include.set_active(s.include_in_export);
                 self.status.set_text("");
                 self.show_content(true);
@@ -256,6 +260,7 @@ impl SummaryPanel {
             None => {
                 self.text.buffer().set_text("");
                 self.meta.set_text("");
+                *self.prompt.borrow_mut() = "summary".into();
                 self.include.set_active(true);
                 self.status.set_text("");
                 self.show_content(false);
@@ -293,7 +298,8 @@ impl SummaryPanel {
                 self.text.buffer().set_text(&s.text);
                 self.loading.set(false);
                 self.current.set(s.id);
-                self.set_meta(&s.provider, &s.model, Some("summary"), Some(now_ms()));
+                self.set_meta(&s.provider, &s.model, Some(&s.prompt_id), Some(now_ms()));
+                *self.prompt.borrow_mut() = s.prompt_id.clone();
                 self.include.set_active(true);
                 self.include.set_visible(s.id.is_some());
                 self.status.set_text("");
@@ -308,6 +314,11 @@ impl SummaryPanel {
                 self.status.set_text(&super::ai::error_text(&e));
             }
         }
+    }
+
+    /// What Regenerate should write again: "summary" or "meeting-notes".
+    pub fn prompt_id(&self) -> String {
+        self.prompt.borrow().clone()
     }
 
     pub fn summary_text(&self) -> String {
@@ -435,7 +446,11 @@ fn markup_label(text: &str, classes: &[&str]) -> gtk::Label {
 
 /// What the summary prompts are called where people see them.
 pub(crate) fn prompt_name(id: &str) -> Option<&'static str> {
-    (id == "summary").then_some("Kort resumé")
+    match id {
+        "summary" => Some("Kort resumé"),
+        "meeting-notes" => Some("Mødereferat"),
+        _ => None,
+    }
 }
 
 /// Where a provider (by name) runs: "cloud", "network", "this computer".

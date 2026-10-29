@@ -1,5 +1,6 @@
-//! What the AI does with transcripts: summaries, clean-up, action items,
-//! questions over a project and template field suggestions.
+//! What the AI does with transcripts: summaries, meeting notes,
+//! proofreading, action items, questions over a project and template field
+//! suggestions.
 //!
 //! Paragraphs are shown to the model with ids (`[p4]`, or `[d12:p4]` across
 //! documents) so answers can point back into the text. Every id the model
@@ -37,11 +38,99 @@ impl DocText {
 
 const MAX_TOKENS: u32 = 16_000;
 
-fn system(language: &str, task: &str) -> String {
+/// The language a transcript is in; the prompts say so, and the answer
+/// follows it unless Settings names another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    Danish,
+    English,
+}
+
+impl Lang {
+    pub fn of(docs: &[&DocText]) -> Lang {
+        let text: String = docs
+            .iter()
+            .flat_map(|d| d.paragraphs.iter().take(40))
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if crate::text::looks_english(&text) {
+            Lang::English
+        } else {
+            Lang::Danish
+        }
+    }
+
+    fn spoken(self) -> &'static str {
+        match self {
+            Lang::Danish => "dansk",
+            Lang::English => "engelsk",
+        }
+    }
+
+    /// Whether answers in `answer` (from Settings; empty: this language)
+    /// are Danish, for headings Fennec writes itself.
+    fn answers_in_danish(self, answer: &str) -> bool {
+        let a = answer.trim().to_lowercase();
+        if a.is_empty() {
+            self == Lang::Danish
+        } else {
+            a.starts_with("dansk") || a.starts_with("danish")
+        }
+    }
+}
+
+fn system(lang: Lang, answer: &str, task: &str) -> String {
+    let answer = if answer.trim().is_empty() {
+        lang.spoken()
+    } else {
+        answer
+    };
     format!(
-        "Du arbejder med transskriptioner af dansk tale, lavet af automatisk talegenkendelse. \
-         Teksten kan indeholde fejlhørte ord. Svar på {language}. {task}"
+        "Du arbejder med transskriptioner af {} tale, lavet af automatisk talegenkendelse. \
+         Teksten kan indeholde fejlhørte ord. Svar på {answer}. {task}",
+        lang.spoken()
     )
+}
+
+/// The same in English, for English transcripts when the answer is in
+/// English too: small local models follow instructions in the text's own
+/// language better.
+fn system_en(task: &str) -> String {
+    format!(
+        "You work with transcripts of English speech made by automatic speech recognition. \
+         The text may contain misheard words. Answer in English. {task}"
+    )
+}
+
+/// The next three weeks from `day`, one per line ("2026-10-30 fredag"), so
+/// a model can turn "på fredag" into a date without counting.
+fn calendar(day: chrono::NaiveDate, danish: bool) -> String {
+    const DA: [&str; 7] = [
+        "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag",
+    ];
+    const EN: [&str; 7] = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+    let names = if danish { DA } else { EN };
+    (0..22)
+        .filter_map(|n| day.checked_add_days(chrono::Days::new(n)))
+        .map(|d| {
+            use chrono::Datelike;
+            format!(
+                "{} {}",
+                d.format("%Y-%m-%d"),
+                names[d.weekday().num_days_from_monday() as usize]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `[p4] tekst` lines; with `with_doc`, `[d12:p4] tekst`.
@@ -111,7 +200,8 @@ pub fn summarize(
     } else {
         "Skriv et kort, sagligt resumé af dokumentet. Brug korte afsnit eller punkter. Opfind intet."
     };
-    let sys = system(language, task);
+    let lang = Lang::of(&docs);
+    let sys = system(lang, language, task);
     let chunks = chunk(&lines, llm.config().context_chars);
     let input = if chunks.len() <= 1 {
         chunks.into_iter().next().unwrap_or_default()
@@ -120,6 +210,7 @@ pub fn summarize(
         for (i, c) in chunks.iter().enumerate() {
             let req = TextRequest {
                 system: system(
+                    lang,
                     language,
                     "Resumér denne del af en længere tekst. Bevar navne, tal og beslutninger.",
                 ),
@@ -170,26 +261,36 @@ fn cleanup_schema() -> Value {
     })
 }
 
-/// Proposes a cleaned version of each paragraph. Only paragraphs that
-/// actually changed are returned; unknown ids are dropped.
-pub fn cleanup(
-    llm: &dyn LlmProvider,
-    doc: &DocText,
-    language: &str,
-    cancel: &Cancel,
-) -> Result<Vec<Cleaned>, AiError> {
+/// Proofreads: proposes a corrected version of each paragraph, in the
+/// text's own language. Only paragraphs that actually changed are returned;
+/// unknown ids are dropped.
+pub fn cleanup(llm: &dyn LlmProvider, doc: &DocText, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
     let originals: BTreeMap<ParagraphId, &str> = doc
         .paragraphs
         .iter()
         .filter_map(|p| Some((p.id?, p.text.as_str())))
         .collect();
-    let task = "Ret hvert afsnit: tegnsætning, store bogstaver, fyldord (øh, øhm), gentagelser og \
-                tydelige fejlhøringer. Bevar betydning, ordvalg og rækkefølge; omskriv ikke. \
-                Returnér hvert afsnit med dets id (tallet efter p).";
+    // Proofreading answers in the text's own language, whatever Settings say.
+    let sys = match Lang::of(&[doc]) {
+        Lang::Danish => system(
+            Lang::Danish,
+            "dansk",
+            "Korrekturlæs hvert afsnit: ret stavning, grammatik, tegnsætning efter danske kommaregler, \
+             store bogstaver og tydeligt fejlhørte ord, og fjern fyldord (øh, øhm) og gentagelser. \
+             Ret så lidt som muligt: bevar betydning, ordvalg og rækkefølge; omskriv ikke og tilføj intet. \
+             Returnér hvert afsnit med dets id (tallet efter p).",
+        ),
+        Lang::English => system_en(
+            "Proofread each paragraph: fix spelling, grammar, punctuation, capitals and clearly \
+             misheard words, and remove filler words (um, uh) and repetitions. Change as little as possible: keep \
+             the meaning, wording and order; do not rewrite or add anything. Return each paragraph \
+             with its id (the number after p).",
+        ),
+    };
     let mut out = Vec::new();
     for c in chunk(&tagged_lines(doc, false), llm.config().context_chars) {
         let req = StructuredRequest {
-            system: system(language, task),
+            system: sys.clone(),
             prompt: c,
             schema_name: "cleanup".into(),
             schema: cleanup_schema(),
@@ -215,6 +316,251 @@ pub fn cleanup(
         }
     }
     Ok(out)
+}
+
+// ---- meeting notes ----
+
+/// A line of the notes and the paragraph it comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Point {
+    pub text: String,
+    pub paragraph_id: Option<ParagraphId>,
+}
+
+/// A professional record of a meeting, from its transcript.
+#[derive(Debug, Clone, Default)]
+pub struct MeetingNotes {
+    pub summary: String,
+    pub topics: Vec<(String, Vec<Point>)>,
+    pub decisions: Vec<Point>,
+    pub action_items: Vec<NewActionItem>,
+    pub open_questions: Vec<Point>,
+    /// Whether Fennec's own headings are in Danish.
+    pub danish: bool,
+}
+
+impl MeetingNotes {
+    /// As a summary: `**headings**` and `-` bullets, which the summary
+    /// view and the exports format.
+    pub fn to_markdown(&self) -> String {
+        let (summary, decisions, tasks, questions) = if self.danish {
+            ("Resumé", "Beslutninger", "Opgaver", "Åbne spørgsmål")
+        } else {
+            ("Summary", "Decisions", "Action items", "Open questions")
+        };
+        let mut out = Vec::new();
+        let mut section = |heading: &str, lines: Vec<String>| {
+            if !lines.is_empty() {
+                out.push(format!("**{heading}**\n{}", lines.join("\n")));
+            }
+        };
+        let bullets = |points: &[Point]| points.iter().map(|p| format!("- {}", p.text)).collect::<Vec<_>>();
+        if !self.summary.trim().is_empty() {
+            section(summary, vec![self.summary.trim().to_string()]);
+        }
+        for (heading, points) in &self.topics {
+            section(heading, bullets(points));
+        }
+        section(decisions, bullets(&self.decisions));
+        let task_lines = self
+            .action_items
+            .iter()
+            .map(|a| {
+                let mut line = format!("- {}", a.what);
+                let due = a
+                    .due
+                    .as_deref()
+                    .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+                let details: Vec<String> = [
+                    a.who.clone(),
+                    due.map(|d| {
+                        if self.danish {
+                            format!("frist {}", crate::text::danish_day(d))
+                        } else {
+                            format!("due {}", d.format("%-d %B %Y"))
+                        }
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !details.is_empty() {
+                    line.push_str(&format!(" ({})", details.join(", ")));
+                }
+                line
+            })
+            .collect();
+        section(tasks, task_lines);
+        section(questions, bullets(&self.open_questions));
+        out.join("\n\n")
+    }
+}
+
+fn notes_schema() -> Value {
+    let point = json!({
+        "type": "object",
+        "properties": {"text": {"type": "string"}, "paragraph": {"type": ["integer", "null"]}},
+        "required": ["text", "paragraph"],
+        "additionalProperties": false
+    });
+    json!({
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "topics": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"heading": {"type": "string"}, "points": {"type": "array", "items": point}},
+                    "required": ["heading", "points"],
+                    "additionalProperties": false
+                }
+            },
+            "decisions": {"type": "array", "items": point},
+            "action_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "what": {"type": "string"},
+                        "who": {"type": ["string", "null"]},
+                        "due": {"type": ["string", "null"]},
+                        "paragraph": {"type": ["integer", "null"]}
+                    },
+                    "required": ["what", "who", "due", "paragraph"],
+                    "additionalProperties": false
+                }
+            },
+            "open_questions": {"type": "array", "items": point}
+        },
+        "required": ["summary", "topics", "decisions", "action_items", "open_questions"],
+        "additionalProperties": false
+    })
+}
+
+/// Turns a meeting transcript into notes: summary, topics, decisions, tasks
+/// (who and when) and open questions. The rules came from testing Gemma 4
+/// on Danish meetings: without them small models invented speakers, filed
+/// tasks as decisions and counted weekdays wrong.
+pub fn meeting_notes(
+    llm: &dyn LlmProvider,
+    doc: &DocText,
+    language: &str,
+    cancel: &Cancel,
+) -> Result<MeetingNotes, AiError> {
+    let lang = Lang::of(&[doc]);
+    let danish = lang.answers_in_danish(language);
+    let date = doc.date();
+    let sys = if lang == Lang::English && !danish && language.trim().is_empty() {
+        system_en(&format!(
+            "Write professional meeting minutes from the transcript. It does not say who is speaking.\n\
+             Rules:\n\
+             - Only what was said; invent nothing. Be brief and factual, in full sentences.\n\
+             - Every point has the id of the paragraph it comes from (the number after p). Never write the id in the text.\n\
+             - A decision is something the meeting agreed on. Tasks belong only under action items, not under decisions.\n\
+             - Who: only a name said for that very task, otherwise null. Never guess who said something.\n\
+             - Due: a date from the calendar below (YYYY-MM-DD) when the text gives a day, otherwise null. \
+             \"Next week\" is the week after the meeting's week.\n\
+             The meeting was on {}. Calendar:\n{}",
+            date.format("%A %Y-%m-%d"),
+            calendar(date, false)
+        ))
+    } else {
+        system(
+            lang,
+            language,
+            &format!(
+                "Skriv et professionelt mødereferat ud fra transskriptionen. Den siger ikke, hvem der taler.\n\
+                 Regler:\n\
+                 - Kun det der blev sagt; opfind intet. Skriv kort og sagligt i hele sætninger.\n\
+                 - Hvert punkt har id på det afsnit, det kommer fra (tallet efter p). Skriv aldrig id'et i teksten.\n\
+                 - En beslutning er noget mødet blev enige om. Opgaver hører kun til under opgaver, ikke under beslutninger.\n\
+                 - Hvem: kun et navn, der bliver sagt for netop den opgave, ellers null. Gæt aldrig, hvem der sagde noget.\n\
+                 - Frist: en dato fra kalenderen nedenfor (ÅÅÅÅ-MM-DD) når teksten giver en dag, ellers null. \
+                 \"I næste uge\" er ugen efter mødets uge.\n\
+                 Mødet var {} {}. Kalender:\n{}",
+                crate::text::danish_weekday(date),
+                date.format("%Y-%m-%d"),
+                calendar(date, true)
+            ),
+        )
+    };
+    let ids = doc.ids();
+    let cite = |v: &Value| v["paragraph"].as_i64().filter(|id| ids.contains(id));
+    let clean = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            // Models sometimes write null as a word.
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"))
+            .map(str::to_string)
+    };
+    let points = |v: &Value| -> Vec<Point> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                Some(Point {
+                    text: clean(&p["text"])?,
+                    paragraph_id: cite(p),
+                })
+            })
+            .collect()
+    };
+    let mut notes = MeetingNotes {
+        danish,
+        ..Default::default()
+    };
+    let mut summaries = Vec::new();
+    for c in chunk(&tagged_lines(doc, false), llm.config().context_chars) {
+        let req = StructuredRequest {
+            system: sys.clone(),
+            prompt: c,
+            schema_name: "meeting_notes".into(),
+            schema: notes_schema(),
+            max_tokens: MAX_TOKENS,
+        };
+        let v = llm.structured(&req, cancel)?;
+        if let Some(s) = clean(&v["summary"]) {
+            summaries.push(s);
+        }
+        for t in v["topics"].as_array().into_iter().flatten() {
+            let Some(heading) = clean(&t["heading"]) else {
+                continue;
+            };
+            let p = points(&t["points"]);
+            if !p.is_empty() {
+                notes.topics.push((heading, p));
+            }
+        }
+        notes.decisions.extend(points(&v["decisions"]));
+        notes.open_questions.extend(points(&v["open_questions"]));
+        for a in v["action_items"].as_array().into_iter().flatten() {
+            let Some(what) = clean(&a["what"]) else { continue };
+            notes.action_items.push(NewActionItem {
+                what,
+                who: clean(&a["who"]),
+                due: clean(&a["due"]).filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok()),
+                paragraph_id: cite(a),
+                provider: Some(llm.config().name.clone()),
+            });
+        }
+    }
+    // A long meeting is read in parts; their summaries become one.
+    notes.summary = if summaries.len() > 1 {
+        let req = TextRequest {
+            system: system(
+                lang,
+                language,
+                "Saml disse resuméer af et mødes dele, i rækkefølge, til ét kort resumé på 2–4 sætninger. Opfind intet.",
+            ),
+            prompt: summaries.join("\n\n"),
+            max_tokens: 2_000,
+        };
+        llm.stream_text(&req, cancel, &mut |_| {})?.trim().to_string()
+    } else {
+        summaries.pop().unwrap_or_default()
+    };
+    Ok(notes)
 }
 
 // ---- action items ----
@@ -263,7 +609,7 @@ pub fn action_items(
     let mut out = Vec::new();
     for c in chunk(&tagged_lines(doc, false), llm.config().context_chars) {
         let req = StructuredRequest {
-            system: system(language, &task),
+            system: system(Lang::of(&[doc]), language, &task),
             prompt: c,
             schema_name: "action_items".into(),
             schema: action_schema(),
@@ -359,7 +705,7 @@ pub fn ask(
     let task = "Besvar spørgsmålet ud fra teksten alene. Henvis til kilden efter hver påstand med \
                 afsnittets mærke, fx [d3:p12]. Står svaret ikke i teksten, så sig det.";
     let req = TextRequest {
-        system: system(language, task),
+        system: system(Lang::of(&docs.iter().collect::<Vec<_>>()), language, task),
         prompt: format!("Tekst:\n{context}\n\nSpørgsmål: {question}"),
         max_tokens: MAX_TOKENS,
     };
@@ -476,7 +822,7 @@ pub fn suggest_fields(
         .next()
         .unwrap_or_default();
     let req = StructuredRequest {
-        system: system(language, &task),
+        system: system(Lang::of(&[doc]), language, &task),
         prompt: input,
         schema_name: "fields".into(),
         schema,
