@@ -197,9 +197,12 @@ fn run_speed_sequentially(args: &Args, clips: &[Clip]) -> Result<Vec<(f64, f64)>
         .iter()
         .map(|c| c.pcm.len() as f64 / SAMPLE_RATE as f64)
         .sum();
+    // Timed as the accuracy pass ran, so --fast and --prompt time what they score.
     let opts = TranscribeOptions {
         language: args.language.clone(),
         threads: args.threads.unwrap_or_else(default_threads),
+        initial_prompt: args.prompt.clone(),
+        fast: args.fast,
         ..Default::default()
     };
     args.models
