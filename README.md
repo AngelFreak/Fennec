@@ -49,14 +49,17 @@ disk.
   TXT, DOCX or PDF, one document or a whole project at a time.
 - 🗂️ **Projects and tags**: group documents, search across them and export
   them together.
-- 🤖 **Optional AI** (off by default): summaries, clean-up shown as a diff,
+- 🤖 **Optional AI** (off by default): meeting notes (summary, decisions,
+  tasks with owners and dates, open questions), summaries, proofreading shown
+  as a diff,
   action items and questions answered from a project with sources. Works with
-  Claude, ChatGPT, or a local model (Ollama, llama.cpp, LM Studio, vLLM).
+  a built-in model that runs on this computer (Gemma 4, one-click download),
+  Claude, ChatGPT, or your own server (Ollama, llama.cpp, LM Studio, vLLM).
 - 📱 **Record on your phone**: Fennec Recorder for Android records meetings
   and sends the audio straight to Fennec over your own network, where it is
   transcribed like any file. See [`android/`](android/README.md).
 
-The interface is in English; transcripts are in Danish or English, and AI answers in Danish.
+The interface is in English; transcripts are in Danish or English, and AI answers in the transcript's language unless you pick one.
 
 ## Screenshots
 
@@ -190,6 +193,40 @@ do not allow commercial use.
 
 </details>
 
+## Built-in AI
+
+**Settings → AI providers → Built-in models** downloads a language model
+that Fennec runs itself with [llama.cpp](https://github.com/ggml-org/llama.cpp)'s
+server, which comes in the package. It starts on 127.0.0.1 only when an AI
+job runs and stops after ten idle minutes, so the model's memory is only in
+use while it works. Nothing leaves the computer.
+
+| Model | Licence | Download | Best for |
+|---|---|---|---|
+| **Gemma 4 12B** (recommended) | Apache 2.0 | 7.0 GB | meeting notes, Danish |
+| Gemma 4 E4B | Apache 2.0 | 5.2 GB | proofreading, smaller computers |
+
+Both are Google's quantisation-aware q4_0 builds. Gemma 4 12B is the best
+open model of its size on the [EuroEval](https://euroeval.com) Danish
+leaderboard (October 2026); Danish fine-tunes of it scored no better. On a
+Radeon 780M laptop GPU, notes for a 600-word Danish meeting take about
+100 s with either model, and proofreading it 50 s (E4B) or 2 min (12B). In
+tests on made-up Danish and English meetings, the 12B got owners, decisions
+and deadlines right where the E4B sometimes slipped.
+
+**Meeting notes** fill the Summary tab with a summary, the topics, the
+decisions, the tasks (who and by when) and open questions, and put the tasks
+in the Actions tab, each linked to the paragraph it comes from. The
+instructions name what small models got wrong without them: they invented
+who said what, filed tasks as decisions and counted weekdays wrong, so the
+model is told never to guess a speaker and is given a calendar of the coming
+weeks. **Proofread** fixes spelling, grammar, Danish commas, capitals and
+misheard words and removes filler words, changing as little as possible.
+English transcripts get English instructions and answers.
+
+`vLLM` is in **Add provider** for a server you run yourself (port 8000); it
+needs an NVIDIA GPU and cannot be built into Fennec.
+
 ## How dictation works
 
 ```mermaid
@@ -230,7 +267,7 @@ flowchart LR
   the cloud.
 - API keys are stored in the desktop keyring, not in a settings file.
 - Every AI result is labelled with the provider and model that wrote it, and
-  clean-up never changes text until you accept it.
+  proofreading never changes text until you accept it.
 
 ## Where things live
 
@@ -239,7 +276,7 @@ flowchart LR
 | Settings | `~/.config/fennec/settings.toml` |
 | Templates | `~/.config/fennec/templates/*.toml` |
 | Documents (SQLite) | `~/.local/share/fennec/fennec.db` |
-| Models | `~/.local/share/fennec/models/` |
+| Models | `~/.local/share/fennec/models/` (built-in AI models in `ai/`) |
 | Dictation and phone audio | `~/.local/share/fennec/audio/` |
 | Phone pairing certificate | `~/.local/share/fennec/sync/` |
 | Exports | `~/Documents/Fennec/` |
@@ -285,7 +322,11 @@ The design, with its reasoning and measurements, is in
   Fennec's code with the app's scanner, not through a camera.
 
 - The AI actions are tested against mock servers that speak each API, but not
-  yet with a real Claude or ChatGPT key.
+  yet with a real Claude or ChatGPT key. The built-in models were tried with
+  llama.cpp started by hand (`cargo test --test ai -- --ignored`, see
+  `real_built_in_model_writes_meeting_notes`), not yet from the installed
+  package. A source install (`make install`) uses a `llama-server` on the
+  PATH, or `FENNEC_LLAMA_SERVER`.
 - Hviske v6 is tested with a stand-in model; the real 2.8 GB model has not
   been run (`cargo test --test sidecar -- --ignored` once it is downloaded).
 
@@ -297,6 +338,8 @@ The design, with its reasoning and measurements, is in
   Models (Apache 2.0).
 - English: [Whisper large-v3-turbo](https://github.com/openai/whisper) by
   OpenAI (MIT), in whisper.cpp's GGML conversion.
+- Built-in AI: [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) and
+  [Gemma 4](https://huggingface.co/google/gemma-4-12B-it) by Google (Apache 2.0).
 - Punctuation:
   [Alvenir/bert-punct-restoration-da](https://huggingface.co/Alvenir/bert-punct-restoration-da)
   (Apache 2.0), run with [candle](https://github.com/huggingface/candle).

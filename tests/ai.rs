@@ -720,3 +720,176 @@ fn a_job_without_a_choice_uses_the_default_provider() {
     assert_eq!(s.provider, "default");
     assert_eq!((m.default.count(), m.summaries.count()), (1, 0));
 }
+
+#[test]
+fn meeting_notes_are_checked_stored_as_the_summary_and_fill_the_action_items() {
+    let mock = MockLlm::start(Wire::OpenAi, |rec| {
+        let first = tagged(rec)[0].0;
+        Reply::Text(
+            json!({
+                "summary": "Mødet handlede om bookingsystemet.",
+                "topics": [{"heading": "Bookingsystemet", "points": [
+                    {"text": "Appen viser en tom side.", "paragraph": first},
+                    {"text": "  ", "paragraph": null}
+                ]}],
+                "decisions": [{"text": "Anbefalingen sendes til udvalget.", "paragraph": 424242}],
+                "action_items": [
+                    {"what": "Skriv til leverandøren", "who": "Mette", "due": "2026-11-06", "paragraph": first},
+                    {"what": "Ring til vagtfirmaet", "who": "null", "due": "i morgen", "paragraph": null}
+                ],
+                "open_questions": [{"text": "Hvad gør vi med de sene hold?", "paragraph": null}]
+            })
+            .to_string(),
+        )
+    });
+    let ai = service(
+        provider("local", Protocol::OpenAi, &mock.url, Locality::ThisComputer),
+        None,
+    );
+    let (store, doc) = store_with_doc(&[
+        "Appen viser bare en tom side, og det er et problem for foreningerne.",
+        "Mette skriver til leverandøren og beder om svar inden fredag i næste uge.",
+    ]);
+    let ids = paragraph_ids(&store, doc);
+
+    let notes = ai.meeting_notes(&store, doc, &Cancel::default()).unwrap();
+
+    assert_eq!(notes.prompt_id, "meeting-notes");
+    let text = &notes.text;
+    for part in [
+        "**Resumé**\nMødet handlede om bookingsystemet.",
+        "**Bookingsystemet**\n- Appen viser en tom side.",
+        "**Beslutninger**\n- Anbefalingen sendes til udvalget.",
+        "- Skriv til leverandøren (Mette, frist 6. november 2026)",
+        "- Ring til vagtfirmaet\n",
+        "**Åbne spørgsmål**\n- Hvad gør vi med de sene hold?",
+    ] {
+        assert!(text.contains(part), "missing {part:?} in:\n{text}");
+    }
+    let stored = store.summaries_for_document(doc).unwrap();
+    assert_eq!(stored[0].prompt_id, "meeting-notes");
+    let items = store.document_action_items(doc).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].paragraph_id, Some(ids[0]));
+    assert_eq!(items[1].who, None, "\"null\" as a word is no name");
+    assert_eq!(items[1].due, None, "not a date");
+    let prompt = mock.requests()[0].prompt_text();
+    assert!(prompt.contains("Gæt aldrig, hvem der sagde noget"), "{prompt}");
+    assert!(prompt.contains("Kalender:"), "{prompt}");
+}
+
+#[test]
+fn english_transcripts_are_proofread_and_noted_in_english() {
+    let mock = MockLlm::start(Wire::OpenAi, |rec| {
+        if rec.prompt_text().contains("minutes") {
+            Reply::Text(
+                json!({"summary": "The launch stays.", "topics": [], "decisions": [],
+                       "action_items": [{"what": "Update the plan", "who": "Tom", "due": "2026-10-30", "paragraph": null}],
+                       "open_questions": []})
+                .to_string(),
+            )
+        } else {
+            Reply::Text(json!({"paragraphs": []}).to_string())
+        }
+    });
+    let ai = service(
+        provider("local", Protocol::OpenAi, &mock.url, Locality::ThisComputer),
+        None,
+    );
+    let (store, doc) = store_with_doc(&[
+        "Okay so we keep the launch date and we launch without card payments.",
+        "Tom can you update the plan and tell the support team by Friday.",
+    ]);
+
+    ai.cleanup(&store, doc, &Cancel::default()).unwrap();
+    let notes = ai.meeting_notes(&store, doc, &Cancel::default()).unwrap();
+
+    let requests = mock.requests();
+    let system = |i: usize| {
+        requests[i].body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        system(0).starts_with("You work with transcripts of English speech"),
+        "{}",
+        system(0)
+    );
+    assert!(system(0).contains("Proofread each paragraph"));
+    assert!(system(1).contains("Calendar:"), "{}", system(1));
+    assert!(
+        notes
+            .text
+            .contains("**Action items**\n- Update the plan (Tom, due 30 October 2026)"),
+        "{}",
+        notes.text
+    );
+}
+
+#[test]
+fn a_built_in_model_talks_to_its_server_without_thinking() {
+    let mock = MockLlm::start(Wire::OpenAi, |_| {
+        Reply::Text(json!({"paragraphs": []}).to_string())
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let model = &fennec::ai::local::catalog()[1];
+    let file = fennec::ai::local::path_of(model, dir.path());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"stand-in").unwrap();
+    let cfg = fennec::ai::local::provider_for(model, dir.path());
+    // The server this test stands in for; Fennec would start llama-server.
+    // SAFETY: no other test in this binary reads this variable.
+    unsafe { std::env::set_var("FENNEC_LLAMA_SERVER_URL", mock.url.as_str()) };
+    let ai = service(cfg.clone(), None);
+    let (store, doc) = store_with_doc(&["Det her er en test."]);
+
+    ai.cleanup(&store, doc, &Cancel::default()).unwrap();
+
+    let req = &mock.requests()[0];
+    assert_eq!(req.body["chat_template_kwargs"]["enable_thinking"], false);
+    assert_eq!(
+        connect(&cfg, &MemorySecrets::default()).list_models().unwrap(),
+        [model.id]
+    );
+}
+
+/// Meeting notes and proofreading with a real model: start llama-server by
+/// hand, then
+/// `FENNEC_LLAMA_SERVER_URL=http://127.0.0.1:PORT/v1 cargo test --release --test ai -- --ignored --nocapture`.
+/// The transcript is a made-up Danish meeting with typical recognition errors.
+#[test]
+#[ignore]
+fn real_built_in_model_writes_meeting_notes() {
+    assert!(
+        std::env::var("FENNEC_LLAMA_SERVER_URL").is_ok(),
+        "start llama-server and set FENNEC_LLAMA_SERVER_URL"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let model = &fennec::ai::local::catalog()[0];
+    let file = fennec::ai::local::path_of(model, dir.path());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"stand-in").unwrap();
+    let ai = service(fennec::ai::local::provider_for(model, dir.path()), None);
+    let text = std::fs::read_to_string("tests/data/meeting-da.txt").unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let (store, doc) = store_with_doc(&lines);
+
+    let started = std::time::Instant::now();
+    let notes = ai.meeting_notes(&store, doc, &Cancel::default()).unwrap();
+    println!("{}\n\n({:.0} s)", notes.text, started.elapsed().as_secs_f32());
+    let started = std::time::Instant::now();
+    let fixes = ai.cleanup(&store, doc, &Cancel::default()).unwrap();
+    for c in &fixes {
+        println!("- {}\n+ {}", c.original, c.cleaned);
+    }
+    println!("({:.0} s)", started.elapsed().as_secs_f32());
+
+    let items = store.document_action_items(doc).unwrap();
+    assert!(
+        items.iter().any(|i| i.who.as_deref() == Some("Jonas")),
+        "{items:?}"
+    );
+    assert!(notes.text.contains("**Beslutninger**"));
+    assert!(fixes.len() > lines.len() / 2, "most paragraphs need commas");
+}

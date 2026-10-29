@@ -28,6 +28,8 @@ pub fn application(app_id: &str, deps: impl Fn() -> Deps + 'static) -> adw::Appl
         if let Some(win) = on_quit.borrow().as_ref() {
             win.before_close();
         }
+        // The built-in AI's model takes gigabytes; it goes with Fennec.
+        crate::ai::local::shutdown();
     });
     app.connect_activate(move |app| {
         if let Some(win) = current.borrow().as_ref() {

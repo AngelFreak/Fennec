@@ -2,13 +2,15 @@
 //!
 //! Two wire protocols sit behind [`LlmProvider`]: the native Anthropic
 //! Messages API and the OpenAI-compatible chat API (ChatGPT, Ollama,
-//! llama.cpp, LM Studio, vLLM, …). Requests are blocking and run on worker
+//! llama.cpp, LM Studio, vLLM, …), and Fennec's own built-in models, which
+//! [`local`] runs on this computer. Requests are blocking and run on worker
 //! threads; nothing here touches GTK.
 
 pub mod actions;
 pub mod anthropic;
 pub mod diff;
 pub mod keys;
+pub mod local;
 pub mod openai;
 pub mod privacy;
 pub mod service;
@@ -27,6 +29,8 @@ pub use service::AiService;
 pub enum Protocol {
     Anthropic,
     OpenAi,
+    /// A model Fennec downloaded and runs itself (see [`local`]).
+    Builtin,
 }
 
 /// Where a provider runs; decides what the privacy gate allows.
@@ -127,7 +131,20 @@ pub fn presets() -> Vec<Preset> {
             needs_key: false,
         },
         Preset {
-            label: "llama.cpp / LM Studio / vLLM",
+            label: "vLLM",
+            config: make(
+                "vllm",
+                "vLLM",
+                Protocol::OpenAi,
+                "http://localhost:8000/v1",
+                "",
+                Locality::ThisComputer,
+                60_000,
+            ),
+            needs_key: false,
+        },
+        Preset {
+            label: "llama.cpp / LM Studio",
             config: make(
                 "local-server",
                 "Local server",
@@ -172,6 +189,7 @@ pub fn presets() -> Vec<Preset> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AiJob {
     Summaries,
+    MeetingNotes,
     Cleanup,
     ActionItems,
     Ask,
@@ -179,8 +197,9 @@ pub enum AiJob {
 }
 
 impl AiJob {
-    pub const ALL: [AiJob; 5] = [
+    pub const ALL: [AiJob; 6] = [
         AiJob::Summaries,
+        AiJob::MeetingNotes,
         AiJob::Cleanup,
         AiJob::ActionItems,
         AiJob::Ask,
@@ -191,6 +210,7 @@ impl AiJob {
     pub fn key(self) -> &'static str {
         match self {
             AiJob::Summaries => "summaries",
+            AiJob::MeetingNotes => "meeting-notes",
             AiJob::Cleanup => "cleanup",
             AiJob::ActionItems => "action-items",
             AiJob::Ask => "ask",
@@ -201,7 +221,8 @@ impl AiJob {
     pub fn label(self) -> &'static str {
         match self {
             AiJob::Summaries => "Summaries",
-            AiJob::Cleanup => "Clean up text",
+            AiJob::MeetingNotes => "Meeting notes",
+            AiJob::Cleanup => "Proofread",
             AiJob::ActionItems => "Action items",
             AiJob::Ask => "Ask the project",
             AiJob::FillFields => "Fill template fields",
@@ -211,7 +232,8 @@ impl AiJob {
     pub fn note(self) -> &'static str {
         match self {
             AiJob::Summaries => "Document and project summaries",
-            AiJob::Cleanup => "Grammar and filler words, shown as a diff",
+            AiJob::MeetingNotes => "Summary, decisions, tasks and open questions",
+            AiJob::Cleanup => "Spelling, grammar and filler words, shown as a diff",
             AiJob::ActionItems => "What, who, when",
             AiJob::Ask => "Questions answered with citations",
             AiJob::FillFields => "Suggestions you accept one by one",
@@ -219,7 +241,7 @@ impl AiJob {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiSettings {
     /// Off by default: no request is ever made until the user turns this on.
@@ -227,23 +249,11 @@ pub struct AiSettings {
     pub providers: Vec<ProviderConfig>,
     /// `id` of the provider actions use.
     pub default_provider: String,
-    /// Language the model should answer in.
+    /// Language the model should answer in; empty: the transcript's own.
     pub language: String,
     /// Provider per job ([`AiJob::key`] → provider `id`). A job that is not
     /// listed, or whose provider is gone, uses the default provider.
     pub jobs: BTreeMap<String, String>,
-}
-
-impl Default for AiSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            providers: Vec::new(),
-            default_provider: String::new(),
-            language: "dansk".into(),
-            jobs: BTreeMap::new(),
-        }
-    }
 }
 
 impl AiSettings {
@@ -393,6 +403,7 @@ pub fn connect(cfg: &ProviderConfig, secrets: &dyn SecretStore) -> Box<dyn LlmPr
     match cfg.protocol {
         Protocol::Anthropic => Box::new(anthropic::Anthropic::new(cfg.clone(), key)),
         Protocol::OpenAi => Box::new(openai::OpenAi::new(cfg.clone(), key)),
+        Protocol::Builtin => Box::new(local::Builtin::new(cfg.clone())),
     }
 }
 

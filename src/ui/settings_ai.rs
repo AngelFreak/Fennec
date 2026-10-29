@@ -5,13 +5,17 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gtk::glib;
 use gtk::prelude::*;
 
 use super::settings_page::{field, group, page, row};
 use super::{Deps, Handler, label};
+use crate::ai::local::{self, LocalModel};
 use crate::ai::{AiError, AiJob, Locality, Protocol, ProviderConfig, connect, presets};
+use crate::models::Progress;
 use crate::store::Store;
 
 const LOCALITIES: [Locality; 3] = [Locality::ThisComputer, Locality::Network, Locality::Cloud];
@@ -39,6 +43,10 @@ pub struct AiSettingsUi {
     /// Providers whose editor is open.
     editing: RefCell<HashSet<String>>,
     projects_box: gtk::Box,
+    /// The built-in models (Settings → AI providers).
+    builtin_box: gtk::Box,
+    /// The built-in model being downloaded: its id, cancel flag and progress.
+    downloading: RefCell<Option<Download>>,
     on_changed: Handler<()>,
     on_local_only_changed: Handler<()>,
 }
@@ -77,6 +85,8 @@ impl AiSettingsUi {
             tested: RefCell::default(),
             editing: RefCell::default(),
             projects_box: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            builtin_box: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            downloading: RefCell::default(),
             on_changed: RefCell::default(),
             on_local_only_changed: RefCell::default(),
         });
@@ -174,7 +184,7 @@ impl AiSettingsUi {
         text.set_hexpand(true);
         text.append(&label("AI providers", &["fx-h1"]));
         let lede = label(
-            "Summaries, clean-up, action items and questions. Optional, and off until you turn it on.",
+            "Meeting notes, summaries, proofreading, action items and questions. Optional, and off until you turn it on.",
             &["fx-status"],
         );
         lede.set_wrap(true);
@@ -225,6 +235,22 @@ impl AiSettingsUi {
         lock.set_valign(gtk::Align::Center);
         banner.prepend(&lock);
         b.append(&banner);
+
+        let (builtin, list) = group("Built-in models", None);
+        let intro = label(
+            "Download a model and Fennec runs the AI on this computer: nothing leaves it. \
+             They need 8 GB of free memory or more, and are fastest on a graphics card.",
+            &["fx-field-note"],
+        );
+        intro.set_wrap(true);
+        intro.set_xalign(0.0);
+        let intro_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        intro_row.add_css_class("fx-set-row");
+        intro_row.append(&intro);
+        list.append(&intro_row);
+        list.append(&self.builtin_box);
+        b.append(&builtin);
+        self.render_builtin();
 
         let (providers, list) = group("Providers", None);
         list.append(&self.providers_box);
@@ -332,6 +358,7 @@ impl AiSettingsUi {
         }
         info.append(&head);
         let proto = match p.protocol {
+            Protocol::Builtin => "Built into Fennec · llama.cpp",
             Protocol::Anthropic => "Anthropic · native API",
             Protocol::OpenAi if p.base_url.contains("api.openai.com") => "OpenAI API",
             Protocol::OpenAi => "OpenAI-compatible",
@@ -488,7 +515,8 @@ impl AiSettingsUi {
 
         let url = gtk::Entry::builder().text(p.base_url.as_str()).build();
         url.add_css_class("fx-mono");
-        grid.attach(&field("Address", &url), 0, 1, 1, 1);
+        let url_field = field("Address", &url);
+        grid.attach(&url_field, 0, 1, 1, 1);
 
         let model_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let model = gtk::Entry::builder()
@@ -510,7 +538,8 @@ impl AiSettingsUi {
         fetch.set_popover(Some(&gtk::Popover::builder().child(&models_scroll).build()));
         model_row.append(&model);
         model_row.append(&fetch);
-        grid.attach(&field("Model", &model_row), 1, 1, 1, 1);
+        let model_field = field("Model", &model_row);
+        grid.attach(&model_field, 1, 1, 1, 1);
 
         let key_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let key = gtk::PasswordEntry::builder()
@@ -535,8 +564,18 @@ impl AiSettingsUi {
 
         let context = gtk::SpinButton::with_range(2_000.0, 1_000_000.0, 1_000.0);
         context.set_value(p.context_chars as f64);
-        grid.attach(&field("Text per request (characters)", &context), 1, 2, 1, 1);
+        let context_field = field("Text per request (characters)", &context);
+        grid.attach(&context_field, 1, 2, 1, 1);
         card.append(&grid);
+        // A built-in model is set up by Fennec; only its name is the user's.
+        if p.protocol == Protocol::Builtin {
+            for f in [&url_field, &model_field, &key_field, &context_field] {
+                f.set_visible(false);
+            }
+            if let Some(runs_on) = locality.parent() {
+                runs_on.set_visible(false);
+            }
+        }
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         if !is_default {
@@ -686,6 +725,7 @@ impl AiSettingsUi {
                 u.editing.borrow_mut().remove(&id);
                 u.tested.borrow_mut().remove(&id);
                 u.render_providers();
+                u.render_builtin();
             }
         ));
         let weak = Rc::downgrade(self);
@@ -1052,6 +1092,263 @@ fn project_row_box() -> gtk::Box {
 }
 
 /// "Claude · cloud" for the provider dropdowns.
+struct Download {
+    id: &'static str,
+    cancel: Arc<AtomicBool>,
+    bar: gtk::ProgressBar,
+    percent: gtk::Label,
+}
+
+impl AiSettingsUi {
+    // ---- built-in models ----
+
+    /// One row per model Fennec can run itself: Download, Use or In use.
+    pub fn render_builtin(self: &Rc<Self>) {
+        while let Some(c) = self.builtin_box.first_child() {
+            self.builtin_box.remove(&c);
+        }
+        let dir = self.deps.paths.models();
+        let ai = self.deps.settings().ai;
+        for m in local::catalog() {
+            let r = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+            r.add_css_class("fx-model-row");
+            let info = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            info.set_hexpand(true);
+            let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            head.append(&label(m.name, &["fx-model-name"]));
+            if m.recommended {
+                let pill = label("RECOMMENDED", &["fx-badge", "default"]);
+                pill.set_valign(gtk::Align::Center);
+                head.append(&pill);
+            }
+            info.append(&head);
+            info.append(&label(
+                &format!("{} · {}", m.publisher, m.license),
+                &["fx-model-publisher"],
+            ));
+            let d = label(m.description, &["fx-model-desc"]);
+            d.set_wrap(true);
+            d.set_max_width_chars(60);
+            info.append(&d);
+            let chips = super::wrap::wrap_box();
+            chips.append(&label(m.size, &["fx-badge", "plain"]));
+            info.append(&chips);
+            r.append(&info);
+            r.append(&self.builtin_action(&m, &dir, &ai));
+            self.builtin_box.append(&r);
+        }
+    }
+
+    fn builtin_action(
+        self: &Rc<Self>,
+        m: &LocalModel,
+        dir: &std::path::Path,
+        ai: &crate::ai::AiSettings,
+    ) -> gtk::Box {
+        let area = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        area.add_css_class("fx-model-action");
+        area.set_size_request(180, -1);
+        area.set_valign(gtk::Align::Start);
+        let provider_id = local::provider_for(m, dir).id;
+        if let Some(d) = self.downloading.borrow().as_ref().filter(|d| d.id == m.id) {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let status = label("Downloading", &["fx-install-text"]);
+            status.set_hexpand(true);
+            line.append(&status);
+            line.append(&d.percent);
+            area.append(&line);
+            area.append(&d.bar);
+            let cancel = gtk::Button::with_label("Cancel");
+            cancel.add_css_class("fx-quiet");
+            cancel.add_css_class("small");
+            cancel.set_halign(gtk::Align::End);
+            let flag = Arc::clone(&d.cancel);
+            cancel.connect_clicked(move |b| {
+                flag.store(true, Ordering::Relaxed);
+                b.set_sensitive(false);
+            });
+            area.append(&cancel);
+            return area;
+        }
+        if !local::is_installed(m, dir) {
+            let size = m.size.rsplit(" · ").next().unwrap_or(m.size);
+            let b = super::icon_text_button("fennec-download-symbolic", &format!("Download · {size}"), &[]);
+            b.add_css_class("fx-secondary");
+            b.set_halign(gtk::Align::End);
+            b.update_property(&[gtk::accessible::Property::Label(&format!("Download {}", m.name))]);
+            let weak = Rc::downgrade(self);
+            let m = m.clone();
+            b.connect_clicked(move |_| {
+                if let Some(u) = weak.upgrade() {
+                    u.download_builtin(m.clone());
+                }
+            });
+            area.append(&b);
+            return area;
+        }
+        let present = ai.provider(&provider_id).is_some();
+        let in_use = present && ai.active().map(|p| p.id.as_str()) == Some(provider_id.as_str());
+        if in_use {
+            let l = label("In use", &["fx-model-desc"]);
+            l.set_halign(gtk::Align::End);
+            area.append(&l);
+        } else {
+            let b = gtk::Button::with_label("Use this model");
+            b.add_css_class("fx-secondary");
+            b.set_halign(gtk::Align::End);
+            b.update_property(&[gtk::accessible::Property::Label(&format!("Use {}", m.name))]);
+            let weak = Rc::downgrade(self);
+            let m = m.clone();
+            b.connect_clicked(move |_| {
+                if let Some(u) = weak.upgrade() {
+                    u.use_builtin(&m, true);
+                }
+            });
+            area.append(&b);
+        }
+        let delete = gtk::Button::with_label("Delete");
+        delete.add_css_class("fx-quiet");
+        delete.add_css_class("small");
+        delete.set_halign(gtk::Align::End);
+        delete.set_tooltip_text(Some("Deletes the model file to free the disk space"));
+        delete.update_property(&[gtk::accessible::Property::Label(&format!("Delete {}", m.name))]);
+        let weak = Rc::downgrade(self);
+        let m = m.clone();
+        delete.connect_clicked(move |_| {
+            if let Some(u) = weak.upgrade() {
+                u.delete_builtin(&m);
+            }
+        });
+        area.append(&delete);
+        area
+    }
+
+    /// Adds the provider for an installed model (if missing); with
+    /// `make_default`, or when it is the first provider, the AI uses it.
+    pub fn use_builtin(self: &Rc<Self>, m: &LocalModel, make_default: bool) {
+        let cfg = local::provider_for(m, &self.deps.paths.models());
+        let enabled = self.deps.settings().ai.enabled;
+        self.edit(|ai| {
+            let first = ai.providers.is_empty();
+            if ai.provider(&cfg.id).is_none() {
+                ai.providers.push(cfg.clone());
+            }
+            if make_default || first {
+                ai.default_provider = cfg.id.clone();
+            }
+            // A model on this computer sends nothing anywhere, so the
+            // download itself is the go-ahead.
+            if first {
+                ai.enabled = true;
+            }
+        });
+        if self.deps.settings().ai.enabled != enabled {
+            self.enabled.set_active(true);
+        }
+        self.render_providers();
+        self.render_builtin();
+    }
+
+    fn delete_builtin(self: &Rc<Self>, m: &LocalModel) {
+        let dir = self.deps.paths.models();
+        let cfg = local::provider_for(m, &dir);
+        local::shutdown();
+        if let Err(e) = std::fs::remove_file(local::path_of(m, &dir)) {
+            self.message
+                .set_text(&format!("Could not delete {}: {e}", m.name));
+        }
+        self.edit(|ai| {
+            ai.providers.retain(|p| p.id != cfg.id);
+            ai.jobs.retain(|_, p| *p != cfg.id);
+            if ai.default_provider == cfg.id {
+                ai.default_provider = ai.providers.first().map(|p| p.id.clone()).unwrap_or_default();
+            }
+        });
+        self.render_providers();
+        self.render_builtin();
+    }
+
+    pub fn download_builtin(self: &Rc<Self>, m: LocalModel) {
+        if self.downloading.borrow().is_some() {
+            self.message.set_text("Another model is already downloading.");
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.downloading.borrow_mut() = Some(Download {
+            id: m.id,
+            cancel: Arc::clone(&cancel),
+            bar: gtk::ProgressBar::builder().css_classes(["thin"]).build(),
+            percent: label("", &["fx-install-text", "fx-mono"]),
+        });
+        self.render_builtin();
+        let (tx, rx) = async_channel::unbounded::<Result<Progress, Result<(), String>>>();
+        let dest = local::path_of(&m, &self.deps.paths.models());
+        let url = crate::models::hf_url(m.repo, m.file);
+        std::thread::spawn(move || {
+            let result = crate::models::download(&url, &dest, &cancel, |p| {
+                let _ = tx.send_blocking(Ok(p));
+            });
+            let _ = tx.send_blocking(Err(result));
+        });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok(msg) = rx.recv().await {
+                let Some(u) = weak.upgrade() else { return };
+                match msg {
+                    Ok(Progress::Bytes { done, total }) => {
+                        if let Some(d) = u.downloading.borrow().as_ref() {
+                            match total.filter(|t| *t > 0) {
+                                Some(t) => {
+                                    let f = done as f64 / t as f64;
+                                    d.bar.set_fraction(f);
+                                    d.percent.set_text(&format!("{:.0} %", f * 100.0));
+                                }
+                                None => {
+                                    d.bar.pulse();
+                                    d.percent.set_text(&format!("{} MB", done / 1_000_000));
+                                }
+                            }
+                        }
+                    }
+                    Ok(Progress::Line(_)) => {}
+                    Err(result) => {
+                        let cancelled = u
+                            .downloading
+                            .borrow_mut()
+                            .take()
+                            .is_some_and(|d| d.cancel.load(Ordering::Relaxed));
+                        match result {
+                            Ok(()) if !cancelled => {
+                                u.message.set_text("");
+                                u.use_builtin(&m, false);
+                            }
+                            Err(e) if !cancelled => {
+                                u.message.set_text(&format!("Downloading {} failed: {e}", m.name));
+                            }
+                            _ => u.message.set_text(""),
+                        }
+                        u.render_builtin();
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// The names in the built-in models list (tests).
+    pub fn builtin_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut c = self.builtin_box.first_child();
+        while let Some(w) = c {
+            if let Some(t) = super::texts_in(&w).first() {
+                out.push(t.clone());
+            }
+            c = w.next_sibling();
+        }
+        out
+    }
+}
+
 fn choice_label(p: &ProviderConfig) -> String {
     let place = match p.locality {
         Locality::Cloud => "cloud",

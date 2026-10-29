@@ -1163,7 +1163,7 @@ fn document_checks(root: &std::path::Path) {
 /// Answers like a model would, by recognising each action's instructions.
 fn fake_model(rec: &Recorded) -> Reply {
     let prompt = rec.prompt_text();
-    if prompt.contains("Ret hvert afsnit") {
+    if prompt.contains("Korrekturlæs hvert afsnit") {
         let paragraphs: Vec<serde_json::Value> = prompt
             .lines()
             .filter_map(|l| {
@@ -1289,6 +1289,27 @@ fn ai_checks(root: &std::path::Path) {
     );
     let saved = std::fs::read_to_string(root.join("config/settings.toml")).unwrap_or_default();
     check("the AI switch is saved", saved.contains("enabled = true"));
+    check(
+        "AI providers offers built-in models to download, the recommended one first",
+        w.settings.ai.builtin_names() == ["Gemma 4 12B", "Gemma 4 E4B"]
+            && ui::texts_in(&w.settings.root)
+                .iter()
+                .any(|t| t.starts_with("Download · 7.0 GB")),
+    );
+    // A downloaded model (a stand-in file) becomes a provider on this computer.
+    let gemma = &fennec::ai::local::catalog()[1];
+    let file = fennec::ai::local::path_of(gemma, &Paths::under(root).models());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"stand-in").unwrap();
+    w.settings.ai.use_builtin(gemma, false);
+    check(
+        "a built-in model is added as a provider on this computer",
+        w.settings
+            .settings()
+            .ai
+            .provider("fennec-gemma-4-e4b")
+            .is_some_and(|p| p.locality == fennec::ai::Locality::ThisComputer),
+    );
     screenshot(&w.window, "settings-ai");
     w.settings.ai.set_editing("claude", true);
     screenshot(&w.window, "settings-ai-edit");

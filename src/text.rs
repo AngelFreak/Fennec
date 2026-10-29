@@ -34,6 +34,34 @@ pub fn danish_day(d: chrono::NaiveDate) -> String {
     format!("{}. {} {}", d.day(), MONTHS[d.month0() as usize], d.year())
 }
 
+/// "torsdag" for a date.
+pub fn danish_weekday(d: chrono::NaiveDate) -> &'static str {
+    const DAYS: [&str; 7] = [
+        "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag",
+    ];
+    DAYS[d.weekday().num_days_from_monday() as usize]
+}
+
+/// Whether text reads as English rather than Danish, by their commonest
+/// short words (the transcript does not record its language).
+pub fn looks_english(text: &str) -> bool {
+    const EN: [&str; 16] = [
+        "the", "and", "is", "that", "to", "of", "we", "you", "it", "this", "with", "have", "be", "not", "so",
+        "they",
+    ];
+    const DA: [&str; 16] = [
+        "og", "det", "er", "at", "en", "til", "vi", "du", "på", "ikke", "har", "med", "som", "jeg", "der",
+        "så",
+    ];
+    let (mut en, mut da) = (0, 0);
+    for w in text.split(|c: char| !c.is_alphanumeric()) {
+        let w = w.to_lowercase();
+        en += usize::from(EN.contains(&w.as_str()));
+        da += usize::from(DA.contains(&w.as_str()));
+    }
+    en > da
+}
+
 /// Today's date in Danish, for `{today}`.
 pub fn danish_today() -> String {
     danish_date_of(&Local::now())

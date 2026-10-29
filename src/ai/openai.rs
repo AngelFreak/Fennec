@@ -16,6 +16,8 @@ pub struct OpenAi {
     cfg: ProviderConfig,
     key: Option<String>,
     client: reqwest::blocking::Client,
+    /// Asks a llama.cpp server to skip the model's thinking.
+    no_thinking: bool,
 }
 
 impl OpenAi {
@@ -24,7 +26,15 @@ impl OpenAi {
             cfg,
             key,
             client: http_client(),
+            no_thinking: false,
         }
+    }
+
+    /// For Fennec's own llama.cpp server: models that think first (Gemma 4,
+    /// Qwen 3.5) answer straight away, which these jobs do not need.
+    pub fn without_thinking(mut self) -> Self {
+        self.no_thinking = true;
+        self
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
@@ -139,6 +149,9 @@ impl OpenAi {
             "max_tokens"
         };
         body[key] = json!(max_tokens);
+        if self.no_thinking {
+            body["chat_template_kwargs"] = json!({"enable_thinking": false});
+        }
         body
     }
 }
