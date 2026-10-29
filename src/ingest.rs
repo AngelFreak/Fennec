@@ -102,11 +102,17 @@ pub fn ingest_file(
     let mut builder = ParagraphBuilder::new(opts.paragraph_gap_ms, 90_000);
     let mut saved = 0;
     let punctuator = models.punctuator;
+    // Each file is detected afresh.
+    let mut transcribe = opts.transcribe.clone();
+    transcribe.spoken = transcribe.spoken.as_ref().map(|s| s.fresh());
+    let spoken = transcribe.spoken.clone();
     let save = |mut p: Paragraph,
                 saved: &mut usize,
                 on_event: &mut dyn FnMut(IngestEvent)|
      -> Result<(), IngestError> {
-        if let Some(m) = punctuator {
+        // The punctuation model is Danish; English comes punctuated.
+        let english = spoken.as_ref().is_some_and(|s| s.is_english());
+        if let Some(m) = punctuator.filter(|_| !english) {
             match crate::punctuation::punctuate(m, &p.text, false) {
                 Ok(text) => {
                     p.low_confidence = crate::punctuation::moved_spans(&p.text, &text, &p.low_confidence);
@@ -131,7 +137,7 @@ pub fn ingest_file(
             return Err(IngestError::Cancelled);
         }
         let offset = samples_to_ms(chunk.start);
-        let mut t = opts.transcribe.clone();
+        let mut t = transcribe.clone();
         if let Some(c) = &context {
             t.initial_prompt = c.prompt();
         }

@@ -106,18 +106,23 @@ impl Deps {
             paths,
             settings: Rc::new(RefCell::new(settings)),
             engine: Arc::new(|s, p| {
-                let path = s.model_path(p);
                 let gpu = crate::models::wants_gpu(s.backend);
-                crate::engine::load_engine(&path, gpu)
-                    .or_else(|e| {
-                        if !gpu || crate::engine::sidecar::is_sidecar_model(&path) {
+                let load = move |path: &std::path::Path| {
+                    crate::engine::load_engine(path, gpu).or_else(|e| {
+                        if !gpu || crate::engine::sidecar::is_sidecar_model(path) {
                             return Err(e);
                         }
                         // A GPU that fails to start must not stop dictation.
                         tracing::warn!("GPU backend failed ({e}); falling back to CPU");
-                        crate::engine::load_engine(&path, false)
+                        crate::engine::load_engine(path, false)
                     })
-                    .map_err(|e| e.to_string())
+                };
+                let danish = load(&s.model_path(p)).map_err(|e| e.to_string())?;
+                let english = s.english_model_path(p);
+                Ok(Box::new(crate::engine::Bilingual::new(
+                    danish,
+                    Box::new(move || load(&english)),
+                )) as Box<dyn Transcriber>)
             }),
             audio: Arc::new(|s| {
                 let device = (!s.microphone.is_empty()).then_some(s.microphone.as_str());

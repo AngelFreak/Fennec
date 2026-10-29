@@ -54,7 +54,7 @@ struct Install {
     percent: gtk::Label,
 }
 
-const PUNCT_READY: &str = "Uses a Danish punctuation model on this computer; your words are never changed.";
+const PUNCT_READY: &str = "For Danish, with a punctuation model on this computer; your words are never changed. English comes punctuated.";
 
 /// The speed test's result, kept for the test accessor.
 struct SpeedTest {
@@ -944,6 +944,33 @@ impl SettingsPage {
         let s = self.deps.settings();
 
         let (input, rows) = group("Input", None);
+        let labels: Vec<&str> = crate::config::Language::ALL.iter().map(|l| l.label()).collect();
+        let language = gtk::DropDown::from_strings(&labels);
+        language.update_property(&[gtk::accessible::Property::Label("Language")]);
+        language.set_selected(
+            crate::config::Language::ALL
+                .iter()
+                .position(|l| *l == s.language)
+                .unwrap_or(0) as u32,
+        );
+        language.set_size_request(260, -1);
+        rows.append(&row(
+            "Language",
+            Some("Danish uses the Danish model, English uses Whisper large-v3-turbo. Detecting decides from the first words of each dictation or file."),
+            &language,
+        ));
+        let weak = Rc::downgrade(self);
+        language.connect_selected_notify(move |dd| {
+            let Some(p) = weak.upgrade() else { return };
+            let Some(l) = crate::config::Language::ALL.get(dd.selected() as usize) else {
+                return;
+            };
+            p.deps.settings.borrow_mut().language = *l;
+            p.save();
+            if let Some(f) = p.on_model_changed.borrow().clone() {
+                f(());
+            }
+        });
         let devices = input_devices();
         *self.microphones.borrow_mut() = devices.iter().map(|d| (d.id.clone(), d.name.clone())).collect();
         let mut names = vec!["Default microphone".to_string()];
@@ -1040,7 +1067,7 @@ impl SettingsPage {
             Some(if crate::punctuation::installed(&dir) {
                 PUNCT_READY
             } else {
-                "Uses a Danish punctuation model (440 MB), downloaded when this is turned on."
+                "For Danish. Uses a Danish punctuation model (440 MB), downloaded when this is turned on; English comes punctuated."
             }),
             s.punctuate,
             |s, v| s.punctuate = v,

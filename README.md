@@ -4,7 +4,7 @@
 
 # Fennec
 
-**Danish dictation and transcription that runs entirely on your own computer.**
+**Danish and English dictation and transcription that runs entirely on your own computer.**
 
 Speak, and the text appears with commas, full stops and capitals.<br>
 No audio leaves the machine, and no account or internet connection is needed once the models are downloaded.
@@ -33,9 +33,13 @@ disk.
 - ✍️ **Real punctuation**: a Danish punctuation model adds commas, full stops
   and capitals. Sentence ends rose from F1 0.61 to 0.81, with no words
   changed.
+- 🇬🇧 **English too**: Fennec hears whether you speak Danish or English and
+  uses the right model for each dictation or file, or you choose the
+  language yourself.
 - 🗣️ **Spoken commands**: *nyt afsnit*, *ny linje*, *punktum*, *komma*,
-  *spørgsmålstegn*, *slet sidste sætning*, *stop optagelse* and more. You can
-  add your own phrases.
+  *spørgsmålstegn*, *slet sidste sætning*, *stop optagelse* and more, and
+  their English counterparts (*new paragraph*, *full stop*…). You can add
+  your own phrases.
 - 📂 **File transcription**: audio or video in, timestamped paragraphs out,
   with a player to check every passage.
 - 📚 **Learns your words**: a vocabulary list fixes names and terms the model
@@ -52,7 +56,7 @@ disk.
   and sends the audio straight to Fennec over your own network, where it is
   transcribed like any file. See [`android/`](android/README.md).
 
-The interface is in English; transcripts and AI answers are in Danish.
+The interface is in English; transcripts are in Danish or English, and AI answers in Danish.
 
 ## Screenshots
 
@@ -149,6 +153,15 @@ to the CPU.
 WER is the mean word error rate shown in Fennec's model list, based on the
 [Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard).
 On held-out Danish FLEURS sentences here, Edda v0.2 scored 6.2 %.
+
+**English** always uses OpenAI's Whisper large-v3-turbo (MIT, ~550 MB),
+downloaded when English may be spoken. On 100 English FLEURS clips it scored
+5.6 % WER, level with NVIDIA's Parakeet TDT v3 (5.5 %) but with better
+punctuation, and it told Danish from English in all 100 test clips. In
+*Detect automatically* (the default) it listens to the first words of each
+dictation or file and keeps that language to the end. The Danish models
+cannot write English (Edda: 56 % WER), and the punctuation model is Danish,
+so English text comes punctuated by Whisper itself.
 
 **Edda v0.2** is a fine-tuned Whisper large-v3-turbo. It reads the previous
 sentence as context, which keeps its punctuation consistent across pauses.
@@ -282,6 +295,8 @@ The design, with its reasoning and measurements, is in
   (MIT) through [whisper-rs](https://github.com/tazz4843/whisper-rs).
 - [Edda](https://huggingface.co/danish-foundation-models) by Danish Foundation
   Models (Apache 2.0).
+- English: [Whisper large-v3-turbo](https://github.com/openai/whisper) by
+  OpenAI (MIT), in whisper.cpp's GGML conversion.
 - Punctuation:
   [Alvenir/bert-punct-restoration-da](https://huggingface.co/Alvenir/bert-punct-restoration-da)
   (Apache 2.0), run with [candle](https://github.com/huggingface/candle).
