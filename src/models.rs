@@ -29,7 +29,8 @@ pub struct CatalogModel {
     pub license: &'static str,
     pub non_commercial: bool,
     pub size: &'static str,
-    /// Mean WER on the Danish ASR leaderboard (RyeAI), where measured.
+    /// Mean WER on the Danish ASR leaderboard (RyeAI), where measured; for
+    /// the English model, on 100 English FLEURS clips.
     pub mean_wer: Option<&'static str>,
     pub file_name: &'static str,
     pub source: Source,
@@ -47,98 +48,31 @@ impl CatalogModel {
     }
 }
 
+/// The Danish models Fennec offers: just the one it recommends. Others
+/// (GGML files) can be added from a file; see [`MORE_MODELS`].
 pub fn catalog() -> Vec<CatalogModel> {
-    vec![
-        CatalogModel {
-            id: "edda",
-            name: "Edda v0.2",
-            publisher: "Danish Foundation Models",
-            description: "Whisper large-v3-turbo, 0.8B parameters. Fast enough for live dictation, and hears the sentence before, which keeps its punctuation.",
-            license: "Apache 2.0",
-            non_commercial: false,
-            size: "q4_k · ~470 MB",
-            mean_wer: Some("8.8%"),
-            file_name: "edda-v0.2-q4_k.bin",
-            // Converted once from danish-foundation-models/edda-v0.2 (Apache
-            // 2.0), so installing it needs no Python. q4_k rather than q5_0:
-            // 1.5× faster on the CPU (llamafile kernels) and 100 MB smaller,
-            // at the same accuracy (300 Danish FLEURS clips: WER 8.3% vs 8.5%,
-            // CER 3.1% both).
-            source: Source::Ggml {
-                repo: "tec-7/edda-v0.2-ggml",
-                file: "edda-v0.2-q4_k.bin",
-            },
-            takes_context: true,
-            replaces: &["edda-v0.2-q5_0.bin"],
+    vec![CatalogModel {
+        id: "edda",
+        name: "Edda v0.2",
+        publisher: "Danish Foundation Models",
+        description: "Whisper large-v3-turbo, 0.8B parameters. Fast enough for live dictation, and hears the sentence before, which keeps its punctuation.",
+        license: "Apache 2.0",
+        non_commercial: false,
+        size: "q4_k · ~470 MB",
+        mean_wer: Some("8.8%"),
+        file_name: "edda-v0.2-q4_k.bin",
+        // Converted once from danish-foundation-models/edda-v0.2 (Apache
+        // 2.0), so installing it needs no Python. q4_k rather than q5_0:
+        // 1.5× faster on the CPU (llamafile kernels) and 100 MB smaller,
+        // at the same accuracy (300 Danish FLEURS clips: WER 8.3% vs 8.5%,
+        // CER 3.1% both).
+        source: Source::Ggml {
+            repo: "tec-7/edda-v0.2-ggml",
+            file: "edda-v0.2-q4_k.bin",
         },
-        CatalogModel {
-            id: "edda-v0.1",
-            name: "Edda v0.1",
-            publisher: "Danish Foundation Models",
-            description: "The first Edda. Leaves out punctuation in about half its sentences; v0.2 replaces it.",
-            license: "Apache 2.0",
-            non_commercial: false,
-            size: "q5_0 · ~550 MB",
-            mean_wer: Some("9.2%"),
-            file_name: "edda-v0.1-q5_0.bin",
-            source: Source::Convert {
-                repo: "danish-foundation-models/edda-v0.1",
-                quant: "q5_0",
-            },
-            takes_context: false,
-            replaces: &[],
-        },
-        CatalogModel {
-            id: "hviske-v3",
-            name: "Hviske v3 conversation",
-            publisher: "syv.ai",
-            description: "Whisper large-v3 (Røst), 1.5B parameters. Trained on conversations; strong on meetings and interviews.",
-            license: "OpenRAIL, non-commercial",
-            non_commercial: true,
-            size: "q5_0 · ~1.1 GB",
-            mean_wer: None,
-            file_name: "hviske-v3-conversation-q5_0.bin",
-            source: Source::Convert {
-                repo: "syvai/hviske-v3-conversation",
-                quant: "q5_0",
-            },
-            takes_context: false,
-            replaces: &[],
-        },
-        CatalogModel {
-            id: "roest-v3",
-            name: "Røst v3 Whisper 1.5B",
-            publisher: "CoRal project",
-            description: "Whisper large-v3, 1.5B parameters. Broadly trained on dialects and read-aloud speech.",
-            license: "OpenRAIL",
-            non_commercial: false,
-            size: "q8_0 · 1.7 GB",
-            mean_wer: Some("13.7%"),
-            file_name: "roest-v3-q8_0.bin",
-            source: Source::Ggml {
-                repo: "alfanova/roest-v3-whisper-ggml",
-                file: "roest-v3-q8_0.bin",
-            },
-            takes_context: false,
-            replaces: &[],
-        },
-        CatalogModel {
-            id: "hviske-v6",
-            name: "Hviske v6",
-            publisher: "syv.ai",
-            description: "Whisper encoder, Qwen3 decoder, 1.2B parameters. Runs in a Python helper; slow on a CPU.",
-            license: "CC BY-NC 4.0",
-            non_commercial: true,
-            size: "full precision · 2.8 GB",
-            mean_wer: Some("10.2%"),
-            file_name: "hviske-v6",
-            source: Source::Snapshot {
-                repo: "syvai/hviske-v6",
-            },
-            takes_context: false,
-            replaces: &[],
-        },
-    ]
+        takes_context: true,
+        replaces: &["edda-v0.2-q5_0.bin"],
+    }]
 }
 
 /// The English model: OpenAI's Whisper large-v3-turbo. On 100 English
@@ -155,7 +89,7 @@ pub fn english() -> CatalogModel {
         license: "MIT",
         non_commercial: false,
         size: "q5_0 · ~550 MB",
-        mean_wer: None,
+        mean_wer: Some("5.6%"),
         file_name: "ggml-large-v3-turbo-q5_0.bin",
         source: Source::Ggml {
             repo: "ggerganov/whisper.cpp",
@@ -248,6 +182,7 @@ pub fn fetch_snapshot(
 pub fn custom_models(paths: &Paths) -> Vec<PathBuf> {
     let known: Vec<&str> = catalog()
         .iter()
+        .chain(std::iter::once(&english()))
         .flat_map(|m| std::iter::once(m.file_name).chain(m.replaces.iter().copied()))
         .collect();
     let Ok(entries) = std::fs::read_dir(paths.models()) else {
@@ -255,7 +190,8 @@ pub fn custom_models(paths: &Paths) -> Vec<PathBuf> {
     };
     let mut out: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "bin"))
+        // GGML files, and hviske-style model folders once in the catalog.
+        .filter(|p| p.extension().is_some_and(|e| e == "bin") || crate::engine::sidecar::is_sidecar_model(p))
         .filter(|p| {
             let n = p
                 .file_name()
@@ -267,6 +203,22 @@ pub fn custom_models(paths: &Paths) -> Vec<PathBuf> {
     out.sort();
     out
 }
+
+/// Where to find other speech models as GGML files, ready to add with
+/// "Add GGML model…": (name, what it is, Hugging Face repository).
+pub const MORE_MODELS: &[(&str, &str, &str)] = &[
+    ("Edda v0.2, other sizes", "q5_0 · 570 MB", "tec-7/edda-v0.2-ggml"),
+    (
+        "Røst v3 Whisper 1.5B",
+        "CoRal project · dialects and read-aloud speech · q8_0, fp16",
+        "alfanova/roest-v3-whisper-ggml",
+    ),
+    (
+        "Whisper",
+        "OpenAI · every size, many languages",
+        "ggerganov/whisper.cpp",
+    ),
+];
 
 pub fn hf_url(repo: &str, file: &str) -> String {
     format!("https://huggingface.co/{repo}/resolve/main/{file}")
@@ -672,16 +624,21 @@ mod tests {
     }
 
     #[test]
-    fn hviske_v6_counts_as_installed_only_with_its_weights() {
+    fn custom_models_include_model_folders_but_not_the_english_model() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
-        let v6 = catalog().into_iter().find(|m| m.id == "hviske-v6").unwrap();
-        assert!(matches!(v6.source, Source::Snapshot { .. }));
-        let folder = path_of(&v6, &paths);
-        std::fs::create_dir_all(&folder).unwrap();
-        assert!(!is_installed(&v6, &paths), "a half-finished download");
-        std::fs::write(folder.join("model.safetensors"), b"x").unwrap();
-        assert!(is_installed(&v6, &paths));
+        let models = paths.models();
+        std::fs::create_dir_all(models.join("hviske-v6")).unwrap();
+        std::fs::write(models.join("hviske-v6/processing_whisper_qwen.py"), b"x").unwrap();
+        std::fs::create_dir_all(models.join("not-a-model")).unwrap();
+        for f in [english().file_name, "roest-v3-q8_0.bin", "edda-v0.2-q4_k.bin"] {
+            std::fs::write(models.join(f), b"x").unwrap();
+        }
+        let names: Vec<String> = custom_models(&paths)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["hviske-v6", "roest-v3-q8_0.bin"]);
     }
 
     #[test]

@@ -144,18 +144,22 @@ to the CPU.
 
 | Model | Publisher | Licence | Size | WER |
 |---|---|---|---|---|
-| **Edda v0.2** (default) | Danish Foundation Models | Apache 2.0 | ~470 MB | 8.8 % |
-| Edda v0.1 | Danish Foundation Models | Apache 2.0 | ~550 MB | 9.2 % |
-| Hviske v3 conversation | syv.ai | OpenRAIL, non-commercial | ~1.1 GB | – |
-| Røst v3 Whisper 1.5B | CoRal project | OpenRAIL | 1.7 GB | 13.7 % |
-| Hviske v6 | syv.ai | CC BY-NC 4.0 | 2.8 GB | 10.2 % |
+| **Edda v0.2** (Danish) | Danish Foundation Models | Apache 2.0 | ~470 MB | 8.8 % |
+| **Whisper large-v3-turbo** (English) | OpenAI | MIT | ~550 MB | 5.6 % |
 
-WER is the mean word error rate shown in Fennec's model list, based on the
-[Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard).
+Fennec offers one Danish model, the one it recommends. **Settings → Speech
+model** links to others on Hugging Face (Edda v0.2 in other sizes, Røst v3,
+stock Whisper); download a GGML `.bin` and add it with **Add GGML model…**.
+Models installed from earlier versions stay listed and keep working.
+
+WER is the word error rate shown in Fennec's model list: for Edda the mean on
+the [Danish ASR leaderboard](https://huggingface.co/spaces/RyeAI/danish-asr-leaderboard),
+for Whisper on 100 English FLEURS clips.
 On held-out Danish FLEURS sentences here, Edda v0.2 scored 6.2 %.
 
-**English** always uses OpenAI's Whisper large-v3-turbo (MIT, ~550 MB),
-downloaded when English may be spoken. On 100 English FLEURS clips it scored
+**English** always uses OpenAI's Whisper large-v3-turbo, downloaded when
+English may be spoken (from the Dictate page's setup offer, or Settings →
+Speech model → English). On 100 English FLEURS clips it scored
 5.6 % WER, level with NVIDIA's Parakeet TDT v3 (5.5 %) but with better
 punctuation, and it told Danish from English in all 100 test clips. In
 *Detect automatically* (the default) it listens to the first words of each
@@ -172,24 +176,17 @@ as q5_0 on 300 Danish FLEURS clips (WER 8.3 % vs 8.5 %, CER 3.1 % both),
 100 MB smaller and about 1.5× faster on the CPU. Installs that have the
 earlier q5_0 file keep using it, and Settings offers the update.
 
-You can also add any whisper.cpp GGML file with **Add custom GGML model…**.
+You can also add any whisper.cpp GGML file with **Add GGML model…**.
 
 <details>
-<summary>Converting the other models</summary>
+<summary>Models from earlier versions</summary>
 
-Røst v3 downloads as a ready-made GGML file. Hviske v3 is published only as a
-Hugging Face checkpoint, so Fennec converts it, which needs:
-
-- Python with `torch`, `transformers` and `huggingface_hub` (set
-  `FENNEC_PYTHON` to use a virtualenv's Python).
-- A [whisper.cpp](https://github.com/ggml-org/whisper.cpp) checkout (set
-  `WHISPER_CPP`; the default is `~/dev/whisper.cpp`) with `whisper-quantize`
-  built in `build-fennec/`.
-
-Hviske v6 is not a Whisper model that whisper.cpp can run (it pairs a Whisper
-encoder with a Qwen3 decoder). Fennec runs it in a small Python helper, which
-needs `torch` and `transformers`. It is slower than the others on a CPU and
-gives no word confidences.
+Earlier versions also offered Edda v0.1, Røst v3, Hviske v3 conversation and
+Hviske v6. Where they are installed, Fennec lists them as custom models and
+runs them as before. Hviske v6 is not a Whisper model that whisper.cpp can run
+(it pairs a Whisper encoder with a Qwen3 decoder), so Fennec runs it in a
+small Python helper, which needs `torch` and `transformers`. Hviske's licences
+do not allow commercial use.
 
 </details>
 
@@ -308,8 +305,7 @@ The design, with its reasoning and measurements, is in
   [FLEURS](https://huggingface.co/datasets/google/fleurs) (Google, CC BY 4.0).
 - Document font: [Source Serif 4](https://github.com/adobe-fonts/source-serif)
   (SIL OFL 1.1).
-- Every model belongs to its publisher under the licence listed above. The
-  Hviske v3 and Hviske v6 licences do not allow commercial use.
+- Every model belongs to its publisher under the licence listed above.
 
 ## License
 
