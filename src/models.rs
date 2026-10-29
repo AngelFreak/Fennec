@@ -36,6 +36,15 @@ pub struct CatalogModel {
     /// Trained to take the previous sentence as a prompt. For other models
     /// a prompt does harm: Edda v0.1 loops (FLEURS WER 7.8% → 87.7%).
     pub takes_context: bool,
+    /// Files of earlier versions of this model, still used where installed.
+    pub replaces: &'static [&'static str],
+}
+
+impl CatalogModel {
+    /// Whether `file` (a file name) is this model, in this or an earlier version.
+    pub fn is(&self, file: &str) -> bool {
+        self.file_name == file || self.replaces.contains(&file)
+    }
 }
 
 pub fn catalog() -> Vec<CatalogModel> {
@@ -47,16 +56,20 @@ pub fn catalog() -> Vec<CatalogModel> {
             description: "Whisper large-v3-turbo, 0.8B parameters. Fast enough for live dictation, and hears the sentence before, which keeps its punctuation.",
             license: "Apache 2.0",
             non_commercial: false,
-            size: "q5_0 · ~550 MB",
+            size: "q4_k · ~470 MB",
             mean_wer: Some("8.8%"),
-            file_name: "edda-v0.2-q5_0.bin",
+            file_name: "edda-v0.2-q4_k.bin",
             // Converted once from danish-foundation-models/edda-v0.2 (Apache
-            // 2.0), so installing it needs no Python.
+            // 2.0), so installing it needs no Python. q4_k rather than q5_0:
+            // 1.5× faster on the CPU (llamafile kernels) and 100 MB smaller,
+            // at the same accuracy (300 Danish FLEURS clips: WER 8.3% vs 8.5%,
+            // CER 3.1% both).
             source: Source::Ggml {
                 repo: "tec-7/edda-v0.2-ggml",
-                file: "edda-v0.2-q5_0.bin",
+                file: "edda-v0.2-q4_k.bin",
             },
             takes_context: true,
+            replaces: &["edda-v0.2-q5_0.bin"],
         },
         CatalogModel {
             id: "edda-v0.1",
@@ -73,6 +86,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 quant: "q5_0",
             },
             takes_context: false,
+            replaces: &[],
         },
         CatalogModel {
             id: "hviske-v3",
@@ -89,6 +103,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 quant: "q5_0",
             },
             takes_context: false,
+            replaces: &[],
         },
         CatalogModel {
             id: "roest-v3",
@@ -105,6 +120,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 file: "roest-v3-q8_0.bin",
             },
             takes_context: false,
+            replaces: &[],
         },
         CatalogModel {
             id: "hviske-v6",
@@ -120,6 +136,7 @@ pub fn catalog() -> Vec<CatalogModel> {
                 repo: "syvai/hviske-v6",
             },
             takes_context: false,
+            replaces: &[],
         },
     ]
 }
@@ -146,6 +163,7 @@ pub fn english() -> CatalogModel {
         },
         // Stock Whisper takes a prompt in its stride.
         takes_context: true,
+        replaces: &[],
     }
 }
 
@@ -156,7 +174,7 @@ pub fn takes_context(model: &str) -> bool {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(model);
-    catalog().iter().any(|m| m.file_name == name && m.takes_context)
+    catalog().iter().any(|m| m.is(name) && m.takes_context)
 }
 
 pub fn path_of(model: &CatalogModel, paths: &Paths) -> PathBuf {
@@ -228,7 +246,10 @@ pub fn fetch_snapshot(
 
 /// GGML files in the models directory that are not in the catalog (and not the VAD).
 pub fn custom_models(paths: &Paths) -> Vec<PathBuf> {
-    let known: Vec<&str> = catalog().iter().map(|m| m.file_name).collect();
+    let known: Vec<&str> = catalog()
+        .iter()
+        .flat_map(|m| std::iter::once(m.file_name).chain(m.replaces.iter().copied()))
+        .collect();
     let Ok(entries) = std::fs::read_dir(paths.models()) else {
         return Vec::new();
     };
@@ -684,6 +705,16 @@ mod tests {
     }
 
     #[test]
+    fn the_q5_0_edda_still_counts_as_edda() {
+        let edda = &catalog()[0];
+        assert_eq!(edda.file_name, "edda-v0.2-q4_k.bin");
+        assert!(edda.is("edda-v0.2-q5_0.bin"));
+        assert!(!edda.is("edda-v0.1-q5_0.bin"));
+        // It keeps hearing the sentence before.
+        assert!(takes_context("edda-v0.2-q5_0.bin"));
+    }
+
+    #[test]
     fn custom_models_skip_catalog_files_and_the_vad() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
@@ -700,8 +731,9 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["min-model.bin"]);
-        assert!(is_installed(&catalog()[0], &paths));
+        assert_eq!(names, ["min-model.bin"], "the earlier Edda is not a custom model");
+        // Nor is it the current one: Settings offers the update.
+        assert!(!is_installed(&catalog()[0], &paths));
     }
 
     #[test]
