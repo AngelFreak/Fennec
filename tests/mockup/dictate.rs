@@ -60,3 +60,17 @@ pub fn capture(s: &Scene) {
     s.shot("actions");
     d.show_view("transcript");
 }
+
+/// Rewrite as meeting note: the bar while the AI works, then when it is done.
+pub fn capture_rewrite(s: &Scene) {
+    let d = &s.w.dictation;
+    s.w.sidebar.go(Nav::Dictate);
+    d.open_document(s.besigtigelse).unwrap();
+    d.show_view("transcript");
+    d.ai_rewrite_note();
+    s.shot("rewrite-note");
+    crate::pump_until(Duration::from_secs(10), || {
+        d.note_status().is_some_and(|t| t.contains("is ready"))
+    });
+    s.shot("rewrite-note-ready");
+}

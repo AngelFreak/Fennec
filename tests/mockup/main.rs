@@ -638,7 +638,15 @@ fn model(rec: &Recorded) -> Reply {
             marker("15. oktober"),
         ));
     }
-    if prompt.contains("Ret hvert afsnit") {
+    if prompt.contains("Skriv diktatet om til et mødenotat") {
+        std::thread::sleep(Duration::from_millis(2500));
+        return Reply::Text(
+            "Besigtigelsen blev foretaget tirsdag formiddag sammen med ejendommens vicevært.".into(),
+        );
+    }
+    if prompt.contains("Korrekturlæs hvert afsnit") {
+        // Slow enough to catch the review while it fills in.
+        std::thread::sleep(Duration::from_millis(1500));
         // Small grammar edits, as the mockup's review shows them.
         let paragraphs: Vec<serde_json::Value> = prompt
             .lines()
@@ -804,6 +812,10 @@ fn main() {
     }
     if run("settings") {
         settings::capture(&scene);
+    }
+    // Only on request: it adds a document, which would change the counts.
+    if only.as_deref() == Some("rewrite") {
+        dictate::capture_rewrite(&scene);
     }
     // Last: it adds three documents, which would change other screens' counts.
     if run("files") {

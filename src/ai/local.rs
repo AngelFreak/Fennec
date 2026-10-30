@@ -132,9 +132,11 @@ pub fn server_args(model: &Path, port: u16) -> Vec<String> {
         &port.to_string(),
         "--ctx-size",
         &CONTEXT_TOKENS.to_string(),
-        // One request at a time gets the whole window.
+        // Up to four requests decode together (proofreading sends its parts
+        // at once), sharing one window that a single request can fill.
         "--parallel",
-        "1",
+        "4",
+        "--kv-unified",
         // Every layer on the GPU if there is one; llama.cpp uses the CPU otherwise.
         "--n-gpu-layers",
         "99",
@@ -190,6 +192,17 @@ fn lease(model: &Path, cancel: &Cancel) -> Result<Lease, AiError> {
         url: r.url.clone(),
         counted: true,
     })
+}
+
+/// Whether a server is up with `model`, so a request starts at once.
+fn is_running(model: &Path) -> bool {
+    if std::env::var_os("FENNEC_LLAMA_SERVER_URL").is_some() {
+        return true;
+    }
+    let mut guard = SERVER.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_mut()
+        .is_some_and(|r| r.model == model && matches!(r.child.try_wait(), Ok(None)))
 }
 
 struct Lease {
@@ -406,6 +419,14 @@ impl LlmProvider for Builtin {
         client.structured(req, cancel)
     }
 
+    fn is_ready(&self) -> bool {
+        is_running(Path::new(&self.cfg.base_url))
+    }
+
+    fn warm_up(&self, cancel: &Cancel) -> Result<(), AiError> {
+        lease(Path::new(&self.cfg.base_url), cancel).map(drop)
+    }
+
     fn list_models(&self) -> Result<Vec<String>, AiError> {
         if Path::new(&self.cfg.base_url).is_file() {
             Ok(vec![self.cfg.model.clone()])
@@ -432,7 +453,8 @@ mod tests {
         assert_eq!(pair("--model"), "/m/gemma.gguf");
         assert_eq!(pair("--host"), "127.0.0.1");
         assert_eq!(pair("--port"), "4321");
-        assert_eq!(pair("--parallel"), "1");
+        assert_eq!(pair("--parallel"), "4");
+        assert!(args.contains(&"--kv-unified".to_string()));
         assert_eq!(pair("--reasoning-budget"), "0");
         assert!(args.contains(&"--jinja".to_string()));
     }

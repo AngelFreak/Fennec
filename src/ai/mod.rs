@@ -395,6 +395,17 @@ pub trait LlmProvider: Send + Sync {
     fn structured(&self, req: &StructuredRequest, cancel: &Cancel) -> Result<serde_json::Value, AiError>;
 
     fn list_models(&self) -> Result<Vec<String>, AiError>;
+
+    /// Whether a request starts at once; the built-in AI may first have to
+    /// load its model.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    /// Gets ready for requests, such as by loading the model.
+    fn warm_up(&self, _cancel: &Cancel) -> Result<(), AiError> {
+        Ok(())
+    }
 }
 
 /// Builds the provider for `cfg`, reading its key from `secrets`.

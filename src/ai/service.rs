@@ -6,9 +6,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::actions::{self, Answer, Citation, Cleaned, DocText};
+use super::actions::{self, Answer, Citation, Cleaned, DocText, Progress, Proofreading};
 use super::{AiError, AiJob, AiSettings, Cancel, LlmProvider, Locality, SecretStore, connect, privacy};
-use crate::store::{ActionItem, DocumentFilter, DocumentId, NewSummary, ProjectFilter, Store};
+use crate::store::{
+    ActionItem, DocumentFilter, DocumentId, NewDocument, NewSummary, Paragraph, ProjectFilter, Source, Store,
+};
 use crate::template::Template;
 
 /// What an action reads; decides the privacy rules and the consent record.
@@ -232,10 +234,64 @@ impl AiService {
         })
     }
 
+    /// Rewrites the dictation as a meeting note in a professional tone, in
+    /// a new document beside it with the same template, fields and tags.
+    /// The dictation itself is left as it is.
+    pub fn rewrite_note(
+        &self,
+        store: &Store,
+        doc: DocumentId,
+        cancel: &Cancel,
+        on_progress: &mut dyn FnMut(Progress),
+    ) -> Result<DocumentId, AiError> {
+        let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::MeetingNotes, cancel)?;
+        let text = actions::rewrite_note(
+            llm.as_ref(),
+            &docs[0],
+            &self.settings.language,
+            cancel,
+            on_progress,
+        )?;
+        if text.is_empty() {
+            return Err(AiError::InvalidJson {
+                provider: llm.config().name.clone(),
+                message: "the rewrite came back empty".into(),
+            });
+        }
+        let source = store.document(doc)?;
+        let title = if actions::Lang::of(&[&docs[0]]) == actions::Lang::English {
+            format!("Meeting note – {}", source.title)
+        } else {
+            format!("Mødenotat – {}", source.title)
+        };
+        let id = store.create_document(&NewDocument {
+            title: title.clone(),
+            project_id: source.project_id,
+            template_id: source.template_id.clone(),
+            source: Source::Dictation,
+        })?;
+        store.update_document(id, &title, source.template_id.as_deref(), &source.fields)?;
+        let paragraphs: Vec<Paragraph> = text.iter().map(|t| Paragraph::new(t)).collect();
+        store.replace_paragraphs(id, &paragraphs)?;
+        store.set_tags(id, &source.tags)?;
+        Ok(id)
+    }
+
     /// Proposed proofreading changes; the caller decides what to apply.
     pub fn cleanup(&self, store: &Store, doc: DocumentId, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
+        self.cleanup_with_progress(store, doc, cancel, &mut |_| {})
+    }
+
+    /// As `cleanup`, reporting each part as it comes back.
+    pub fn cleanup_with_progress(
+        &self,
+        store: &Store,
+        doc: DocumentId,
+        cancel: &Cancel,
+        on_progress: &mut dyn FnMut(Proofreading),
+    ) -> Result<Vec<Cleaned>, AiError> {
         let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::Cleanup, cancel)?;
-        actions::cleanup(llm.as_ref(), &docs[0], cancel)
+        actions::cleanup(llm.as_ref(), &docs[0], cancel, on_progress)
     }
 
     /// Finds action items and replaces the document's stored list.
