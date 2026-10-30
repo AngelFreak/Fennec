@@ -4,7 +4,7 @@ mod phone;
 pub mod retention;
 mod schema;
 
-pub use phone::{Device, DeviceId, Inbound, InboundState, NewInbound};
+pub use phone::{Inbound, InboundState, NewInbound};
 
 use std::collections::BTreeMap;
 use std::ops::Range;

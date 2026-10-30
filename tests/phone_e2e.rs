@@ -1,14 +1,14 @@
 //! The desktop half of the phone end-to-end test (android/e2e/run-e2e.sh):
-//! the real Fennec window with receiving on, a pairing offer open and
-//! someone pressing Allow, so Fennec Recorder in the emulator can pair, send
-//! recordings and see them transcribed. The speech engine is a stand-in that
+//! the real Fennec window with the Receive from phone code shown, so Fennec
+//! Recorder in the emulator can scan it (the link is handed to it) and send
+//! its recordings, which are transcribed here. The speech engine is a stand-in that
 //! answers every stretch of audio with one Danish sentence; the decoding of
 //! the phone's audio is real.
 //!
 //! Runs only when FENNEC_PHONE_E2E_DIR names a folder. Writes there:
-//!   pair-uri      the QR code's text, with the address the emulator uses (10.0.2.2)
+//!   send-uri      the QR code's text, with the address the emulator uses (10.0.2.2)
 //!   results.json  every recording that arrived, rewritten as they change
-//!   *.png         the window when the phone asks to pair and when recordings are in
+//!   *.png         the window with the code, while receiving, and when recordings are in
 //! and stops when a file named `stop` appears there (or after 15 minutes).
 
 use std::path::{Path, PathBuf};
@@ -65,7 +65,6 @@ fn deps(root: &Path, port: u16) -> Deps {
     let mut d = Deps::real(Paths::under(root), Settings::default());
     {
         let mut s = d.settings.borrow_mut();
-        s.phone.enabled = true;
         s.phone.port = port;
         s.punctuate = false;
     }
@@ -136,7 +135,6 @@ fn results(store: &Store, root: &Path) -> serde_json::Value {
     serde_json::json!({
         "recordings": out,
         "projects": projects,
-        "devices": store.devices().unwrap().len(),
         "samples_heard": HEARD.load(Ordering::Relaxed),
     })
 }
@@ -163,27 +161,25 @@ fn main() {
     let w = ui::build_window(deps(&root, port));
     w.window.present();
     pump(Duration::from_millis(500));
-    w.sidebar.go(ui::Nav::Settings);
-    w.settings.show_section("phone");
-    w.settings.phone.start_pairing();
+    w.sidebar.go(ui::Nav::Files);
+    w.phone.receive();
     let Some(offer) = w.phone.offer() else {
-        panic!("receiving did not start: {:?}", w.phone.state());
+        panic!("receiving did not start: {:?}", w.phone.transfer());
     };
     let uri = offer.uri().replace(&offer.address, &format!("10.0.2.2:{port}"));
-    std::fs::write(out.join("pair-uri"), &uri).unwrap();
-    println!("pair-uri {uri}");
-    screenshot(&w.window, &out.join("desktop-pairing.png"));
+    std::fs::write(out.join("send-uri"), &uri).unwrap();
+    println!("send-uri {uri}");
+    screenshot(&w.window, &out.join("desktop-code.png"));
 
     let start = Instant::now();
     let mut last = serde_json::Value::Null;
     let mut shot_files = false;
+    let mut shot_sending = false;
     while start.elapsed() < Duration::from_secs(900) && !out.join("stop").exists() {
         pump(Duration::from_millis(200));
-        if let Some(p) = w.phone.pending() {
-            println!("pair request from {} with code {}", p.device_name, p.code);
-            std::fs::write(out.join("pair-code"), &p.code).unwrap();
-            screenshot(&w.window, &out.join("desktop-allow.png"));
-            w.phone.decide(true);
+        if !shot_sending && matches!(w.phone.transfer(), ui::phone::Transfer::Sending { .. }) {
+            screenshot(&w.window, &out.join("desktop-receiving.png"));
+            shot_sending = true;
         }
         let now = results(&store, &root);
         if now != last {
@@ -193,17 +189,19 @@ fn main() {
             )
             .unwrap();
             println!("{}", serde_json::to_string(&now["recordings"]).unwrap());
-            let all_done = now["recordings"]
-                .as_array()
-                .is_some_and(|r| !r.is_empty() && r.iter().all(|x| x["state"] == "done"));
-            if all_done && !shot_files {
-                w.sidebar.go(ui::Nav::Files);
-                screenshot(&w.window, &out.join("desktop-files.png"));
-                w.sidebar.go(ui::Nav::Settings);
-                screenshot(&w.window, &out.join("desktop-phone-settings.png"));
-                shot_files = true;
-            }
             last = now;
+        }
+        // Once the phone has said it is done and everything is transcribed.
+        let finished = matches!(w.phone.transfer(), ui::phone::Transfer::Finished { .. });
+        let all_done = last["recordings"]
+            .as_array()
+            .is_some_and(|r| !r.is_empty() && r.iter().all(|x| x["state"] == "done"));
+        if finished && all_done && !shot_files {
+            screenshot(&w.window, &out.join("desktop-received.png"));
+            w.phone.close();
+            w.sidebar.go(ui::Nav::Files);
+            screenshot(&w.window, &out.join("desktop-files.png"));
+            shot_files = true;
         }
     }
     println!("phone_e2e: stopped");

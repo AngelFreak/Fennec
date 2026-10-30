@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** Where a recording is on its way to Fennec. */
@@ -19,32 +21,25 @@ enum class SyncState {
 
     /** Saved on the phone; not sent yet. */
     WAITING,
+
+    /** Going to Fennec now, after a scan. */
     SENDING,
 
-    /** Fennec has it; it waits in the Files queue. */
-    QUEUED,
-    TRANSCRIBING,
-    DONE,
+    /** Fennec has it: `complete` answered. */
+    SENT,
+
+    /** Fennec refused it; the next scan tries again. */
     FAILED,
 
     /** Taken over a USB cable (Fennec removed the phone's copy), or marked
-     *  sent by hand. Fennec's status shows once the phone reaches it again. */
+     *  sent by hand. */
     USB;
 
-    /** Fennec has the whole file; the phone only follows along. */
-    val delivered: Boolean get() = this == QUEUED || this == TRANSCRIBING || this == DONE || this == USB
+    /** Fennec has the whole file. */
+    val delivered: Boolean get() = this == SENT || this == USB
 
-    companion object {
-        /** A state from the desktop's status answer. */
-        fun fromRemote(state: String): SyncState? = when (state) {
-            "queued" -> QUEUED
-            "transcribing" -> TRANSCRIBING
-            "done" -> DONE
-            "failed" -> FAILED
-            "receiving" -> SENDING
-            else -> null
-        }
-    }
+    /** Goes with the next scan. */
+    val unsent: Boolean get() = this == WAITING || this == SENDING || this == FAILED
 }
 
 @Entity(tableName = "recordings")
@@ -90,11 +85,13 @@ interface RecordingDao {
     @Query("SELECT * FROM recordings WHERE id = :id")
     suspend fun get(id: String): Recording?
 
-    @Query("SELECT * FROM recordings WHERE state IN ('WAITING', 'SENDING') ORDER BY recordedAt")
+    /** Everything not sent, failed ones too, oldest first. */
+    @Query("SELECT * FROM recordings WHERE state IN ('WAITING', 'SENDING', 'FAILED') ORDER BY recordedAt")
     suspend fun toSend(): List<Recording>
 
-    @Query("SELECT * FROM recordings WHERE state IN ('QUEUED', 'TRANSCRIBING', 'USB')")
-    suspend fun toFollow(): List<Recording>
+    /** A transfer ended (stopped, or the app was killed): what it had not finished is not sent. */
+    @Query("UPDATE recordings SET state = 'WAITING' WHERE state = 'SENDING'")
+    suspend fun stopSending()
 
     /** Not delivered and without a copy for USB transfer. */
     @Query("SELECT * FROM recordings WHERE state IN ('WAITING', 'SENDING', 'FAILED') AND deliveredAt IS NULL AND usbAudio IS NULL")
@@ -106,7 +103,7 @@ interface RecordingDao {
     @Query("SELECT * FROM recordings WHERE state = 'RECORDING'")
     suspend fun unfinished(): List<Recording>
 
-    @Query("SELECT * FROM recordings WHERE state = 'DONE' AND deliveredAt < :before")
+    @Query("SELECT * FROM recordings WHERE state IN ('SENT', 'USB') AND deliveredAt < :before")
     suspend fun deliveredBefore(before: Long): List<Recording>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -122,7 +119,22 @@ interface RecordingDao {
     suspend fun delete(id: String)
 }
 
-@Database(entities = [Recording::class], version = 2, autoMigrations = [AutoMigration(from = 1, to = 2)])
+@Database(entities = [Recording::class], version = 3, autoMigrations = [AutoMigration(from = 1, to = 2)])
 abstract class AppDatabase : RoomDatabase() {
     abstract fun recordings(): RecordingDao
+
+    companion object {
+        /**
+         * The phone no longer follows transcription (protocol v2): whatever
+         * Fennec had (queued, transcribing, transcribed, or failed there) is
+         * simply sent. The table itself is unchanged.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("UPDATE recordings SET state = 'SENT' WHERE state IN ('QUEUED', 'TRANSCRIBING', 'DONE')")
+                db.execSQL("UPDATE recordings SET state = 'SENT', error = NULL WHERE state = 'FAILED' AND deliveredAt IS NOT NULL")
+                db.execSQL("UPDATE recordings SET state = 'WAITING' WHERE state = 'SENDING'")
+            }
+        }
+    }
 }

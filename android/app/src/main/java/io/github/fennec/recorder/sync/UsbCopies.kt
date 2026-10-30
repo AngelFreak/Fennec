@@ -32,8 +32,8 @@ interface SharedCopies {
     fun delete(uri: String)
 }
 
-/** The sidecar `<id>.json`, as Fennec's `sync::usb::Sidecar` reads it. */
-fun usbSidecar(r: Recording, deviceId: Long?): String = buildJsonObject {
+/** The sidecar `<id>.json`, as Fennec's `sync::usb::Sidecar` reads it (no `device_id` since pairing went). */
+fun usbSidecar(r: Recording): String = buildJsonObject {
     put("fennec_recorder", 1)
     put("id", r.id)
     put("title", r.title)
@@ -44,7 +44,6 @@ fun usbSidecar(r: Recording, deviceId: Long?): String = buildJsonObject {
     put("ext", r.ext)
     put("size", r.size)
     put("sha256", r.sha256)
-    put("device_id", deviceId)
 }.toString()
 
 /** Shared copies through MediaStore's Downloads collection (no permission needed). */

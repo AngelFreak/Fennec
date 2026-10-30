@@ -8,18 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::discovery::Discovery;
 use super::http::{ReadError, Request, Response, read_request, write_response};
 use super::inbound::{self, Target, valid_uuid};
-use super::pairing::{Pairing, PairingOffer, Refusal, pairing_code};
 use super::projects;
+use super::session::{Refusal, SendOffer, Session};
 use super::tls::Identity;
-use super::{EventSink, PROTOCOL_VERSION, SyncEvent, desktop_name, random_bytes, secret_hash};
+use super::{EventSink, PROTOCOL_VERSION, SyncEvent, desktop_name};
 use crate::config::{Paths, Settings};
 use crate::store::Store;
 
@@ -36,10 +33,6 @@ pub struct ReceiverConfig {
     pub paths: Paths,
     pub default_project: Option<i64>,
     pub default_template: String,
-    /// Announce Fennec with mDNS.
-    pub advertise: bool,
-    /// How long a phone waits for Allow before pairing fails.
-    pub pair_wait: Duration,
 }
 
 impl ReceiverConfig {
@@ -50,8 +43,6 @@ impl ReceiverConfig {
             paths: paths.clone(),
             default_project: settings.phone.default_project,
             default_template: settings.default_template.clone(),
-            advertise: true,
-            pair_wait: Duration::from_secs(120),
         }
     }
 }
@@ -62,20 +53,19 @@ struct Shared {
     target: Mutex<Target>,
     /// Uploads touch files and rows together; one at a time.
     uploads: Mutex<()>,
-    pairing: Mutex<Pairing>,
+    session: Mutex<Session>,
     events: EventSink,
     pin: String,
     name: String,
-    pair_wait: Duration,
 }
 
-/// A running receiver. Stops when dropped.
+/// A running receiver for one transfer, with a fresh code. Stops when
+/// dropped.
 pub struct Receiver {
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     local_addr: SocketAddr,
-    _discovery: Option<Discovery>,
 }
 
 impl Receiver {
@@ -104,19 +94,11 @@ impl Receiver {
                 default_template: config.default_template,
             }),
             uploads: Mutex::new(()),
-            pairing: Mutex::new(Pairing::default()),
+            session: Mutex::new(Session::open(Instant::now())),
             events,
             pin: identity.pin.clone(),
-            name: name.clone(),
-            pair_wait: config.pair_wait,
+            name,
         });
-        let discovery = config
-            .advertise
-            .then(|| Discovery::advertise(&name, local_addr.port(), &identity.pin[..12]))
-            .and_then(|r| {
-                r.map_err(|e| tracing::warn!("phones cannot find Fennec by name: {e}"))
-                    .ok()
-            });
 
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -132,7 +114,6 @@ impl Receiver {
             stop,
             thread: Some(thread),
             local_addr,
-            _discovery: discovery,
         })
     }
 
@@ -145,30 +126,24 @@ impl Receiver {
         &self.shared.pin
     }
 
-    /// Opens a pairing offer (replacing an earlier one) for the QR code.
-    pub fn offer_pairing(&self) -> PairingOffer {
-        let (token, expires_at) = self.shared.pairing.lock().unwrap().open(Instant::now());
+    /// What the QR code shows, until a phone scans it.
+    pub fn offer(&self) -> Option<SendOffer> {
+        let ticket = self.shared.session.lock().unwrap().ticket()?.to_string();
         let ip = match self.local_addr.ip() {
             ip if ip.is_unspecified() => lan_ip().unwrap_or(IpAddr::from([127, 0, 0, 1])),
             ip => ip,
         };
-        PairingOffer {
+        Some(SendOffer {
             address: SocketAddr::new(ip, self.local_addr.port()).to_string(),
-            token,
+            ticket,
             pin: self.shared.pin.clone(),
             name: self.shared.name.clone(),
-            expires_at,
-        }
+        })
     }
 
-    /// Closes the pairing offer; a phone waiting for Allow is denied.
-    pub fn cancel_pairing(&self) {
-        self.shared.pairing.lock().unwrap().close();
-    }
-
-    /// Allow or Deny for a [`SyncEvent::PairRequest`].
-    pub fn decide(&self, request: u64, allow: bool) {
-        self.shared.pairing.lock().unwrap().decide(request, allow);
+    /// When a phone last did something (or the code was shown).
+    pub fn last_activity(&self) -> Instant {
+        self.shared.session.lock().unwrap().last_activity
     }
 
     /// Project and template for recordings that name none.
@@ -182,7 +157,7 @@ impl Receiver {
 impl Drop for Receiver {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.shared.pairing.lock().unwrap().close();
+        self.shared.session.lock().unwrap().close();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -293,8 +268,28 @@ fn serve(shared: &Shared, tls: Arc<rustls::ServerConfig>, tcp: TcpStream) {
 fn route(shared: &Shared, req: &Request) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let method = req.method.as_str();
-    if let ("POST", ["v1", "pair"]) = (method, segs.as_slice()) {
-        return pair(shared, req);
+    match (method, segs.as_slice()) {
+        ("POST", ["v1", "hello"]) => return hello(shared, req),
+        ("POST", ["v1", "pair"]) => {
+            return Response::error(
+                410,
+                "update_app",
+                "Update Fennec Recorder to send to this version of Fennec.",
+            );
+        }
+        _ => {}
+    }
+    if !shared
+        .session
+        .lock()
+        .unwrap()
+        .admits(req.bearer(), Instant::now())
+    {
+        return Response::error(
+            401,
+            "no_session",
+            "Fennec stopped receiving. Scan a new code in Fennec to send.",
+        );
     }
 
     let store = match Store::open(&shared.db) {
@@ -304,78 +299,118 @@ fn route(shared: &Shared, req: &Request) -> Response {
             return Response::error(503, "unavailable", "Fennec cannot open its database.");
         }
     };
-    let device = req
-        .bearer()
-        .and_then(|secret| store.device_by_secret_hash(&secret_hash(secret)).ok().flatten());
-    let Some(device) = device else {
-        return Response::error(
-            401,
-            "not_paired",
-            "This phone is not paired with Fennec. Pair it again.",
-        );
-    };
     let target = shared.target.lock().unwrap().clone();
     match (method, segs.as_slice()) {
-        ("GET", ["v1", "info"]) => info(shared, &store),
-        ("GET", ["v1", "recordings"]) => {
-            inbound::statuses(&store, &target, device, req.query("ids").unwrap_or(""))
-        }
         ("PUT", ["v1", "recordings", id]) if valid_uuid(id) => {
-            let _one = shared.uploads.lock().unwrap();
-            inbound::announce(&store, &target, device, id, &req.body)
+            let response = {
+                let _one = shared.uploads.lock().unwrap();
+                inbound::announce(&store, &target, id, &req.body)
+            };
+            arriving(shared, &store, id, &response);
+            response
         }
         ("PUT", ["v1", "recordings", id, "audio"]) if valid_uuid(id) => {
-            let _one = shared.uploads.lock().unwrap();
-            let offset = req.query("offset").and_then(|o| o.parse().ok());
-            inbound::chunk(&store, &target, device, id, offset, &req.body)
+            let response = {
+                let _one = shared.uploads.lock().unwrap();
+                let offset = req.query("offset").and_then(|o| o.parse().ok());
+                inbound::chunk(&store, &target, id, offset, &req.body)
+            };
+            arriving(shared, &store, id, &response);
+            response
         }
         ("POST", ["v1", "recordings", id, "complete"]) if valid_uuid(id) => {
             let (response, arrived) = {
                 let _one = shared.uploads.lock().unwrap();
-                inbound::complete(&store, &target, device, id)
+                inbound::complete(&store, &target, id)
             };
             if let Some(a) = arrived {
                 (shared.events)(SyncEvent::Received {
+                    id: id.to_string(),
                     document_id: a.document_id,
                     path: a.path,
                 });
             }
             response
         }
-        ("POST", ["v1", "projects"]) => {
-            let (response, changed) = projects::create(&store, &shared.templates, &req.body);
-            if changed {
-                (shared.events)(SyncEvent::ProjectsChanged);
-            }
-            response
+        ("POST", ["v1", "done"]) => {
+            shared.session.lock().unwrap().close();
+            (shared.events)(SyncEvent::Finished);
+            Response::ok(json!({}))
         }
-        ("PUT", ["v1", "projects", id]) => {
-            let Ok(id) = id.parse() else {
-                return Response::error(404, "unknown_project", "Fennec has no such project.");
-            };
-            let (response, changed) = projects::update(&store, &shared.templates, id, &req.body);
-            if changed {
-                (shared.events)(SyncEvent::ProjectsChanged);
-            }
-            response
-        }
-        ("DELETE", ["v1", "devices", "self"]) => match store.remove_device(device) {
-            Ok(()) => {
-                (shared.events)(SyncEvent::DevicesChanged);
-                Response::ok(json!({}))
-            }
-            Err(e) => {
-                tracing::error!("unpairing a phone: {e}");
-                Response::error(500, "internal", "Fennec could not remove this phone.")
-            }
-        },
         _ => Response::error(404, "not_found", "Fennec does not know this request."),
     }
 }
 
-/// `GET /v1/info`: this computer, and the projects and templates a
-/// recording can be filed under.
-fn info(shared: &Shared, store: &Store) -> Response {
+/// Tells the dialog how far a recording has come, after an announce or a
+/// chunk it accepted.
+fn arriving(shared: &Shared, store: &Store, id: &str, response: &Response) {
+    if response.status != 200 {
+        return;
+    }
+    if let Ok(Some(r)) = store.inbound(id) {
+        (shared.events)(SyncEvent::Arriving {
+            id: id.to_string(),
+            title: r.info.title,
+            received: response.body["received"].as_u64().unwrap_or(0),
+            size: r.info.size,
+        });
+    }
+}
+
+#[derive(Deserialize)]
+struct HelloBody {
+    ticket: String,
+    device_name: String,
+}
+
+/// `POST /v1/hello`: the phone that scanned the code trades its ticket for
+/// a session, and learns the projects and templates it can file under.
+fn hello(shared: &Shared, req: &Request) -> Response {
+    let body: HelloBody = match serde_json::from_slice(&req.body) {
+        Ok(b) => b,
+        Err(e) => return Response::error(400, "bad_request", &e.to_string()),
+    };
+    let name: String = body.device_name.trim().chars().take(64).collect();
+    let name = if name.is_empty() {
+        "Phone".to_string()
+    } else {
+        name
+    };
+    let claimed = shared
+        .session
+        .lock()
+        .unwrap()
+        .claim(body.ticket.trim(), Instant::now());
+    let session = match claimed {
+        Ok(s) => s,
+        Err((refusal, closed)) => {
+            if closed {
+                (shared.events)(SyncEvent::CodeClosed);
+            }
+            return match refusal {
+                Refusal::NoTicket => Response::error(
+                    403,
+                    "no_ticket",
+                    "This code has expired. Show a new one in Fennec.",
+                ),
+                Refusal::Used => Response::error(
+                    403,
+                    "used",
+                    "This code was already used. Show a new one in Fennec.",
+                ),
+                Refusal::WrongTicket => Response::error(403, "wrong_ticket", "That code is wrong."),
+            };
+        }
+    };
+    let store = match Store::open(&shared.db) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("phone hello: {e}");
+            shared.session.lock().unwrap().close();
+            return Response::error(503, "unavailable", "Fennec cannot open its database.");
+        }
+    };
+    (shared.events)(SyncEvent::Connected { device_name: name });
     let projects: Vec<_> = store
         .projects()
         .unwrap_or_default()
@@ -384,6 +419,7 @@ fn info(shared: &Shared, store: &Store) -> Response {
         .collect();
     let default_template = shared.target.lock().unwrap().default_template.clone();
     Response::ok(json!({
+        "session": session,
         "name": shared.name,
         "id": &shared.pin[..12],
         "version": env!("CARGO_PKG_VERSION"),
@@ -393,98 +429,4 @@ fn info(shared: &Shared, store: &Store) -> Response {
         "default_template": default_template,
         "project_colors": crate::store::PROJECT_COLORS,
     }))
-}
-
-#[derive(Deserialize)]
-struct PairBody {
-    token: String,
-    device_name: String,
-    nonce: String,
-}
-
-/// `POST /v1/pair`: waits for Allow or Deny in Fennec.
-fn pair(shared: &Shared, req: &Request) -> Response {
-    let body: PairBody = match serde_json::from_slice(&req.body) {
-        Ok(b) => b,
-        Err(e) => return Response::error(400, "bad_request", &e.to_string()),
-    };
-    let nonce_ok = (16..=128).contains(&body.nonce.len())
-        && body
-            .nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    if !nonce_ok {
-        return Response::error(
-            400,
-            "bad_nonce",
-            "The nonce must be 16 to 128 letters, digits, - or _.",
-        );
-    }
-    let token: String = body.token.chars().filter(|c| !c.is_whitespace()).collect();
-    let name: String = body.device_name.trim().chars().take(64).collect();
-    let name = if name.is_empty() {
-        "Phone".to_string()
-    } else {
-        name
-    };
-
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    let presented = shared.pairing.lock().unwrap().present(&token, Instant::now(), tx);
-    let request = match presented {
-        Ok(r) => r,
-        Err((refusal, closed)) => {
-            if closed {
-                (shared.events)(SyncEvent::PairingEnded);
-            }
-            return match refusal {
-                Refusal::NoOffer => Response::error(
-                    403,
-                    "no_offer",
-                    "Fennec is not pairing right now. Choose Pair a phone in Settings → Phone.",
-                ),
-                Refusal::Busy => {
-                    Response::error(403, "busy", "Another phone is pairing. Try again in a moment.")
-                }
-                Refusal::WrongToken if closed => Response::error(
-                    403,
-                    "locked",
-                    "Too many wrong codes. Start pairing again in Fennec.",
-                ),
-                Refusal::WrongToken => Response::error(403, "wrong_token", "That pairing code is wrong."),
-            };
-        }
-    };
-    (shared.events)(SyncEvent::PairRequest {
-        request,
-        device_name: name.clone(),
-        code: pairing_code(&shared.pin, &token, &body.nonce),
-    });
-    let answer = rx.recv_timeout(shared.pair_wait);
-    if answer.is_err() {
-        shared.pairing.lock().unwrap().abandon(request);
-    }
-    let response = match answer {
-        Ok(true) => {
-            let secret = URL_SAFE_NO_PAD.encode(random_bytes::<32>());
-            match Store::open(&shared.db).and_then(|s| s.add_device(&name, &secret_hash(&secret))) {
-                Ok(device_id) => {
-                    (shared.events)(SyncEvent::DevicesChanged);
-                    Response::ok(json!({
-                        "device_id": device_id,
-                        "secret": secret,
-                        "name": shared.name,
-                        "id": &shared.pin[..12],
-                    }))
-                }
-                Err(e) => {
-                    tracing::error!("saving a paired phone: {e}");
-                    Response::error(500, "internal", "Fennec could not save the pairing.")
-                }
-            }
-        }
-        Ok(false) => Response::error(403, "denied", "Pairing was denied in Fennec."),
-        Err(_) => Response::error(403, "timeout", "Nobody pressed Allow in Fennec in time."),
-    };
-    (shared.events)(SyncEvent::PairingEnded);
-    response
 }

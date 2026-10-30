@@ -1,8 +1,6 @@
 package io.github.fennec.recorder.net
 
 import io.github.fennec.recorder.data.DesktopInfo
-import io.github.fennec.recorder.data.Project
-import io.github.fennec.recorder.data.Template
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -12,7 +10,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -57,7 +54,8 @@ data class RemoteStatus(
     val error: String?,
 )
 
-data class PairResult(val deviceId: Long, val secret: String, val name: String, val id: String)
+/** Fennec's answer to a scanned code: the transfer's session, and what to file recordings under. */
+data class Hello(val session: String, val name: String, val id: String, val info: DesktopInfo)
 
 /** What the phone tells Fennec before sending a recording. */
 data class Announcement(
@@ -73,21 +71,20 @@ data class Announcement(
 )
 
 /**
- * Fennec's phone protocol (see the desktop's
- * `docs/plans/2026-10-06-android-recorder.md`). Every call goes to [address]
- * and accepts only the certificate with [pin].
+ * Fennec's phone protocol v2 (see the desktop's
+ * `docs/plans/2026-10-30-send-by-qr.md`). Every call goes to [address] and
+ * accepts only the certificate with [pin]; calls after [hello] carry its
+ * [session].
  */
 class FennecClient(
     val address: String,
-    pin: String?,
-    private val secret: String? = null,
-    /** The pin of the certificate seen, when none was known yet. */
-    onPin: (String) -> Unit = {},
-    timeoutSeconds: Long = 30,
+    private val pin: String,
+    private val session: String? = null,
+    private val timeoutSeconds: Long = 30,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val http: OkHttpClient = run {
-        val trust = PinningTrustManager(pin, onPin)
+        val trust = PinningTrustManager(pin)
         val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), SecureRandom()) }
         OkHttpClient.Builder()
             .sslSocketFactory(tls.socketFactory, trust)
@@ -106,7 +103,7 @@ class FennecClient(
         withContext(Dispatchers.IO) {
             try {
                 val req = Request.Builder().url("https://$address$path").method(method, body)
-                    .apply { secret?.let { header("Authorization", "Bearer $it") } }
+                    .apply { session?.let { header("Authorization", "Bearer $it") } }
                     .build()
                 http.newCall(req).execute().use { resp ->
                     val text = resp.body.string()
@@ -127,7 +124,7 @@ class FennecClient(
             } catch (e: IOException) {
                 Api.Unreachable(e)
             } catch (e: IllegalArgumentException) {
-                // An address no URL can hold (saved by an older version): find Fennec again.
+                // An address no URL can hold.
                 Api.Unreachable(e)
             }
         }
@@ -150,31 +147,16 @@ class FennecClient(
 
     private fun JsonElement.body() = toString().toRequestBody(jsonType)
 
-    suspend fun pair(token: String, deviceName: String, nonce: String): Api<PairResult> =
-        call("POST", "/v1/pair", buildJsonObject {
-            put("token", token); put("device_name", deviceName); put("nonce", nonce)
+    /** Opens the transfer with the code's ticket (used once). */
+    suspend fun hello(ticket: String, deviceName: String): Api<Hello> =
+        call("POST", "/v1/hello", buildJsonObject {
+            put("ticket", ticket); put("device_name", deviceName)
         }.body()).map {
-            PairResult(
-                it["device_id"]?.jsonPrimitive?.longOrNull ?: 0,
-                it.str("secret") ?: "",
-                it.str("name") ?: "Fennec",
-                it.str("id") ?: "",
-            )
+            Hello(it.str("session") ?: "", it.str("name") ?: "Fennec", it.str("id") ?: "", json.decodeFromJsonElement<DesktopInfo>(it))
         }
 
-    suspend fun info(): Api<DesktopInfo> = call("GET", "/v1/info").map { json.decodeFromJsonElement<DesktopInfo>(it) }
-
-    suspend fun createProject(name: String, color: String, defaultTemplate: String?): Api<Project> =
-        call("POST", "/v1/projects", buildJsonObject {
-            put("name", name); put("color", color)
-            defaultTemplate?.let { put("default_template", it) }
-        }.body()).map { json.decodeFromJsonElement<Project>(it) }
-
-    /** Changes name, colour and default template (null: Fennec's default). */
-    suspend fun updateProject(id: Long, name: String, color: String, defaultTemplate: String?): Api<Project> =
-        call("PUT", "/v1/projects/$id", buildJsonObject {
-            put("name", name); put("color", color); put("default_template", defaultTemplate)
-        }.body()).map { json.decodeFromJsonElement<Project>(it) }
+    /** The same Fennec, with the session [hello] answered. */
+    fun withSession(session: String) = FennecClient(address, pin, session, timeoutSeconds)
 
     suspend fun announce(a: Announcement): Api<RemoteStatus> =
         call("PUT", "/v1/recordings/${a.id}", buildJsonObject {
@@ -193,15 +175,6 @@ class FennecClient(
     suspend fun complete(id: String): Api<RemoteStatus> =
         call("POST", "/v1/recordings/$id/complete", ByteArray(0).toRequestBody(octets)).map(::status)
 
-    suspend fun statuses(ids: List<String>): Api<List<RemoteStatus>> =
-        call("GET", "/v1/recordings?ids=${ids.joinToString(",")}").map {
-            it["recordings"]?.jsonArray?.map { s -> status(s.jsonObject) }.orEmpty()
-        }
-
-    suspend fun unpair(): Api<Unit> = call("DELETE", "/v1/devices/self").map { }
-
-    companion object {
-        /** Pairing waits for someone to press Allow in Fennec (up to 120 s). */
-        const val PAIR_TIMEOUT_SECONDS = 150L
-    }
+    /** Everything meant to be sent has been: ends the session. */
+    suspend fun done(): Api<Unit> = call("POST", "/v1/done", "{}".toRequestBody(jsonType)).map { }
 }

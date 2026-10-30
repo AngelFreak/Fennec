@@ -1,6 +1,6 @@
 //! The phone receiver through its real HTTPS server on localhost, driven
-//! the way Fennec Recorder drives it: pair, announce, upload in chunks,
-//! resume, complete, ask for status, unpair.
+//! the way Fennec Recorder drives it: scan the code (hello), announce,
+//! upload in chunks, resume, complete, done.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use fennec::config::Paths;
-use fennec::store::{InboundState, Source, Store};
-use fennec::sync::{Receiver, ReceiverConfig, SyncEvent, pairing_code};
+use fennec::store::{Source, Store};
+use fennec::sync::{Receiver, ReceiverConfig, SyncEvent};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -21,7 +21,7 @@ struct Desktop {
 }
 
 impl Desktop {
-    fn start(pair_wait: Duration) -> Self {
+    fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let mut d = Self {
@@ -30,13 +30,13 @@ impl Desktop {
             receiver: None,
             events: Arc::default(),
         };
-        d.restart(pair_wait);
+        d.restart();
         d
     }
 
-    /// Stops the receiver and starts a new one on the same data (Fennec
-    /// closed and opened again).
-    fn restart(&mut self, pair_wait: Duration) {
+    /// Stops the receiver and starts a new one with a new code on the same
+    /// data (the dialog closed and opened again).
+    fn restart(&mut self) {
         self.receiver = None;
         let events = Arc::clone(&self.events);
         let receiver = Receiver::start(
@@ -45,8 +45,6 @@ impl Desktop {
                 paths: self.paths.clone(),
                 default_project: None,
                 default_template: "notat".into(),
-                advertise: false,
-                pair_wait,
             },
             Arc::new(move |e| events.lock().unwrap().push(e)),
         )
@@ -56,6 +54,10 @@ impl Desktop {
 
     fn receiver(&self) -> &Receiver {
         self.receiver.as_ref().unwrap()
+    }
+
+    fn ticket(&self) -> String {
+        self.receiver().offer().expect("the code is shown").ticket
     }
 
     fn store(&self) -> Store {
@@ -72,7 +74,7 @@ impl Desktop {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap(),
-            secret: None,
+            session: None,
         }
     }
 
@@ -87,22 +89,12 @@ impl Desktop {
         }
     }
 
-    /// Pairs a phone the whole way: offer, token, code check, Allow.
-    fn paired_phone(&self) -> Phone {
+    /// A phone that scanned the code shown now.
+    fn scanned_phone(&self) -> Phone {
         let mut phone = self.phone();
-        let offer = self.receiver().offer_pairing();
-        let token = offer.token.clone();
-        let p = phone.clone();
-        let asking = std::thread::spawn(move || p.pair(&token, "Pixel 8", "nonce-0123456789abcdef"));
-        let SyncEvent::PairRequest { request, .. } =
-            self.wait_for("pair request", |e| matches!(e, SyncEvent::PairRequest { .. }))
-        else {
-            unreachable!()
-        };
-        self.receiver().decide(request, true);
-        let (status, body) = asking.join().unwrap();
+        let (status, body) = phone.hello(&self.ticket(), "Pixel 8");
         assert_eq!(status, 200, "{body}");
-        phone.secret = Some(body["secret"].as_str().unwrap().to_string());
+        phone.session = Some(body["session"].as_str().unwrap().to_string());
         self.events.lock().unwrap().clear();
         phone
     }
@@ -112,13 +104,13 @@ impl Desktop {
 struct Phone {
     base: String,
     client: reqwest::blocking::Client,
-    secret: Option<String>,
+    session: Option<String>,
 }
 
 impl Phone {
     fn send(&self, method: reqwest::Method, path: &str, body: Option<Vec<u8>>) -> (u16, Value) {
         let mut req = self.client.request(method, format!("{}{path}", self.base));
-        if let Some(s) = &self.secret {
+        if let Some(s) = &self.session {
             req = req.bearer_auth(s);
         }
         if let Some(b) = body {
@@ -129,21 +121,16 @@ impl Phone {
         (status, resp.json().unwrap_or(Value::Null))
     }
 
-    fn get(&self, path: &str) -> (u16, Value) {
-        self.send(reqwest::Method::GET, path, None)
+    fn post_json(&self, path: &str, v: Value) -> (u16, Value) {
+        self.send(reqwest::Method::POST, path, Some(serde_json::to_vec(&v).unwrap()))
     }
 
     fn put_json(&self, path: &str, v: Value) -> (u16, Value) {
         self.send(reqwest::Method::PUT, path, Some(serde_json::to_vec(&v).unwrap()))
     }
 
-    fn pair(&self, token: &str, name: &str, nonce: &str) -> (u16, Value) {
-        let body = json!({ "token": token, "device_name": name, "nonce": nonce });
-        self.send(
-            reqwest::Method::POST,
-            "/v1/pair",
-            Some(serde_json::to_vec(&body).unwrap()),
-        )
+    fn hello(&self, ticket: &str, name: &str) -> (u16, Value) {
+        self.post_json("/v1/hello", json!({ "ticket": ticket, "device_name": name }))
     }
 
     fn announce(&self, id: &str, audio: &[u8], extra: Value) -> (u16, Value) {
@@ -201,11 +188,11 @@ const ID: &str = "3f2b9c1e-8a4d-4c6e-9b7a-1d2e3f4a5b6c";
 
 #[test]
 fn the_certificate_the_phone_sees_matches_the_pin_in_the_qr_code() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+    let desktop = Desktop::start();
     let phone = desktop.phone();
     let resp = phone
         .client
-        .get(format!("{}/v1/info", phone.base))
+        .post(format!("{}/v1/hello", phone.base))
         .send()
         .unwrap();
     let der = resp
@@ -217,145 +204,94 @@ fn the_certificate_the_phone_sees_matches_the_pin_in_the_qr_code() {
     let (_, cert) = x509_parser::parse_x509_certificate(&der).unwrap();
     let spki = cert.tbs_certificate.subject_pki.raw;
     let pin = URL_SAFE_NO_PAD.encode(Sha256::digest(spki));
-    let offer = desktop.receiver().offer_pairing();
+    let offer = desktop.receiver().offer().unwrap();
     assert_eq!(pin, desktop.receiver().pin());
+    assert!(offer.uri().starts_with("fennec://send?"), "{}", offer.uri());
     assert!(offer.uri().contains(&format!("pin={pin}&")), "{}", offer.uri());
 }
 
 #[test]
-fn a_phone_pairs_when_allowed_and_both_sides_show_the_same_code() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+fn the_phone_that_scans_the_code_gets_a_session_and_fennecs_projects() {
+    let desktop = Desktop::start();
+    let p = desktop.store().create_project("Kundemøder", "#2F6F4E").unwrap();
     let phone = desktop.phone();
-    assert_eq!(
-        phone.pair("12345678", "Pixel 8", "nonce-0123456789abcdef").1["error"],
-        "no_offer"
-    );
-
-    let offer = desktop.receiver().offer_pairing();
-    let wrong = if offer.token == "00000000" {
-        "11111111"
-    } else {
-        "00000000"
-    };
-    assert_eq!(
-        phone.pair(wrong, "Pixel 8", "nonce-0123456789abcdef").1["error"],
-        "wrong_token"
-    );
-
-    let nonce = "nonce-0123456789abcdef";
-    let token = offer.token_display(); // typed with the space, as shown
-    let p = phone.clone();
-    let asking = std::thread::spawn(move || p.pair(&token, "  Pixel 8  ", nonce));
-    let SyncEvent::PairRequest {
-        request,
-        device_name,
-        code,
-    } = desktop.wait_for("pair request", |e| matches!(e, SyncEvent::PairRequest { .. }))
-    else {
-        unreachable!()
-    };
-    assert_eq!(device_name, "Pixel 8");
-    assert_eq!(
-        code,
-        pairing_code(&offer.pin, &offer.token, nonce),
-        "the phone computes the same"
-    );
-    desktop.receiver().decide(request, true);
-    let (status, body) = asking.join().unwrap();
+    let (status, body) = phone.hello(&desktop.ticket(), "  Pixel 8  ");
     assert_eq!(status, 200, "{body}");
-    let secret = body["secret"].as_str().unwrap();
-    assert!(secret.len() >= 40);
-
-    let devices = desktop.store().devices().unwrap();
-    assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].name, "Pixel 8");
-    desktop.wait_for("devices changed", |e| *e == SyncEvent::DevicesChanged);
-    desktop.wait_for("pairing ended", |e| *e == SyncEvent::PairingEnded);
-
-    // The offer is used up.
-    assert_eq!(phone.pair(&offer.token, "Other", nonce).1["error"], "no_offer");
-}
-
-#[test]
-fn denied_or_unanswered_pairing_saves_nothing() {
-    let desktop = Desktop::start(Duration::from_millis(300));
-    let phone = desktop.phone();
-    let offer = desktop.receiver().offer_pairing();
-    let p = phone.clone();
-    let token = offer.token.clone();
-    let asking = std::thread::spawn(move || p.pair(&token, "Pixel 8", "nonce-0123456789abcdef"));
-    let SyncEvent::PairRequest { request, .. } =
-        desktop.wait_for("pair request", |e| matches!(e, SyncEvent::PairRequest { .. }))
-    else {
-        unreachable!()
-    };
-    desktop.receiver().decide(request, false);
-    assert_eq!(asking.join().unwrap().1["error"], "denied");
-
-    let offer = desktop.receiver().offer_pairing();
+    assert_eq!(body["session"].as_str().unwrap().len(), 43);
+    assert_eq!(body["protocol"], 2);
+    assert_eq!(body["id"].as_str().unwrap(), &desktop.receiver().pin()[..12]);
     assert_eq!(
-        phone.pair(&offer.token, "Pixel 8", "nonce-0123456789abcdef").1["error"],
-        "timeout"
+        body["projects"][0],
+        json!({ "id": p, "name": "Kundemøder", "color": "#2F6F4E", "default_template": null, "documents": 0 })
     );
-    assert!(desktop.store().devices().unwrap().is_empty());
+    assert!(body["templates"].is_array());
+    assert_eq!(body["default_template"], "notat");
+    assert_eq!(
+        desktop.wait_for("connected", |e| matches!(e, SyncEvent::Connected { .. })),
+        SyncEvent::Connected {
+            device_name: "Pixel 8".into()
+        }
+    );
+    assert!(desktop.receiver().offer().is_none(), "the code is used");
 }
 
 #[test]
-fn wrong_codes_lock_the_offer() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+fn a_code_works_once_for_one_phone() {
+    let desktop = Desktop::start();
+    let ticket = desktop.ticket();
+    let first = desktop.phone();
+    assert_eq!(first.hello(&ticket, "Pixel 8").0, 200);
+    let (status, body) = desktop.phone().hello(&ticket, "Someone else");
+    assert_eq!(status, 403);
+    assert_eq!(body["error"], "used");
+    assert!(body["message"].as_str().unwrap().contains("new one"));
+}
+
+#[test]
+fn wrong_tickets_close_the_code() {
+    let desktop = Desktop::start();
+    let ticket = desktop.ticket();
     let phone = desktop.phone();
-    let offer = desktop.receiver().offer_pairing();
-    let wrong = if offer.token == "00000000" {
-        "11111111"
-    } else {
-        "00000000"
-    };
     for _ in 0..4 {
-        assert_eq!(
-            phone.pair(wrong, "x", "nonce-0123456789abcdef").1["error"],
-            "wrong_token"
-        );
+        assert_eq!(phone.hello("guess", "Guesser").1["error"], "wrong_ticket");
     }
-    assert_eq!(
-        phone.pair(wrong, "x", "nonce-0123456789abcdef").1["error"],
-        "locked"
-    );
-    assert_eq!(
-        phone.pair(&offer.token, "x", "nonce-0123456789abcdef").1["error"],
-        "no_offer"
-    );
+    assert_eq!(phone.hello("guess", "Guesser").1["error"], "wrong_ticket");
+    desktop.wait_for("code closed", |e| *e == SyncEvent::CodeClosed);
+    assert_eq!(phone.hello(&ticket, "Pixel 8").1["error"], "no_ticket");
 }
 
 #[test]
-fn only_paired_phones_get_in() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+fn without_the_session_nothing_gets_in() {
+    let desktop = Desktop::start();
     let mut stranger = desktop.phone();
-    assert_eq!(stranger.get("/v1/info").0, 401);
-    stranger.secret = Some("made-up".into());
-    assert_eq!(stranger.get("/v1/info").0, 401);
+    let (status, body) = stranger.announce(ID, &audio(10), json!({}));
+    assert_eq!(status, 401);
+    assert_eq!(body["error"], "no_session");
+    // Not even with the ticket as a bearer.
+    stranger.session = Some(desktop.ticket());
+    assert_eq!(stranger.announce(ID, &audio(10), json!({})).0, 401);
+    let _phone = desktop.scanned_phone();
+    stranger.session = Some("made-up".into());
     assert_eq!(stranger.announce(ID, &audio(10), json!({})).0, 401);
 }
 
 #[test]
-fn info_lists_the_projects_a_recording_can_go_to() {
-    let desktop = Desktop::start(Duration::from_secs(5));
-    let p = desktop.store().create_project("Kundemøder", "#2F6F4E").unwrap();
-    let phone = desktop.paired_phone();
-    let (status, info) = phone.get("/v1/info");
-    assert_eq!(status, 200);
-    assert_eq!(info["protocol"], 1);
-    assert_eq!(
-        info["projects"][0],
-        json!({ "id": p, "name": "Kundemøder", "color": "#2F6F4E", "default_template": null, "documents": 0 })
+fn an_older_app_is_asked_to_update() {
+    let desktop = Desktop::start();
+    let phone = desktop.phone();
+    let (status, body) = phone.post_json(
+        "/v1/pair",
+        json!({ "token": "12345678", "device_name": "Old", "nonce": "nonce-0123456789abcdef" }),
     );
-    assert_eq!(info["id"].as_str().unwrap(), &desktop.receiver().pin()[..12]);
+    assert_eq!(status, 410);
+    assert_eq!(body["error"], "update_app");
 }
 
 #[test]
 fn a_recording_arrives_in_chunks_and_becomes_a_queued_document() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+    let desktop = Desktop::start();
     let project = desktop.store().create_project("Kundemøder", "#2F6F4E").unwrap();
-    let phone = desktop.paired_phone();
+    let phone = desktop.scanned_phone();
     let data = audio(2_500_000);
 
     let (status, body) = phone.announce(
@@ -378,12 +314,35 @@ fn a_recording_arrives_in_chunks_and_becomes_a_queued_document() {
     assert_eq!(body["state"], "queued");
     let doc = body["document_id"].as_i64().unwrap();
 
-    let SyncEvent::Received { document_id, path } =
-        desktop.wait_for("received", |e| matches!(e, SyncEvent::Received { .. }))
+    let SyncEvent::Received {
+        id,
+        document_id,
+        path,
+    } = desktop.wait_for("received", |e| matches!(e, SyncEvent::Received { .. }))
     else {
         unreachable!()
     };
-    assert_eq!(document_id, doc);
+    assert_eq!((id.as_str(), document_id), (ID, doc));
+    // The dialog saw it arrive, chunk by chunk.
+    let seen: Vec<u64> = desktop
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            SyncEvent::Arriving {
+                received,
+                size,
+                title,
+                ..
+            } => {
+                assert_eq!((*size, title.as_str()), (data.len() as u64, "Interview, Aarhus"));
+                Some(*received)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(seen, [0, 1 << 20, 2 << 20, 2_500_000]);
     assert!(path.starts_with(desktop.paths.audio()), "{}", path.display());
     assert_eq!(std::fs::read(&path).unwrap(), data);
 
@@ -403,29 +362,18 @@ fn a_recording_arrives_in_chunks_and_becomes_a_queued_document() {
     assert_eq!(store.documents(&Default::default()).unwrap().len(), 1);
     // Announcing again tells the phone it is all there.
     assert_eq!(phone.announce(ID, &data, json!({})).1["state"], "queued");
-
-    // The phone follows the Files queue.
-    store
-        .set_inbound_state_for_document(doc, InboundState::Done, None)
-        .unwrap();
-    let (_, body) = phone.get(&format!("/v1/recordings?ids={ID},not-a-known-id"));
-    assert_eq!(body["recordings"][0]["state"], "done");
-    assert_eq!(body["recordings"][0]["received"], data.len());
-    assert_eq!(body["recordings"][1]["state"], "unknown");
-    assert_eq!(desktop.store().devices().unwrap()[0].recordings, 1);
 }
 
 #[test]
-fn an_upload_resumes_after_fennec_restarts() {
-    let mut desktop = Desktop::start(Duration::from_secs(5));
-    let phone = desktop.paired_phone();
+fn an_upload_resumes_with_the_next_code() {
+    let mut desktop = Desktop::start();
+    let phone = desktop.scanned_phone();
     let data = audio(3_000_000);
     phone.announce(ID, &data, json!({}));
     phone.upload(ID, &data[..1_500_000], 0);
 
-    desktop.restart(Duration::from_secs(5));
-    let mut phone2 = desktop.phone();
-    phone2.secret = phone.secret.clone();
+    desktop.restart();
+    let phone2 = desktop.scanned_phone();
     let (_, body) = phone2.announce(ID, &data, json!({}));
     assert_eq!(body["received"], 1_500_000);
     phone2.upload(ID, &data, 1_500_000);
@@ -434,8 +382,8 @@ fn an_upload_resumes_after_fennec_restarts() {
 
 #[test]
 fn a_damaged_upload_is_refused_and_starts_over() {
-    let desktop = Desktop::start(Duration::from_secs(5));
-    let phone = desktop.paired_phone();
+    let desktop = Desktop::start();
+    let phone = desktop.scanned_phone();
     let data = audio(300_000);
     phone.announce(ID, &data, json!({}));
     let mut damaged = data.clone();
@@ -453,8 +401,8 @@ fn a_damaged_upload_is_refused_and_starts_over() {
 
 #[test]
 fn bad_announcements_are_refused() {
-    let desktop = Desktop::start(Duration::from_secs(5));
-    let phone = desktop.paired_phone();
+    let desktop = Desktop::start();
+    let phone = desktop.scanned_phone();
     let data = audio(1000);
     assert_eq!(
         phone.announce(ID, &data, json!({ "size": 5_000_000_000_u64 })).1["error"],
@@ -478,13 +426,13 @@ fn bad_announcements_are_refused() {
 
 #[test]
 fn a_recording_for_a_deleted_project_goes_to_the_default_one() {
-    let desktop = Desktop::start(Duration::from_secs(5));
+    let desktop = Desktop::start();
     let store = desktop.store();
     let gone = store.create_project("Gammel", "#000000").unwrap();
     store.delete_project(gone).unwrap();
     let inbox = store.create_project("Indbakke", "#111111").unwrap();
     desktop.receiver().set_defaults(Some(inbox), "notat");
-    let phone = desktop.paired_phone();
+    let phone = desktop.scanned_phone();
     let data = audio(1000);
     phone.announce(ID, &data, json!({ "project_id": gone }));
     phone.upload(ID, &data, 0);
@@ -495,133 +443,21 @@ fn a_recording_for_a_deleted_project_goes_to_the_default_one() {
 }
 
 #[test]
-fn an_unpaired_phone_is_shut_out() {
-    let desktop = Desktop::start(Duration::from_secs(5));
-    let phone = desktop.paired_phone();
-    assert_eq!(phone.get("/v1/info").0, 200);
-    assert_eq!(
-        phone.send(reqwest::Method::DELETE, "/v1/devices/self", None).0,
-        200
-    );
-    assert_eq!(phone.get("/v1/info").0, 401);
-    assert!(desktop.store().devices().unwrap().is_empty());
+fn done_ends_the_transfer() {
+    let desktop = Desktop::start();
+    let phone = desktop.scanned_phone();
+    assert_eq!(phone.post_json("/v1/done", json!({})).0, 200);
+    desktop.wait_for("finished", |e| *e == SyncEvent::Finished);
+    let (status, body) = phone.announce(ID, &audio(10), json!({}));
+    assert_eq!(status, 401);
+    assert_eq!(body["error"], "no_session");
 }
 
 #[test]
-fn phones_can_find_fennec_by_name_on_the_network() {
-    let dir = tempfile::tempdir().unwrap();
-    let receiver = Receiver::start(
-        ReceiverConfig {
-            bind: "0.0.0.0:0".parse().unwrap(),
-            paths: Paths::under(dir.path()),
-            default_project: None,
-            default_template: "notat".into(),
-            advertise: true,
-            pair_wait: Duration::from_secs(5),
-        },
-        Arc::new(|_| {}),
-    )
-    .unwrap();
-    let browser = mdns_sd::ServiceDaemon::new().unwrap();
-    let events = browser.browse("_fennec._tcp.local.").unwrap();
-    let id = &receiver.pin()[..12];
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut found = None;
-    while Instant::now() < deadline && found.is_none() {
-        if let Ok(mdns_sd::ServiceEvent::ServiceResolved(info)) =
-            events.recv_timeout(Duration::from_millis(500))
-            && info.get_property_val_str("id") == Some(id)
-        {
-            found = Some((
-                info.get_port(),
-                info.get_property_val_str("v").map(str::to_string),
-            ));
-        }
-    }
-    let _ = browser.shutdown();
-    let (port, version) = found.expect("Fennec was not announced over mDNS");
-    assert_eq!(port, receiver.local_addr().port());
-    assert_eq!(version.as_deref(), Some("1"));
-}
-
-#[test]
-fn a_phone_adds_projects_and_changes_their_name_colour_and_default_template() {
-    let desktop = Desktop::start(Duration::from_secs(5));
-    fennec::template::install_defaults(&desktop.paths.templates()).unwrap();
-    let phone = desktop.paired_phone();
-
-    let (_, info) = phone.get("/v1/info");
-    let interview = info["templates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["id"] == "moedereferat")
-        .expect("the built-in templates are listed");
-    assert!(
-        !interview["fields"].as_array().unwrap().is_empty(),
-        "with their fields"
-    );
-    assert_eq!(info["project_colors"].as_array().unwrap().len(), 5);
-    assert_eq!(info["default_template"], "notat");
-
-    let post = |v: Value| {
-        phone.send(
-            reqwest::Method::POST,
-            "/v1/projects",
-            Some(serde_json::to_vec(&v).unwrap()),
-        )
-    };
-    let (status, p) = post(json!({ "name": "  Fra telefonen ", "default_template": "moedereferat" }));
-    assert_eq!(status, 200, "{p}");
-    assert_eq!(p["name"], "Fra telefonen");
-    assert_eq!(p["color"], "#C2410C", "the next colour in the sidebar's order");
-    assert_eq!(p["default_template"], "moedereferat");
-    desktop.wait_for("projects changed", |e| *e == SyncEvent::ProjectsChanged);
-
-    assert_eq!(post(json!({ "name": "fra TELEFONEN" })).1["error"], "exists");
-    assert_eq!(post(json!({ "name": "   " })).1["error"], "bad_name");
-    assert_eq!(
-        post(json!({ "name": "X", "color": "red" })).1["error"],
-        "bad_color"
-    );
-    assert_eq!(
-        post(json!({ "name": "X", "default_template": "nope" })).1["error"],
-        "bad_template"
-    );
-
-    let id = p["id"].as_i64().unwrap();
-    let (status, p) = phone.put_json(
-        &format!("/v1/projects/{id}"),
-        json!({ "name": "Kundemøder", "color": "#0F766E" }),
-    );
-    assert_eq!(status, 200, "{p}");
-    assert_eq!(p["default_template"], "moedereferat", "fields left out stay");
-    let store = desktop.store();
-    let saved = store
-        .projects()
-        .unwrap()
-        .into_iter()
-        .find(|x| x.id == id)
-        .unwrap();
-    assert_eq!(
-        (saved.name.as_str(), saved.color.as_str()),
-        ("Kundemøder", "#0F766E")
-    );
-
-    // A recording into it without a template of its own gets the project's.
-    let data = audio(1000);
-    phone.announce(ID, &data, json!({ "project_id": id }));
-    phone.upload(ID, &data, 0);
-    let doc = phone.complete(ID).1["document_id"].as_i64().unwrap();
-    assert_eq!(
-        store.document(doc).unwrap().template_id.as_deref(),
-        Some("moedereferat")
-    );
-
-    let (_, p) = phone.put_json(&format!("/v1/projects/{id}"), json!({ "default_template": null }));
-    assert!(p["default_template"].is_null(), "null clears it");
-    assert_eq!(
-        phone.put_json("/v1/projects/9999", json!({ "name": "x" })).1["error"],
-        "unknown_project"
-    );
+fn nothing_listens_once_the_receiver_stops() {
+    let mut desktop = Desktop::start();
+    let phone = desktop.scanned_phone();
+    desktop.receiver = None;
+    let reached = phone.client.post(format!("{}/v1/done", phone.base)).send();
+    assert!(reached.is_err(), "still listening");
 }

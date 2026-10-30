@@ -208,6 +208,8 @@ pub struct FilesPage {
     pub root: gtk::Box,
     /// The queue; folds away on narrow windows.
     pub side_panel: adw::OverlaySplitView,
+    /// Opens the Receive from phone dialog (the window wires it).
+    pub receive: gtk::Button,
     /// Extra buttons for the window header.
     pub header_actions: gtk::Box,
     on_header_changed: super::Handler<()>,
@@ -308,6 +310,15 @@ impl FilesPage {
         formats.set_xalign(0.5);
         drop_zone.append(&formats);
         queue.append(&drop_zone);
+        let receive = gtk::Button::new();
+        let receive_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        receive_content.set_halign(gtk::Align::Center);
+        receive_content.append(&gtk::Image::from_icon_name("fennec-phone-symbolic"));
+        receive_content.append(&gtk::Label::new(Some("Receive from phone…")));
+        receive.set_child(Some(&receive_content));
+        receive.add_css_class("fx-secondary");
+        receive.set_tooltip_text(Some("Show a code to scan with Fennec Recorder"));
+        queue.append(&receive);
         let queue_list = gtk::Box::new(gtk::Orientation::Vertical, 8);
         // Room for the cards' rings, which the scroller would clip.
         queue_list.set_margin_start(1);
@@ -341,6 +352,7 @@ impl FilesPage {
         let page = Rc::new(Self {
             root,
             side_panel,
+            receive,
             header_actions,
             on_header_changed: RefCell::default(),
             store,
@@ -526,7 +538,8 @@ impl FilesPage {
         id
     }
 
-    /// Tells the phone that sent `doc`, if one did, how transcribing goes.
+    /// Keeps the state of the phone recording behind `doc`, if it is one, so
+    /// one cut off by closing Fennec is transcribed again at the next start.
     fn report_to_phone(&self, doc: DocumentId, status: &ItemStatus) {
         let (state, error) = match status {
             ItemStatus::Waiting => (InboundState::Queued, None),

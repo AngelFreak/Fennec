@@ -1,58 +1,58 @@
 //! Receiving recordings from Fennec Recorder, the Android companion app.
 //!
-//! While receiving is on, Fennec runs a small HTTPS server on the local
-//! network. A phone pairs once by scanning a QR code and having someone press
-//! Allow here; after that it uploads recordings in chunks, and each finished
-//! recording becomes a document in the Files queue. Nothing leaves the
-//! network. The protocol is described in
-//! `docs/plans/2026-10-06-android-recorder.md`.
+//! While the Receive from phone dialog is open, Fennec runs a small HTTPS
+//! server on the local network and shows a QR code. The phone that scans it
+//! uploads its recordings in chunks, and each finished recording becomes a
+//! document in the Files queue. Nothing leaves the network, and nothing is
+//! kept for the next time. The protocol is described in
+//! `docs/plans/2026-10-30-send-by-qr.md`.
 
-mod discovery;
 mod http;
 mod inbound;
-mod pairing;
 mod projects;
 mod server;
+mod session;
 mod tls;
 pub mod usb;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sha2::{Digest, Sha256};
-
 use crate::store::DocumentId;
 
 pub use inbound::{Arrived, Target};
-pub use pairing::{PairingOffer, pairing_code};
 pub use server::{Receiver, ReceiverConfig};
+pub use session::SendOffer;
 pub use tls::Identity;
 
 /// Port Fennec listens on unless Settings says otherwise.
 pub const DEFAULT_PORT: u16 = 47130;
-/// Version of the phone protocol, reported by `GET /v1/info`.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Version of the phone protocol, reported by `POST /v1/hello`.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// What the receiver tells the app. Sent from the receiver's threads.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncEvent {
-    /// A phone presented the pairing code. Show `code` and answer with
-    /// [`Receiver::decide`].
-    PairRequest {
-        request: u64,
-        device_name: String,
-        code: String,
+    /// A phone scanned the code and is sending.
+    Connected { device_name: String },
+    /// A recording is arriving: `received` of `size` bytes are here.
+    Arriving {
+        id: String,
+        title: String,
+        received: u64,
+        size: u64,
     },
-    /// The pairing offer is over: used, denied, cancelled, expired or
-    /// locked after wrong codes.
-    PairingEnded,
-    /// A phone was paired or removed.
-    DevicesChanged,
-    /// A phone added a project or changed one.
-    ProjectsChanged,
     /// A recording arrived in full and has a document; it should join the
     /// Files queue.
-    Received { document_id: DocumentId, path: PathBuf },
+    Received {
+        id: String,
+        document_id: DocumentId,
+        path: PathBuf,
+    },
+    /// The phone has sent everything.
+    Finished,
+    /// Too many wrong codes: the code no longer works.
+    CodeClosed,
 }
 
 pub type EventSink = Arc<dyn Fn(SyncEvent) + Send + Sync>;
@@ -66,10 +66,6 @@ pub fn desktop_name() -> String {
         .unwrap_or_else(|| "Fennec".into())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -78,9 +74,4 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     getrandom::fill(&mut buf).expect("the system random source works");
     buf
-}
-
-/// How a device secret is kept in the database: only its hash.
-fn secret_hash(secret: &str) -> String {
-    sha256_hex(secret.as_bytes())
 }

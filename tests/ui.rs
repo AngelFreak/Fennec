@@ -992,7 +992,7 @@ fn main() {
     // --- documents in a project: select, move, tag, delete with Undo
     document_checks(&tmp.path().join("e"));
 
-    // --- a phone pairs, sends a recording, and it is transcribed here
+    // --- a phone scans a code, sends a recording, and it is transcribed here
     phone_checks(&tmp.path().join("f"));
 
     // --- a phone plugged in over USB: import, transcribe, remove from the phone
@@ -1719,13 +1719,15 @@ fn free_port() -> u16 {
 /// What the stand-in phone saw, sent back to the main thread.
 #[derive(Debug, Default)]
 struct PhoneRun {
-    paired: bool,
+    connected: bool,
+    /// What a second phone got for the same code.
+    reused: String,
     document_id: Option<i64>,
-    final_state: String,
 }
 
-/// Plays Fennec Recorder against the real window: pairs (someone presses
-/// Allow), sends a WAV in chunks and waits until it is transcribed.
+/// Plays Fennec Recorder against the real window: scans the code shown in
+/// Receive from phone, sends a WAV in chunks, says it is done, and the
+/// recording is transcribed here.
 fn phone_checks(root: &std::path::Path) {
     use sha2::Digest;
 
@@ -1738,35 +1740,42 @@ fn phone_checks(root: &std::path::Path) {
     w.settings.show_section("phone");
     let summaries = w.settings.nav_summaries();
     check(
-        "Settings lists Phone, off until turned on",
-        summaries.iter().any(|(id, line)| id == "phone" && line == "Off"),
+        "Settings lists Phone with both ways to send",
+        summaries
+            .iter()
+            .any(|(id, line)| id == "phone" && line == "QR code or USB"),
     );
+    screenshot(&w.window, "settings-phone");
     check(
-        "receiving is off by default: nothing listens",
+        "nothing listens until Receive from phone is chosen",
         std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
     );
 
-    w.settings.phone.start_pairing();
+    w.sidebar.go(ui::Nav::Files);
+    w.files.receive.emit_clicked();
+    pump_until(Duration::from_millis(300), || false);
     let offer = w.phone.offer();
     check(
-        "Pair a phone turns receiving on and shows a code",
-        offer.is_some() && w.settings.phone.enabled.is_active(),
+        "Receive from phone listens and shows a code",
+        offer.is_some() && w.phone.is_listening() && w.phone.dialog_page().as_deref() == Some("waiting"),
     );
     let Some(offer) = offer else { return };
-    let texts = ui::texts_in(&w.settings.root);
+    let texts = w.phone.dialog().map(|d| ui::texts_in(&d)).unwrap_or_default();
     check(
-        "the address and code are shown for phones without a camera",
-        texts.iter().any(|t| t == &offer.address) && texts.iter().any(|t| t.contains(&offer.token_display())),
+        "the dialog says where the phone connects",
+        texts.iter().any(|t| t.ends_with(&offer.address)),
     );
-    screenshot(&w.window, "settings-phone-pairing");
+    screenshot(&w.window, "receive-code");
 
     let wav = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/da_fleurs_0.wav"
     ))
     .unwrap();
-    let token = offer.token.clone();
+    let ticket = offer.ticket.clone();
     let base = format!("https://{}", offer.address);
+    let (halfway_tx, halfway) = std::sync::mpsc::channel::<()>();
+    let (go, go_rx) = std::sync::mpsc::channel::<()>();
     let phone = std::thread::spawn(move || {
         let client = reqwest::blocking::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -1774,18 +1783,22 @@ fn phone_checks(root: &std::path::Path) {
             .build()
             .unwrap();
         let mut run = PhoneRun::default();
-        let paired: serde_json::Value = client
-            .post(format!("{base}/v1/pair"))
-            .json(&serde_json::json!({
-                "token": token, "device_name": "Pixel 8", "nonce": "ui-test-nonce-0123456789"
-            }))
-            .send()
-            .and_then(|r| r.json())
-            .unwrap_or_default();
-        let Some(secret) = paired["secret"].as_str().map(str::to_string) else {
+        let hello = |name: &str| -> serde_json::Value {
+            client
+                .post(format!("{base}/v1/hello"))
+                .json(&serde_json::json!({ "ticket": ticket, "device_name": name }))
+                .send()
+                .and_then(|r| r.json())
+                .unwrap_or_default()
+        };
+        let Some(session) = hello("Pixel 8")["session"].as_str().map(str::to_string) else {
             return run;
         };
-        run.paired = true;
+        run.connected = true;
+        run.reused = hello("Someone else")["error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let id = "11111111-2222-3333-4444-555555555555";
         let sum: String = sha2::Sha256::digest(&wav)
             .iter()
@@ -1794,17 +1807,12 @@ fn phone_checks(root: &std::path::Path) {
         let call = |m: reqwest::Method, path: &str, body: Vec<u8>| -> serde_json::Value {
             client
                 .request(m, format!("{base}{path}"))
-                .bearer_auth(&secret)
+                .bearer_auth(&session)
                 .body(body)
                 .send()
                 .and_then(|r| r.json())
                 .unwrap_or_default()
         };
-        call(
-            reqwest::Method::POST,
-            "/v1/projects",
-            serde_json::to_vec(&serde_json::json!({ "name": "Fra telefonen" })).unwrap(),
-        );
         let meta = serde_json::json!({
             "title": "Telefonmøde", "recorded_at": 1_791_000_000_000_i64, "duration_ms": 5000,
             "ext": "wav", "size": wav.len(), "sha256": sum,
@@ -1814,7 +1822,12 @@ fn phone_checks(root: &std::path::Path) {
             &format!("/v1/recordings/{id}"),
             serde_json::to_vec(&meta).unwrap(),
         );
-        for (i, piece) in wav.chunks(64 * 1024).enumerate() {
+        let pieces: Vec<&[u8]> = wav.chunks(64 * 1024).collect();
+        for (i, piece) in pieces.iter().enumerate() {
+            if i == pieces.len() / 2 {
+                let _ = halfway_tx.send(());
+                let _ = go_rx.recv_timeout(Duration::from_secs(30));
+            }
             call(
                 reqwest::Method::PUT,
                 &format!("/v1/recordings/{id}/audio?offset={}", i * 64 * 1024),
@@ -1827,47 +1840,42 @@ fn phone_checks(root: &std::path::Path) {
             vec![],
         )["document_id"]
             .as_i64();
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(30) {
-            let st = call(reqwest::Method::GET, &format!("/v1/recordings?ids={id}"), vec![]);
-            run.final_state = st["recordings"][0]["state"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            if run.final_state == "done" || run.final_state == "failed" {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        call(reqwest::Method::POST, "/v1/done", b"{}".to_vec());
         run
     });
 
-    let asked = pump_until(Duration::from_secs(10), || w.phone.pending().is_some());
-    let pending = w.phone.pending();
+    let mid = pump_until(Duration::from_secs(20), || halfway.try_recv().is_ok());
+    pump_until(Duration::from_millis(300), || false);
+    let texts = w.phone.dialog().map(|d| ui::texts_in(&d)).unwrap_or_default();
     check(
-        "a phone with the right code waits for Allow, with the code to compare",
-        asked
-            && pending.as_ref().is_some_and(|p| {
-                p.device_name == "Pixel 8"
-                    && p.code
-                        == fennec::sync::pairing_code(&offer.pin, &offer.token, "ui-test-nonce-0123456789")
-            }),
+        "the dialog shows the phone and the recording arriving",
+        mid && w.phone.dialog_page().as_deref() == Some("sending")
+            && texts.iter().any(|t| t.starts_with("Pixel 8 is sending"))
+            && texts.iter().any(|t| t == "Telefonmøde"),
     );
-    screenshot(&w.window, "settings-phone-allow");
-    w.phone.decide(true);
+    screenshot(&w.window, "receive-sending");
+    let _ = go.send(());
     pump_until(Duration::from_secs(60), || phone.is_finished());
     let run = phone.join().unwrap();
-    check("the phone is paired after Allow", run.paired);
+    check("the phone that scanned the code is let in", run.connected);
+    check("the code works once", run.reused == "used");
     check(
-        "a project added on the phone appears in the sidebar",
+        "when the phone is done, Fennec says what arrived and stops listening",
         pump_until(Duration::from_secs(5), || {
-            w.sidebar.project_names().iter().any(|n| n == "Fra telefonen")
-        }),
+            w.phone.dialog_page().as_deref() == Some("finished") && !w.phone.is_listening()
+        }) && w
+            .phone
+            .dialog()
+            .map(|d| ui::texts_in(&d))
+            .unwrap_or_default()
+            .iter()
+            .any(|t| t == "Received 1 recording from Pixel 8"),
     );
     check(
-        "the paired phone is listed",
-        ui::texts_in(&w.settings.root).iter().any(|t| t == "Pixel 8"),
+        "the port is closed after the transfer",
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
     );
+    screenshot(&w.window, "receive-finished");
     check(
         "the recording becomes a document in the Files queue",
         run.document_id.is_some()
@@ -1881,43 +1889,48 @@ fn phone_checks(root: &std::path::Path) {
         "the queue shows the phone recording by its title, not its file name",
         queue.iter().any(|t| t == "Telefonmøde") && !queue.iter().any(|t| t.starts_with("phone-")),
     );
+    w.sidebar.go(ui::Nav::Settings);
+    w.phone.press_show_files();
     check(
-        "the phone sees its recording transcribed",
-        run.final_state == "done",
+        "Show in Files closes the dialog and shows Files",
+        w.phone.dialog().is_none()
+            && w.phone.transfer() == ui::phone::Transfer::Idle
+            && w.visible_page() == "files",
     );
     let store = Store::open(&root.join("data/fennec.db")).unwrap();
+    let transcribed = pump_until(Duration::from_secs(30), || {
+        store
+            .inbound("11111111-2222-3333-4444-555555555555")
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.state == fennec::store::InboundState::Done)
+    });
     let text = run
         .document_id
         .and_then(|doc| store.paragraphs(doc).ok())
         .unwrap_or_default();
     check(
-        "the transcript is saved under the phone's title",
-        text.iter().any(|p| p.text.contains("Hej fra telefonen"))
+        "the recording is transcribed under the phone's title",
+        transcribed
+            && text.iter().any(|p| p.text.contains("Hej fra telefonen"))
             && run
                 .document_id
                 .and_then(|doc| store.document(doc).ok())
                 .is_some_and(|d| d.title == "Telefonmøde"),
     );
-    check(
-        "the phone's row counts what it sent",
-        ui::texts_in(&w.settings.root)
-            .iter()
-            .any(|t| t.starts_with("Last seen") && t.ends_with("1 recording")),
-    );
-    check(
-        "the Settings line counts the phone",
-        w.settings
-            .nav_summaries()
-            .iter()
-            .any(|(id, line)| id == "phone" && line == "On · 1 phone"),
-    );
-    screenshot(&w.window, "settings-phone-paired");
 
-    w.settings.phone.enabled.set_active(false);
+    w.settings.phone.receive.emit_clicked();
+    pump_until(Duration::from_millis(200), || false);
+    let second = w.phone.offer();
     check(
-        "turning receiving off stops listening",
+        "Settings → Phone opens it too, with a new code",
+        second.is_some_and(|o| o.ticket != offer.ticket),
+    );
+    w.phone.close();
+    check(
+        "closing the dialog stops listening",
         pump_until(Duration::from_secs(5), || {
-            std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
+            !w.phone.is_listening() && std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
         }),
     );
 
@@ -1951,8 +1964,8 @@ fn phone_checks(root: &std::path::Path) {
             && !texts.iter().any(|t| t == "Halvt færdig"),
     );
     check(
-        "resuming does not need receiving to be on",
-        matches!(w.phone.state(), ui::phone::LinkState::Off),
+        "resuming does not need the phone to connect",
+        !w.phone.is_listening(),
     );
 }
 

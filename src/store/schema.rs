@@ -133,6 +133,33 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX inbound_document ON inbound_recordings(document_id);
     "#,
+    // 6: no more paired phones; each transfer starts with a QR code
+    r#"
+    CREATE TABLE inbound_new (
+        uuid        TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+        template_id TEXT,
+        ext         TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        sha256      TEXT NOT NULL,
+        received    INTEGER NOT NULL DEFAULT 0,
+        state       TEXT NOT NULL CHECK (state IN ('receiving', 'queued', 'transcribing', 'done', 'failed')),
+        document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+        error       TEXT,
+        updated_at  INTEGER NOT NULL
+    );
+    INSERT INTO inbound_new
+        SELECT uuid, title, recorded_at, duration_ms, project_id, template_id, ext, size,
+               sha256, received, state, document_id, error, updated_at
+        FROM inbound_recordings;
+    DROP TABLE inbound_recordings;
+    ALTER TABLE inbound_new RENAME TO inbound_recordings;
+    CREATE INDEX inbound_document ON inbound_recordings(document_id);
+    DROP TABLE devices;
+    "#,
 ];
 
 /// Brings the schema up to date. Threads may open a new database at the
@@ -146,4 +173,45 @@ pub(super) fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
         tx.pragma_update(None, "user_version", i + 1)?;
     }
     tx.commit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paired_phones_are_forgotten_and_their_uploads_kept() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        for sql in &MIGRATIONS[..5] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn.execute_batch(
+            "INSERT INTO devices (id, name, secret_hash, paired_at) VALUES (7, 'Pixel 8', 'h', 1);
+             INSERT INTO inbound_recordings
+                 (uuid, device_id, title, recorded_at, duration_ms, ext, size, sha256, received, state, updated_at)
+             VALUES ('abcdef12', 7, 'Møde', 1, 2, 'aac', 10, 's', 4, 'receiving', 3);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+        let row: (String, i64, String) = conn
+            .query_row(
+                "SELECT title, received, state FROM inbound_recordings WHERE uuid = 'abcdef12'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("Møde".into(), 4, "receiving".into()));
+        let devices: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'devices'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(devices, 0);
+        conn.execute_batch("PRAGMA foreign_key_check;").unwrap();
+    }
 }

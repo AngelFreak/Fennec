@@ -53,6 +53,5 @@ class FilingTest {
         val d = AppSettings()
         assertTrue(d.highQuality)
         assertEquals(0, d.keepDays)
-        assertTrue(d.unmeteredOnly)
     }
 }

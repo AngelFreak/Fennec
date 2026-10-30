@@ -10,25 +10,25 @@ import io.github.fennec.recorder.net.RemoteStatus
 import java.io.File
 import java.io.RandomAccessFile
 
-/** How a round of sending ended. */
+/** How sending a recording ended. */
 enum class Outcome {
-    /** Nothing left to send. */
+    /** Sent, or refused for good (marked FAILED): go on with the next. */
     DONE,
 
-    /** Fennec was not reachable; try again later. */
-    RETRY,
+    /** Fennec could not be reached. */
+    UNREACHABLE,
 
-    /** Fennec no longer knows this phone. */
-    UNPAIRED,
+    /** Fennec ended the session (Stop, or its dialog closed). */
+    STOPPED,
 
     /** Another computer answered at Fennec's address. */
     WRONG_COMPUTER,
 }
 
 /**
- * Sends recordings that are waiting, one at a time: announce, then chunks
- * from wherever Fennec's copy ends, then complete. Safe to stop at any point
- * and run again.
+ * Sends recordings over a session from a scanned code, one at a time:
+ * announce, then chunks from wherever Fennec's copy ends, then complete.
+ * Safe to stop at any point; the next scan resumes.
  */
 class Uploader(
     private val dao: RecordingDao,
@@ -37,15 +37,7 @@ class Uploader(
     private val now: () -> Long = System::currentTimeMillis,
     private val chunkSize: Int = CHUNK,
 ) {
-    suspend fun sendAll(): Outcome {
-        for (r in dao.toSend()) {
-            val outcome = send(r)
-            if (outcome != Outcome.DONE) return outcome
-        }
-        return Outcome.DONE
-    }
-
-    private fun Api.Unreachable.outcome() = if (wrongComputer) Outcome.WRONG_COMPUTER else Outcome.RETRY
+    private fun Api.Unreachable.outcome() = if (wrongComputer) Outcome.WRONG_COMPUTER else Outcome.UNREACHABLE
 
     /** Sends one recording; DONE also when it failed for good (marked FAILED). */
     suspend fun send(start: Recording): Outcome {
@@ -106,12 +98,17 @@ class Uploader(
 
     private suspend fun delivered(r: Recording, s: RemoteStatus): Outcome {
         val current = dao.get(r.id) ?: return Outcome.DONE
-        dao.update(current.applying(s, now()))
+        dao.update(
+            current.copy(
+                state = SyncState.SENT, sentBytes = current.size, documentId = s.documentId ?: current.documentId,
+                error = null, deliveredAt = current.deliveredAt ?: now(),
+            ),
+        )
         return Outcome.DONE
     }
 
     private suspend fun refused(r: Recording, a: Api.Refused): Outcome {
-        if (a.status == 401) return Outcome.UNPAIRED
+        if (a.status == 401) return Outcome.STOPPED
         return fail(r, a.message)
     }
 
@@ -129,16 +126,4 @@ class Uploader(
             ByteArray(n).also { f.seek(offset); f.readFully(it) }
         }
     }
-}
-
-/** The recording as Fennec reports it. */
-fun Recording.applying(s: RemoteStatus, now: Long): Recording {
-    val state = SyncState.fromRemote(s.state) ?: return this
-    return copy(
-        state = state,
-        sentBytes = if (state.delivered || state == SyncState.FAILED) size else s.received,
-        documentId = s.documentId ?: documentId,
-        error = if (state == SyncState.FAILED) s.error ?: "Fennec could not transcribe it." else null,
-        deliveredAt = deliveredAt ?: if (state.delivered) now else null,
-    )
 }

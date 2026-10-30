@@ -5,25 +5,32 @@ and the audio goes to Fennec on your computer over your own network, where it
 is transcribed with the models you already have. Nothing passes through the
 internet. Android 10 or newer.
 
-The design and the phone protocol are in
-[`docs/plans/2026-10-06-android-recorder.md`](../docs/plans/2026-10-06-android-recorder.md).
+The design is in
+[`docs/plans/2026-10-06-android-recorder.md`](../docs/plans/2026-10-06-android-recorder.md);
+the phone protocol (v2, sending by QR code) in
+[`docs/plans/2026-10-30-send-by-qr.md`](../docs/plans/2026-10-30-send-by-qr.md).
 
 ## Using it
 
-1. In Fennec: **Settings → Phone → Pair a phone**. A QR code appears.
-2. In Fennec Recorder: point the camera at it (or choose *No camera?* and
-   type the address and code Fennec shows).
-3. Both screens show the same 8-digit code. Press **Allow** in Fennec.
-4. Record. Each recording is sent when the phone is on your network (only on
-   Wi-Fi without a data limit, unless you change that in Settings), joins
-   Fennec's Files queue and is transcribed; the phone shows when it is done.
+1. Record. Recordings stay on the phone, marked **Not sent**.
+2. In Fennec: **Receive from phone** (on the Files page, or Settings →
+   Phone). A QR code appears; Fennec listens only while it is shown.
+3. In Fennec Recorder: **Send to Fennec** and point the camera at the code
+   (or scan it with any camera app, which opens the `fennec://send` link).
+   Every recording not sent goes, one after another, with progress, and
+   joins Fennec's Files queue to be transcribed. The phone and the computer
+   must be on the same Wi-Fi network.
+
+There is no pairing: each code works once, only for the Fennec that shows
+it (its certificate is pinned in the code), and nothing secret stays on the
+phone. A transfer that stops halfway resumes with the next code.
 
 A quick settings tile and a home screen widget start a recording in one tap.
 
-Under **Settings** you can add projects and change their name, colour and
-default template (the changes go to Fennec and show in its sidebar; deleting
-stays on the computer), and choose the template new recordings get when their
-project has none. A recording's template is the one picked for it, else its
+Each scan also brings Fennec's projects and templates, so new recordings
+can be filed under them (projects are made and changed in Fennec). Under
+**Settings** you choose the template new recordings get when their project
+has none. A recording's template is the one picked for it, else its
 project's default, else this phone's default, else Fennec's.
 
 No shared Wi-Fi? Plug the phone into the computer with a USB cable and
@@ -37,7 +44,7 @@ cover the cases it cannot tell (copied by hand, deleted by mistake). The
 copies can be turned off in Settings; other apps on the phone can read them.
 
 New installs record in high quality (48 kHz) and keep recordings after
-Fennec has transcribed them; both can be changed in Settings.
+they are sent; both can be changed in Settings.
 
 ## Building
 
@@ -57,10 +64,10 @@ attach the signed APK next to the `.deb`.
 
 | Command | What it covers |
 |---|---|
-| `./gradlew :app:testDebugUnitTest` | Pairing links and codes (the code is checked against the desktop's), certificate pinning, uploads against a fake Fennec (chunks, a lost answer, a damaged file, unpairing), the desktop's QR code read by the phone's scanner, recovery after the app is killed, clean-up, the theme's colours against Fennec's CSS, and screenshots of every screen in light and dark |
+| `./gradlew :app:testDebugUnitTest` | Send links (and an older Fennec's pairing code told apart), certificate pinning, the single-use ticket and session, transfers against a fake Fennec (chunks, a lost answer, a damaged file, Fennec stopping midway and the next code resuming, a refused recording tried again), QR codes read by the phone's scanner, forgetting the old pairing and migrating recordings on upgrade, recovery after the app is killed, clean-up, the theme's colours against Fennec's CSS, and screenshots of every screen in light and dark |
 | `./gradlew :app:recordRoborazziDebug` | Records new screenshot baselines (`app/src/test/screenshots`) after a deliberate UI change |
 | `cargo test --test usb_import` (desktop) | USB import against a folder laid out as a phone shows it; `FENNEC_USB_PHONE=<folder>` imports a folder pulled from a real phone or the emulator (`adb pull "/sdcard/Download/Fennec Recorder"`) |
-| `e2e/run-e2e.sh` | The real Fennec (headless) and the app in the emulator: pair through Fennec's link, record twice (once with a pause), send, see both transcribed, unpair. Then checks on the desktop that both arrived, decode to their full length, are dated and filed as on the phone, and that the phone is unpaired |
+| `e2e/run-e2e.sh` | The real Fennec (headless, receiving) and the app in the emulator: record twice (once with a pause), open Fennec's send link, see both sent and Fennec's projects arrive. Then checks on the desktop that both arrived, decode to their full length, are dated and filed as on the phone, and are transcribed |
 
 The end-to-end run needs the emulator (`pixel8-api36` on port 5580) and a
 Wayland display or `weston` to start a headless one:

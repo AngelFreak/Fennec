@@ -48,19 +48,19 @@ import io.github.fennec.recorder.record.Recorder
 import io.github.fennec.recorder.ui.DetailScreen
 import io.github.fennec.recorder.ui.FennecIcon
 import io.github.fennec.recorder.ui.MainViewModel
-import io.github.fennec.recorder.ui.PairScreen
-import io.github.fennec.recorder.ui.PairUi
 import io.github.fennec.recorder.ui.Playback
 import io.github.fennec.recorder.ui.RecordScreen
 import io.github.fennec.recorder.ui.RecordingsScreen
 import io.github.fennec.recorder.ui.Screen
+import io.github.fennec.recorder.ui.SendScreen
 import io.github.fennec.recorder.ui.SettingsScreen
 import io.github.fennec.recorder.ui.CameraPermissionCard
-import io.github.fennec.recorder.ui.ProjectsScreen
 import io.github.fennec.recorder.ui.TemplatesScreen
 import io.github.fennec.recorder.ui.Viewfinder
 import io.github.fennec.recorder.ui.WelcomeIntro
 import io.github.fennec.recorder.ui.WelcomeMicrophone
+import io.github.fennec.recorder.ui.WelcomeSend
+import io.github.fennec.recorder.ui.unsentCount
 import io.github.fennec.recorder.ui.theme.Fennec
 import io.github.fennec.recorder.ui.theme.FennecTheme
 import kotlinx.coroutines.delay
@@ -75,7 +75,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        handle(intent)
+        // Recreated (rotated, say): the link was handled already, and its code is used.
+        if (savedInstanceState == null) handle(intent)
         setContent { FennecTheme { App(vm, recordNow) { recordNow = false } } }
     }
 
@@ -86,7 +87,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(intent: Intent?) {
         val data = intent?.dataString
-        if (intent?.action == Intent.ACTION_VIEW && data != null) vm.pairWith(data, fromLink = true)
+        if (intent?.action == Intent.ACTION_VIEW && data != null) vm.openLink(data)
         if (intent?.action == ACTION_RECORD) recordNow = true
     }
 
@@ -101,25 +102,14 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
     val c = Fennec.colors
     val screen by vm.screen.collectAsState()
     val recordings by vm.recordings.collectAsState()
-    val paired by vm.app.pairing.paired.collectAsState()
-    val info by vm.app.pairing.info.collectAsState()
-    val contact by vm.app.lastContact.collectAsState()
+    val info by vm.app.desktop.info.collectAsState()
+    val computerName by vm.app.desktop.name.collectAsState()
     val settings by vm.app.settings.settings.collectAsState()
     val status by Recorder.state.collectAsState()
     val next by vm.next.collectAsState()
-    val pairUi by vm.pair.collectAsState()
-
-    val draft by vm.project.collectAsState()
-    // The red dot on the Settings gear, and what Settings says about it.
-    val attention = when {
-        paired == null -> "Not paired. Pair with Fennec to send recordings over Wi-Fi, or use a USB cable."
-        contact.wrongComputer -> "Another computer answered at ${paired?.address}. Pair with Fennec again."
-        contact.reachable == false -> "${paired?.name} is not reachable. Is this phone on the same Wi-Fi as Fennec, with Fennec open? Recordings wait until it is, or use a USB cable."
-        else -> null
-    }
-    // Away from Fennec's Wi-Fi is normal: only what the user must act on gets the dot.
-    val dot = paired == null || contact.wrongComputer
-    val pairInWelcome by vm.pairInWelcome.collectAsState()
+    val sendUi by vm.send.collectAsState()
+    val unsent = recordings.unsentCount()
+    val openSend = { vm.go(Screen.Send) }
     val startRecording = {
         Recorder.start(context, vm.recordRequest())
         vm.setNext(vm.next.value.copy(title = ""))
@@ -158,7 +148,7 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
         }
         if (recordNow) onRecordStarted()
     }
-    // Follow Fennec while the app is open.
+    // Notice copies Fennec took over USB while the app is open.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         var job: kotlinx.coroutines.Job? = null
@@ -179,26 +169,26 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
             when (val s = screen) {
                 is Screen.Welcome -> when (s.step) {
                     0 -> WelcomeIntro(onNext = { vm.go(Screen.Welcome(1)) })
-                    else -> WelcomeMicrophone(
+                    1 -> WelcomeMicrophone(
                         micGranted, micDenied,
                         onAllow = { askMicWelcome.launch(recordingPermissions) },
-                        onNext = vm::welcomePairing,
+                        onNext = { vm.go(Screen.Welcome(2)) },
                     )
+                    else -> WelcomeSend(onDone = vm::finishWelcome)
                 }
                 Screen.Record -> RecordScreen(
                     status,
                     // Fennec may have renamed or recoloured the chosen project.
                     next.copy(project = next.project?.let { info.project(it.id) ?: it }),
-                    info, dot, settings.defaultTemplate,
-                    onManageProjects = { vm.go(Screen.Projects) },
+                    info, unsent, settings.defaultTemplate,
                     onNext = vm::setNext, onRecord = record,
                     onPause = { Recorder.pause(context) }, onResume = { Recorder.resume(context) },
                     onStop = { Recorder.stop(context) },
-                    onSettings = { vm.go(Screen.Settings) },
+                    onSettings = { vm.go(Screen.Settings) }, onSend = openSend,
                 )
                 Screen.Recordings -> RecordingsScreen(
-                    recordings, info.projects.associateBy { it.id }, paired?.name, dot,
-                    onOpen = { vm.go(Screen.Detail(it)) }, onSettings = { vm.go(Screen.Settings) },
+                    recordings, info.projects.associateBy { it.id },
+                    onOpen = { vm.go(Screen.Detail(it)) }, onSettings = { vm.go(Screen.Settings) }, onSend = openSend,
                 )
                 is Screen.Detail -> {
                     val r = recordings.firstOrNull { it.id == s.id }
@@ -207,45 +197,28 @@ private fun App(vm: MainViewModel, recordNow: Boolean, onRecordStarted: () -> Un
                     } else {
                         val player = rememberPlayer(File(vm.app.dir, r.fileName), r)
                         DetailScreen(
-                            r, info, paired?.name, player.state, onBack = { vm.back() }, onPlay = player.toggle,
+                            r, info, computerName, player.state, onBack = { vm.back() }, onPlay = player.toggle,
                             onRename = { vm.rename(r.id, it) }, onProject = { vm.setProject(r.id, it) },
-                            onTemplate = { vm.setTemplate(r.id, it) }, onRetry = { vm.retry(r.id) },
+                            onTemplate = { vm.setTemplate(r.id, it) }, onSend = openSend,
                             onDelete = { vm.delete(r.id) },
                             onMarkSent = { vm.markSent(r.id) }, onMarkNotSent = { vm.markNotSent(r.id) },
                         )
                     }
                 }
-                Screen.Pair -> PairScreen(
-                    pairUi,
-                    camera = { Camera { vm.pairWith(it, fromLink = false) } },
-                    onManual = { vm.pair.value = PairUi.Manual() },
-                    onSubmitManual = vm::pairManually,
-                    onConfirm = vm::startPairing,
-                    onRetry = { vm.pair.value = PairUi.Scan },
-                    onClose = {
-                        if (pairInWelcome || !settings.welcomed) {
-                            vm.finishWelcome()
-                        } else {
-                            vm.cancelPairing()
-                            vm.go(Screen.Record)
-                        }
-                    },
-                    welcome = pairInWelcome,
+                Screen.Send -> SendScreen(
+                    sendUi, recordings,
+                    camera = { Camera(vm::scanned) },
+                    onScanAgain = vm::scanAgain,
+                    onClose = vm::closeSend,
                 )
                 Screen.Settings -> SettingsScreen(
-                    paired, settings, info, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
-                    onUnpair = vm::unpair, onChange = { s2 -> vm.app.settings.update { s2 } },
-                    onProjects = { vm.go(Screen.Projects) }, onTemplates = { vm.go(Screen.Templates) },
-                    onUsbCopies = vm::setUsbCopies, attention = attention,
-                )
-                Screen.Projects -> ProjectsScreen(
-                    info, paired != null, contact.reachable, draft,
-                    onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) },
-                    onEdit = vm::editProject, onSave = vm::saveProject,
+                    settings, info, computerName, BuildConfig.VERSION_NAME, onBack = { vm.back() }, onSend = openSend,
+                    onChange = { s2 -> vm.app.settings.update { s2 } },
+                    onTemplates = { vm.go(Screen.Templates) }, onUsbCopies = vm::setUsbCopies,
                 )
                 Screen.Templates -> TemplatesScreen(
-                    info, paired != null, settings.defaultTemplate,
-                    onBack = { vm.back() }, onPair = { vm.go(Screen.Pair) }, onPick = vm::setDefaultTemplate,
+                    info, settings.defaultTemplate,
+                    onBack = { vm.back() }, onSend = openSend, onPick = vm::setDefaultTemplate,
                 )
             }
         }
