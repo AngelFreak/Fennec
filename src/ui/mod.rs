@@ -261,6 +261,24 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
     l
 }
 
+/// A screen's main area with a fixed-width panel on its right. On narrow
+/// windows the window folds the panel away behind a header button.
+fn side_panel(
+    main: &impl IsA<gtk::Widget>,
+    side: &impl IsA<gtk::Widget>,
+    width: f64,
+) -> adw::OverlaySplitView {
+    adw::OverlaySplitView::builder()
+        .content(main)
+        .sidebar(side)
+        .sidebar_position(gtk::PackType::End)
+        .sidebar_width_unit(adw::LengthUnit::Px)
+        .min_sidebar_width(width)
+        .max_sidebar_width(width)
+        .hexpand(true)
+        .build()
+}
+
 fn icon_button(icon: &str, tooltip: &str, classes: &[&str]) -> gtk::Button {
     let b = gtk::Button::from_icon_name(icon);
     b.set_tooltip_text(Some(tooltip));

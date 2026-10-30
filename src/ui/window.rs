@@ -23,6 +23,13 @@ use super::templates_page::TemplatesPage;
 use super::{Deps, icon_button, label};
 use crate::store::{DocumentFilter, ProjectFilter, Store};
 
+/// The narrowest window; below `SIDEBAR_FOLDS` the sidebar folds away and
+/// below `PANELS_FOLD` the screens' right-hand panels do too, each behind a
+/// header button.
+const MIN_WIDTH: i32 = 800;
+const SIDEBAR_FOLDS: &str = "max-width: 1200sp";
+const PANELS_FOLD: &str = "max-width: 960sp";
+
 /// Screens that replace the whole window body and come with a back button.
 const SUB_PAGES: [&str; 2] = ["export", "cleanup"];
 
@@ -47,6 +54,13 @@ pub struct MainWindow {
     outer: gtk::Stack,
     brand: gtk::Box,
     back: gtk::Button,
+    /// The sidebar, folded into an overlay on narrow windows.
+    sidebar_split: adw::OverlaySplitView,
+    /// Header buttons that open the folded sidebar and right-hand panel.
+    sidebar_toggle: gtk::Button,
+    panel_toggle: gtk::Button,
+    /// The breakpoints that fold the sidebar, and the panels as well.
+    folds: [adw::Breakpoint; 2],
     crumb_project: gtk::Label,
     crumb_sep: gtk::Label,
     crumb_title: gtk::Label,
@@ -63,7 +77,7 @@ impl MainWindow {
             .title("Fennec")
             .default_width(1280)
             .default_height(800)
-            .width_request(1024)
+            .width_request(MIN_WIDTH)
             .height_request(600)
             .build();
         window.add_css_class("fennec");
@@ -89,6 +103,15 @@ impl MainWindow {
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         header.add_css_class("fx-header");
 
+        let sidebar_toggle = icon_button(
+            "fennec-sidebar-left-symbolic",
+            "Show sidebar",
+            &["fx-icon-button"],
+        );
+        sidebar_toggle.set_size_request(40, 40);
+        sidebar_toggle.set_valign(gtk::Align::Center);
+        sidebar_toggle.set_visible(false);
+        header.append(&sidebar_toggle);
         let brand = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         brand.set_size_request(204, -1);
         brand.append(&logo());
@@ -105,6 +128,7 @@ impl MainWindow {
         crumbs.set_hexpand(true);
         crumbs.set_valign(gtk::Align::Center);
         let crumb_project = label("", &["fx-crumb"]);
+        crumb_project.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let crumb_sep = label("/", &["fx-crumb-sep"]);
         let crumb_title = label("", &["fx-crumb-current"]);
         crumb_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -122,6 +146,15 @@ impl MainWindow {
         header_actions.set_interpolate_size(false);
         header_actions.set_valign(gtk::Align::Center);
         header.append(&header_actions);
+        let panel_toggle = icon_button(
+            "fennec-sidebar-right-symbolic",
+            "Show side panel",
+            &["fx-icon-button"],
+        );
+        panel_toggle.set_size_request(40, 40);
+        panel_toggle.set_valign(gtk::Align::Center);
+        panel_toggle.set_visible(false);
+        header.append(&panel_toggle);
         // The window-manager controls stay available.
         header.append(&gtk::WindowControls::new(gtk::PackType::End));
         let handle = gtk::WindowHandle::builder().child(&header).build();
@@ -175,19 +208,26 @@ impl MainWindow {
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
+        // Each screen needs only its own width.
+        stack.set_hhomogeneous(false);
         stack.add_named(&dictation.root, Some("dictate"));
         stack.add_named(&files.root, Some("files"));
         stack.add_named(&project.root, Some("project"));
         stack.add_named(&templates.root, Some("templates"));
         stack.add_named(&settings.root, Some("settings"));
 
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        body.set_vexpand(true);
-        body.append(&sidebar.root);
-        body.append(&stack);
+        let body = adw::OverlaySplitView::builder()
+            .sidebar(&sidebar.root)
+            .content(&stack)
+            .sidebar_width_unit(adw::LengthUnit::Px)
+            .min_sidebar_width(232.0)
+            .max_sidebar_width(232.0)
+            .vexpand(true)
+            .build();
         // Sub-screens take the whole body, without the sidebar.
         let outer = gtk::Stack::new();
         outer.set_vexpand(true);
+        outer.set_hhomogeneous(false);
         outer.add_named(&body, Some("main"));
         outer.add_named(&export.root, Some("export"));
         outer.add_named(&dictation.cleanup.root, Some("cleanup"));
@@ -197,6 +237,11 @@ impl MainWindow {
         if show {
             window.set_content(Some(&content));
         }
+        let folds = [SIDEBAR_FOLDS, PANELS_FOLD].map(|c| {
+            let b = adw::Breakpoint::new(adw::BreakpointCondition::parse(c).expect("a valid condition"));
+            window.add_breakpoint(b.clone());
+            b
+        });
 
         let win = Rc::new(Self {
             window,
@@ -215,6 +260,10 @@ impl MainWindow {
             outer,
             brand,
             back,
+            sidebar_split: body,
+            sidebar_toggle,
+            panel_toggle,
+            folds,
             crumb_project,
             crumb_sep,
             crumb_title,
@@ -240,6 +289,24 @@ impl MainWindow {
             if let Some(w) = weak.upgrade() {
                 w.update_header();
                 w.update_sidebar_context();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.window.connect_current_breakpoint_notify(move |_| {
+            if let Some(w) = weak.upgrade() {
+                w.fold();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.sidebar_toggle.connect_clicked(move |_| {
+            if let Some(w) = weak.upgrade() {
+                w.toggle_sidebar();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.panel_toggle.connect_clicked(move |_| {
+            if let Some(w) = weak.upgrade() {
+                w.toggle_side_panel();
             }
         });
         let weak = Rc::downgrade(self);
@@ -367,6 +434,10 @@ impl MainWindow {
         self.sidebar.connect_nav(move |nav| {
             if let Some(w) = weak.upgrade() {
                 w.show(nav);
+                // A folded sidebar closes once it has been used.
+                if w.sidebar_split.is_collapsed() {
+                    w.sidebar_split.set_show_sidebar(false);
+                }
             }
         });
         for chip in &self.model_chips {
@@ -565,11 +636,84 @@ impl MainWindow {
     }
 
     /// Breadcrumbs and actions for the visible screen.
+    /// The right-hand panel of `page`, if it has one now.
+    fn side_panel(&self, page: &str) -> Option<&adw::OverlaySplitView> {
+        match page {
+            "dictate" => Some(&self.dictation.side_panel),
+            "files" => Some(&self.files.side_panel),
+            "project" => Some(&self.project.side_panel),
+            "templates" => Some(&self.templates.side_panel),
+            "settings" if self.settings.has_panel() => Some(&self.settings.side_panel),
+            _ => None,
+        }
+    }
+
+    /// Folds the sidebar and the panels for the window's width.
+    fn fold(&self) {
+        let current = self.window.current_breakpoint();
+        let narrow = current.is_some();
+        let compact = current.as_ref() == Some(&self.folds[1]);
+        self.sidebar_split.set_collapsed(narrow);
+        self.sidebar_split.set_show_sidebar(!narrow);
+        // Without the sidebar beside it, the logo needs no column of its own.
+        self.brand.set_size_request(if narrow { -1 } else { 204 }, -1);
+        if let Some(name) = self.brand.last_child() {
+            name.set_visible(!narrow);
+        }
+        // The chip's model name stays in its tooltip.
+        for chip in &self.model_chips {
+            if let Some(l) = chip.child().and_then(|row| row.last_child()) {
+                l.set_visible(!compact);
+            }
+        }
+        for split in [
+            &self.dictation.side_panel,
+            &self.files.side_panel,
+            &self.project.side_panel,
+            &self.templates.side_panel,
+            &self.settings.side_panel,
+        ] {
+            split.set_collapsed(compact);
+            split.set_show_sidebar(!compact);
+        }
+        if !self.settings.has_panel() {
+            self.settings.side_panel.set_show_sidebar(false);
+        }
+        self.update_header();
+    }
+
+    /// Opens or closes the folded sidebar.
+    pub fn toggle_sidebar(&self) {
+        let split = &self.sidebar_split;
+        split.set_show_sidebar(!split.shows_sidebar());
+    }
+
+    /// Opens or closes the screen's folded right-hand panel.
+    pub fn toggle_side_panel(&self) {
+        if let Some(split) = self.side_panel(&self.visible_page()) {
+            split.set_show_sidebar(!split.shows_sidebar());
+        }
+    }
+
+    /// Whether the sidebar and the right-hand panels are folded (tests).
+    pub fn folded(&self) -> (bool, bool) {
+        (
+            self.sidebar_split.is_collapsed(),
+            self.dictation.side_panel.is_collapsed(),
+        )
+    }
+
     fn update_header(&self) {
         let page = self.visible_page();
         let sub = SUB_PAGES.contains(&page.as_str());
         self.brand.set_visible(!sub);
         self.back.set_visible(sub);
+        self.sidebar_toggle
+            .set_visible(!sub && self.sidebar_split.is_collapsed());
+        self.panel_toggle.set_visible(
+            self.side_panel(&page)
+                .is_some_and(adw::OverlaySplitView::is_collapsed),
+        );
         if self.header_actions.child_by_name(&page).is_some() {
             self.header_actions.set_visible_child_name(&page);
         }
@@ -602,8 +746,10 @@ impl MainWindow {
             ),
             _ => (None, String::new(), Some(String::new())),
         };
-        self.crumb_project.set_visible(project.is_some());
-        self.crumb_sep.set_visible(project.is_some());
+        // In a narrow window the title gets the room.
+        let crumb = project.is_some() && !self.dictation.side_panel.is_collapsed();
+        self.crumb_project.set_visible(crumb);
+        self.crumb_sep.set_visible(crumb);
         self.crumb_project.set_text(project.as_deref().unwrap_or(""));
         self.crumb_title.set_text(&title);
         // On Dictate the label shows the save state, set by the page.
@@ -718,15 +864,16 @@ fn model_chip(text: &str) -> gtk::Button {
     let b = gtk::Button::new();
     b.add_css_class("fx-header-chip");
     b.set_valign(gtk::Align::Center);
-    b.set_tooltip_text(Some("Speech model and compute (Settings)"));
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.append(&gtk::Image::from_icon_name("fennec-cpu-symbolic"));
     row.append(&label(text, &[]));
     b.set_child(Some(&row));
+    set_chip_text(&b, text);
     b
 }
 
 fn set_chip_text(chip: &gtk::Button, text: &str) {
+    chip.set_tooltip_text(Some(&format!("{text}: speech model and compute (Settings)")));
     if let Some(l) = chip
         .child()
         .and_then(|row| row.last_child())

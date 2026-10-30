@@ -6,7 +6,7 @@
 //! and a panel on the right holds what goes with it (compute and the speed
 //! test, the microphone test, where AI text goes, disk use).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -79,7 +79,10 @@ pub struct SettingsPage {
     engine: Rc<EngineHolder>,
     stack: gtk::Stack,
     inspector: gtk::Stack,
-    inspector_scroll: gtk::ScrolledWindow,
+    /// The section's companion panel; folds away on narrow windows.
+    pub side_panel: adw::OverlaySplitView,
+    /// Whether the open section has a panel.
+    has_panel: Cell<bool>,
     /// Section id, its sidebar button and the line under its title.
     nav: RefCell<Vec<(String, gtk::Button, gtk::Label)>>,
     models_box: gtk::Box,
@@ -171,9 +174,10 @@ impl SettingsPage {
             audio_retention,
             deps,
             engine,
-            stack,
+            stack: stack.clone(),
             inspector,
-            inspector_scroll,
+            side_panel: super::side_panel(&stack, &inspector_scroll, 300.0),
+            has_panel: Cell::new(true),
             nav: RefCell::default(),
             models_box: gtk::Box::new(gtk::Orientation::Vertical, 28),
             installing: RefCell::default(),
@@ -236,8 +240,7 @@ impl SettingsPage {
             .add_named(&page.dictation_panel(), Some("dictation"));
         page.inspector.add_named(&page.ai_panel(), Some("ai"));
         page.inspector.add_named(&page.storage_panel(), Some("storage"));
-        page.root.append(&page.stack);
-        page.root.append(&page.inspector_scroll);
+        page.root.append(&page.side_panel);
 
         // The lines under the section names follow every change. The project
         // list is read from the database only when it can have changed.
@@ -293,6 +296,11 @@ impl SettingsPage {
         *self.on_section_changed.borrow_mut() = Some(Rc::new(f));
     }
 
+    /// Whether the open section has a panel beside it.
+    pub fn has_panel(&self) -> bool {
+        self.has_panel.get()
+    }
+
     pub fn show_section(self: &Rc<Self>, id: &str) {
         self.stack.set_visible_child_name(id);
         for (nid, b, _) in self.nav.borrow().iter() {
@@ -304,7 +312,9 @@ impl SettingsPage {
         }
         // AI defaults and Privacy have nothing to put beside them.
         let has_panel = self.inspector.child_by_name(id).is_some();
-        self.inspector_scroll.set_visible(has_panel);
+        self.has_panel.set(has_panel);
+        self.side_panel
+            .set_show_sidebar(has_panel && !self.side_panel.is_collapsed());
         if has_panel {
             self.inspector.set_visible_child_name(id);
         }

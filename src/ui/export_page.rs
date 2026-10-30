@@ -191,14 +191,19 @@ impl ExportPage {
         let text_scroll = gtk::ScrolledWindow::builder()
             .child(&preview_text)
             .vexpand(true)
-            .halign(gtk::Align::Center)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
         text_scroll.add_css_class("fx-page-preview");
-        text_scroll.set_size_request(560, -1);
+        text_scroll.set_size_request(340, -1);
+        // A page's width where there is room, narrower in a small window.
+        let text_page = adw::Clamp::builder()
+            .maximum_size(560)
+            .tightening_threshold(560)
+            .child(&text_scroll)
+            .build();
         let preview_stack = gtk::Stack::new();
         preview_stack.add_named(&page_frame, Some("page"));
-        preview_stack.add_named(&text_scroll, Some("text"));
+        preview_stack.add_named(&text_page, Some("text"));
         preview_stack.set_vexpand(true);
         let caption = label("", &["fx-field-note"]);
         caption.set_xalign(0.5);

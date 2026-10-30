@@ -459,8 +459,8 @@ type PlaceOf = Box<dyn Fn(&str) -> Option<String>>;
 /// Where an action item came from, and what clicking it does.
 pub type SourceFn = Rc<dyn Fn(&ActionItem) -> Option<(String, Rc<dyn Fn()>)>>;
 
-const WHO_WIDTH: i32 = 140;
-const DUE_WIDTH: i32 = 110;
+const WHO_WIDTH: i32 = 110;
+const DUE_WIDTH: i32 = 124;
 
 pub struct ActionsPanel {
     pub root: gtk::Box,
@@ -610,6 +610,7 @@ impl ActionsPanel {
             row.append(&cell(check.clone().upcast(), 28));
             let what = label(&item.what, &[]);
             what.set_wrap(true);
+            what.set_wrap_mode(gtk::pango::WrapMode::WordChar);
             what.set_hexpand(true);
             if item.done {
                 what.add_css_class("fx-done");
@@ -677,12 +678,19 @@ fn row_box(classes: &[&str]) -> gtk::Box {
     b
 }
 
+/// A fixed-width column. A long text is cut short rather than widening its
+/// column, which would push the rows' columns out of line.
 fn cell(w: gtk::Widget, width: i32) -> gtk::Widget {
     w.set_size_request(width, -1);
     w.set_hexpand(false);
     w.set_valign(gtk::Align::Center);
-    if let Some(l) = w.downcast_ref::<gtk::Label>() {
+    let label = w.downcast_ref::<gtk::Label>().cloned().or_else(|| {
+        w.downcast_ref::<gtk::Button>()
+            .and_then(|b| b.child().and_downcast())
+    });
+    if let Some(l) = label {
         l.set_xalign(0.0);
+        l.set_max_width_chars(1);
     }
     w
 }

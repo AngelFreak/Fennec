@@ -58,6 +58,8 @@ type MenuAction = Rc<dyn Fn(&Rc<ProjectPage>, &gtk::Button)>;
 
 pub struct ProjectPage {
     pub root: gtk::Box,
+    /// The project panel; folds away on narrow windows.
+    pub side_panel: adw::OverlaySplitView,
     /// Buttons for the window header while this screen shows.
     pub header_actions: gtk::Box,
     store: Rc<Store>,
@@ -255,7 +257,7 @@ impl ProjectPage {
         documents.append(&empty);
 
         // Actions: the roll-up of every document's action items.
-        let actions = ActionsPanel::new(Rc::clone(&store), None, "From", 200);
+        let actions = ActionsPanel::new(Rc::clone(&store), None, "From", 160);
         // The panel's own count line is replaced by one that says where the
         // items come from.
         if let Some(top) = actions.root.first_child() {
@@ -442,9 +444,9 @@ impl ProjectPage {
         overlay.set_child(Some(&main_scroll));
         overlay.add_overlay(&toast);
 
+        let side_panel = super::side_panel(&overlay, &side, 300.0);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&overlay);
-        root.append(&side);
+        root.append(&side_panel);
 
         let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let import = super::icon_text_button("fennec-upload-symbolic", "Import file", &["fx-secondary"]);
@@ -454,6 +456,7 @@ impl ProjectPage {
 
         let page = Rc::new(Self {
             root,
+            side_panel,
             header_actions,
             store,
             deps,

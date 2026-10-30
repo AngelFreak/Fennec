@@ -53,6 +53,9 @@ impl Scene {
     pub fn shot(&self, name: &str) {
         reopen_popovers(self.w.window.upcast_ref());
         pump(Duration::from_millis(600));
+        if let Ok(floor) = std::env::var("FENNEC_WIDTH_TREE") {
+            print_widths(&self.w.window, name, floor.parse().unwrap_or(250));
+        }
         let path = self.out.join(format!("{name}.png"));
         // grim needs a wlroots compositor; elsewhere (a headless Weston)
         // GTK draws the window itself, open menus on top.
@@ -64,6 +67,38 @@ impl Scene {
             || render_window(&self.w.window, &path);
         println!("{} {name}", if ok { "shot" } else { "FAILED" });
     }
+}
+
+/// FENNEC_WIDTH_TREE=<px>: prints the width a screen needs and the widgets
+/// that need at least `floor` of it, to find what keeps it from fitting.
+fn print_widths(window: &adw::ApplicationWindow, name: &str, floor: i32) {
+    fn walk(w: &gtk::Widget, depth: usize, floor: i32) {
+        let (min, ..) = w.measure(gtk::Orientation::Horizontal, -1);
+        if min < floor {
+            return;
+        }
+        let text = w
+            .downcast_ref::<gtk::Label>()
+            .map(|l| format!(" {:?}", l.text()))
+            .unwrap_or_default();
+        println!(
+            "{}{} {:?} min {min}{text}",
+            "  ".repeat(depth),
+            w.type_().name(),
+            w.css_classes()
+        );
+        let mut c = w.first_child();
+        while let Some(x) = c {
+            walk(&x, depth + 1, floor);
+            c = x.next_sibling();
+        }
+    }
+    let Some(content) = adw::prelude::AdwApplicationWindowExt::content(window) else {
+        return;
+    };
+    let (min, ..) = content.measure(gtk::Orientation::Horizontal, -1);
+    println!("     {name}: needs {min} px, window {}", window.width());
+    walk(&content, 0, floor);
 }
 
 /// A headless compositor has no pointer, so it refuses popovers that grab
