@@ -277,11 +277,78 @@ pub enum Proofreading {
     },
 }
 
-/// Text per request: small parts come back one by one, so the review can
-/// start early, and several run at once.
-const PROOFREAD_CHARS: usize = 1_500;
+/// Text per request for jobs done in parts: small parts come back one by
+/// one, so the result can be shown early, and several run at once.
+const PART_CHARS: usize = 1_500;
 /// Parts in flight at once; the built-in server decodes four together.
-const PROOFREAD_AT_ONCE: usize = 4;
+const PARTS_AT_ONCE: usize = 4;
+
+/// Groups `items` in order into parts of at most `budget` (by `size`); an
+/// item larger than that is a part of its own.
+fn group<T: Copy>(items: &[T], size: impl Fn(&T) -> usize, budget: usize) -> Vec<Vec<T>> {
+    let mut parts: Vec<Vec<T>> = Vec::new();
+    let mut used = 0;
+    for item in items {
+        let len = size(item) + 10;
+        match parts.last_mut() {
+            Some(part) if used + len <= budget => part.push(*item),
+            _ => {
+                parts.push(vec![*item]);
+                used = 0;
+            }
+        }
+        used += len;
+    }
+    parts
+}
+
+/// Runs `work` on each part, up to `PARTS_AT_ONCE` at a time, and hands
+/// each result to `done` (with the part's index) as it comes back, here on
+/// the calling thread. Stops at the first error, or when cancelled.
+fn run_parts<P: Sync, T: Send>(
+    parts: &[P],
+    cancel: &Cancel,
+    work: impl Fn(usize, &P) -> Result<T, AiError> + Sync,
+    mut done: impl FnMut(usize, T),
+) -> Result<(), AiError> {
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let mut error = None;
+    std::thread::scope(|s| {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..PARTS_AT_ONCE.min(parts.len()) {
+            let tx = tx.clone();
+            let (next, failed, work) = (&next, &failed, &work);
+            s.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= parts.len() || failed.load(Ordering::Relaxed) || cancel.is_cancelled() {
+                        break;
+                    }
+                    let result = work(i, &parts[i]);
+                    failed.fetch_or(result.is_err(), Ordering::Relaxed);
+                    if tx.send((i, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for (i, result) in rx {
+            match result {
+                Ok(v) => done(i, v),
+                Err(e) => {
+                    error.get_or_insert(e);
+                }
+            }
+        }
+    });
+    match error {
+        Some(e) => Err(e),
+        None if cancel.is_cancelled() => Err(AiError::Cancelled),
+        None => Ok(()),
+    }
+}
 
 /// Proofreads: proposes a corrected version of each paragraph, in the
 /// text's own language. Only paragraphs that actually changed are returned,
@@ -316,20 +383,11 @@ pub fn cleanup(
         .filter(|p| !p.text.trim().is_empty())
         .filter_map(|p| Some((p.id?, p.text.as_str())))
         .collect();
-    let budget = PROOFREAD_CHARS.min(llm.config().context_chars);
-    let mut parts: Vec<Vec<(ParagraphId, &str)>> = Vec::new();
-    let mut size = 0;
-    for &(id, text) in &paragraphs {
-        let len = text.trim().len() + 10;
-        match parts.last_mut() {
-            Some(part) if size + len <= budget => part.push((id, text)),
-            _ => {
-                parts.push(vec![(id, text)]);
-                size = 0;
-            }
-        }
-        size += len;
-    }
+    let parts = group(
+        &paragraphs,
+        |(_, t)| t.trim().len(),
+        PART_CHARS.min(llm.config().context_chars),
+    );
     if parts.is_empty() {
         return Ok(Vec::new());
     }
@@ -341,54 +399,19 @@ pub fn cleanup(
         paragraphs: paragraphs.len(),
         parts: parts.len(),
     });
-
-    // Workers take the next part until none are left; the results come
-    // back here, in whatever order they finish.
-    let next = AtomicUsize::new(0);
-    let failed = AtomicBool::new(false);
     let mut out = Vec::new();
-    let mut error = None;
-    std::thread::scope(|s| {
-        let (tx, rx) = mpsc::channel();
-        for _ in 0..PROOFREAD_AT_ONCE.min(parts.len()) {
-            let tx = tx.clone();
-            let (next, failed, parts, sys) = (&next, &failed, &parts, &sys);
-            s.spawn(move || {
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= parts.len() || failed.load(Ordering::Relaxed) || cancel.is_cancelled() {
-                        break;
-                    }
-                    let result = proofread_part(llm, sys, &parts[i], cancel);
-                    failed.fetch_or(result.is_err(), Ordering::Relaxed);
-                    if tx.send((i, result)).is_err() {
-                        break;
-                    }
-                }
+    run_parts(
+        &parts,
+        cancel,
+        |_, part| proofread_part(llm, &sys, part, cancel),
+        |i, changed: Vec<Cleaned>| {
+            out.extend(changed.iter().cloned());
+            on_progress(Proofreading::Part {
+                covered: parts[i].iter().map(|(id, _)| *id).collect(),
+                changed,
             });
-        }
-        drop(tx);
-        for (i, result) in rx {
-            match result {
-                Ok(changed) => {
-                    out.extend(changed.iter().cloned());
-                    on_progress(Proofreading::Part {
-                        covered: parts[i].iter().map(|(id, _)| *id).collect(),
-                        changed,
-                    });
-                }
-                Err(e) => {
-                    error.get_or_insert(e);
-                }
-            }
-        }
-    });
-    if let Some(e) = error {
-        return Err(e);
-    }
-    if cancel.is_cancelled() {
-        return Err(AiError::Cancelled);
-    }
+        },
+    )?;
     let order: BTreeMap<ParagraphId, usize> = paragraphs
         .iter()
         .enumerate()
@@ -682,6 +705,111 @@ pub fn meeting_notes(
         summaries.pop().unwrap_or_default()
     };
     Ok(notes)
+}
+
+// ---- meeting note ----
+
+/// What a job done in parts has got to, for a progress display.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Progress {
+    /// The model is loading (the built-in AI, when it was not running).
+    Loading,
+    /// `done` of `parts` parts are back.
+    Parts { done: usize, parts: usize },
+}
+
+/// The start of a dictation, which every part of a rewrite sees, so that
+/// "vi" and "de" are read the same way throughout.
+const REWRITE_CONTEXT_CHARS: usize = 600;
+
+/// Rewrites a dictation as a meeting note in a professional tone: corrected,
+/// in full sentences, with every fact kept and nothing invented, in the
+/// text's own order. Returns the new paragraphs.
+pub fn rewrite_note(
+    llm: &dyn LlmProvider,
+    doc: &DocText,
+    language: &str,
+    cancel: &Cancel,
+    on_progress: &mut dyn FnMut(Progress),
+) -> Result<Vec<String>, AiError> {
+    let lang = Lang::of(&[doc]);
+    let english = lang == Lang::English && language.trim().is_empty();
+    let task = if english {
+        "Rewrite the dictation as a meeting note in a factual, professional tone. Correct spelling, grammar \
+         and misheard words; write full sentences, without spoken language, filler words or repetitions. Keep \
+         every fact, name, number and date and the order they come in; invent nothing and leave out nothing \
+         of substance. Where it is clear who \"we\" or \"they\" are, name them (\"FE offered…\"). Keep a \
+         paragraph break between subjects. Answer with the text only."
+    } else {
+        "Skriv diktatet om til et mødenotat i et sagligt, professionelt sprog. Ret stavning, grammatik og \
+         fejlhørte ord; skriv i hele sætninger uden talesprog, fyldord og gentagelser. Bevar alle fakta, navne, \
+         tal og datoer og den rækkefølge, de kommer i; opfind intet, og udelad intet af betydning. Hvor det \
+         fremgår, hvem \"vi\" eller \"de\" er, så nævn dem (\"FE tilbød…\"). Lav et nyt afsnit ved hvert nyt \
+         emne. Svar kun med teksten."
+    };
+    let sys = if english {
+        system_en(task)
+    } else {
+        system(lang, language, task)
+    };
+    let texts: Vec<&str> = doc
+        .paragraphs
+        .iter()
+        .map(|p| p.text.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let parts = group(&texts, |t| t.len(), PART_CHARS.min(llm.config().context_chars));
+    if parts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let opening: String = texts.join(" ").chars().take(REWRITE_CONTEXT_CHARS).collect();
+    if !llm.is_ready() {
+        on_progress(Progress::Loading);
+        llm.warm_up(cancel)?;
+    }
+    on_progress(Progress::Parts {
+        done: 0,
+        parts: parts.len(),
+    });
+    let mut rewritten: Vec<Option<Vec<String>>> = vec![None; parts.len()];
+    let mut done = 0;
+    run_parts(
+        &parts,
+        cancel,
+        |i, part| {
+            let system = if i == 0 {
+                sys.clone()
+            } else if english {
+                format!(
+                    "{sys}\n\nThis is a later part. The dictation begins (for reference only, do not rewrite it): {opening}…"
+                )
+            } else {
+                format!(
+                    "{sys}\n\nDette er en senere del. Diktatet begynder sådan (kun til orientering, skriv det ikke om): {opening}…"
+                )
+            };
+            let req = TextRequest {
+                system,
+                prompt: part.join("\n\n"),
+                max_tokens: MAX_TOKENS,
+            };
+            let text = llm.stream_text(&req, cancel, &mut |_| {})?;
+            Ok(text
+                .split("\n\n")
+                .map(|p| p.trim().trim_start_matches('#').trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>())
+        },
+        |i, paragraphs| {
+            rewritten[i] = Some(paragraphs);
+            done += 1;
+            on_progress(Progress::Parts {
+                done,
+                parts: parts.len(),
+            });
+        },
+    )?;
+    Ok(rewritten.into_iter().flatten().flatten().collect())
 }
 
 // ---- action items ----

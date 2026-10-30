@@ -16,7 +16,8 @@ use super::editor::Editor;
 use super::engine::EngineHolder;
 use super::inspector::Inspector;
 use super::{Deps, label};
-use crate::ai::actions::Proofreading;
+use crate::ai::AiError;
+use crate::ai::actions::{Progress, Proofreading};
 use crate::ai::service::Scope;
 use crate::live::{LiveConfig, LiveEvent, LiveSession};
 use crate::store::{DocumentId, NewDocument, Store};
@@ -85,11 +86,25 @@ pub struct DictationPage {
     setup_bar: gtk::Revealer,
     setup_label: gtk::Label,
     setup_button: gtk::Button,
+    /// A meeting note being written from this dictation, then the result.
+    note_bar: gtk::Revealer,
+    note_label: gtk::Label,
+    note_button: gtk::Button,
+    note: RefCell<NoteJob>,
     loading_templates: Cell<bool>,
     on_saved: super::TextHandler,
     on_document_changed: super::Handler<()>,
     /// Asks the window to show a screen ("cleanup" or "dictate").
     on_navigate: super::Handler<&'static str>,
+}
+
+#[derive(Default)]
+enum NoteJob {
+    #[default]
+    Idle,
+    Running(Arc<crate::ai::Cancel>),
+    Done(DocumentId),
+    Failed,
 }
 
 impl DictationPage {
@@ -194,7 +209,23 @@ impl DictationPage {
             .child(&setup_box)
             .reveal_child(false)
             .build();
+        let note_label = label("", &["fx-learn-text"]);
+        note_label.set_wrap(true);
+        note_label.set_xalign(0.0);
+        note_label.set_hexpand(true);
+        let note_button = gtk::Button::with_label("Stop");
+        note_button.add_css_class("fx-secondary");
+        note_button.set_valign(gtk::Align::Center);
+        let note_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        note_box.add_css_class("fx-learn");
+        note_box.append(&note_label);
+        note_box.append(&note_button);
+        let note_bar = gtk::Revealer::builder()
+            .child(&note_box)
+            .reveal_child(false)
+            .build();
         column.append(&setup_bar);
+        column.append(&note_bar);
         column.append(&learn_bar);
         column.append(&chips);
         column.append(&title);
@@ -287,12 +318,22 @@ impl DictationPage {
             setup_bar,
             setup_label,
             setup_button: setup_button.clone(),
+            note_bar,
+            note_label,
+            note_button: note_button.clone(),
+            note: RefCell::default(),
             loading_templates: Cell::new(false),
             on_saved: RefCell::default(),
             on_document_changed: RefCell::default(),
             on_navigate: RefCell::default(),
         });
         page.editor.paragraph_gap_ms.set(3_000);
+        let weak = Rc::downgrade(&page);
+        note_button.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.note_button_clicked();
+            }
+        });
         let weak = Rc::downgrade(&page);
         learn_add.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
@@ -460,6 +501,11 @@ impl DictationPage {
         let doc = self.store.document(id).map_err(|e| e.to_string())?;
         let paragraphs = self.store.paragraphs(id).map_err(|e| e.to_string())?;
         self.state.borrow_mut().doc = Some(id);
+        // A finished write-up's note belonged to the document left behind.
+        if !matches!(*self.note.borrow(), NoteJob::Running(_)) {
+            *self.note.borrow_mut() = NoteJob::Idle;
+            self.note_bar.set_reveal_child(false);
+        }
         self.title.set_text(&doc.title);
         self.editor.load(&paragraphs);
         self.loading_templates.set(true);
@@ -1190,11 +1236,16 @@ impl DictationPage {
             .halign(gtk::Align::End)
             .build();
         type Action = fn(&Rc<DictationPage>);
-        let items: [(&str, &str, Action); 5] = [
+        let items: [(&str, &str, Action); 6] = [
             (
                 "Meeting notes",
                 "Summary, decisions, tasks and open questions",
                 |p| p.ai_meeting_notes(),
+            ),
+            (
+                "Rewrite as meeting note",
+                "Proofread, in a professional tone, as a new document",
+                |p| p.ai_rewrite_note(),
             ),
             ("Summarise document", "Prompt: Kort resumé", |p| p.ai_summarize()),
             (
@@ -1454,6 +1505,144 @@ impl DictationPage {
                 p.update_actions_tab();
             }),
         );
+    }
+
+    /// Rewrites the dictation as a meeting note in a new document; the bar
+    /// over the text shows how far it has got, then offers to open it.
+    pub fn ai_rewrite_note(self: &Rc<Self>) {
+        if matches!(*self.note.borrow(), NoteJob::Running(_)) {
+            return;
+        }
+        self.save_now();
+        let Some(doc) = self.document() else { return };
+        let local_only = self.store.document_is_local_only(doc).unwrap_or(false);
+        let name = self
+            .deps
+            .settings()
+            .ai
+            .effective_for(crate::ai::AiJob::MeetingNotes, local_only)
+            .map_or_else(|| "the AI".to_string(), |p| p.name.clone());
+        let started = std::time::Instant::now();
+        let progress = Rc::new(Cell::new(None::<Progress>));
+        // Parts come back one by one, on their own channel.
+        let (tx, rx) = async_channel::unbounded::<Progress>();
+        {
+            let progress = Rc::clone(&progress);
+            glib::spawn_future_local(async move {
+                while let Ok(p) = rx.recv().await {
+                    progress.set(Some(p));
+                }
+            });
+        }
+        let cancel = super::ai::run(
+            self.root.upcast_ref(),
+            &self.deps,
+            Scope::Document(doc),
+            self.what(),
+            Arc::new(move |ai, store, cancel, _| {
+                ai.rewrite_note(store, doc, cancel, &mut |p| {
+                    let _ = tx.send_blocking(p);
+                })
+            }),
+            Rc::new(|_: &str| {}),
+            {
+                let weak = Rc::downgrade(self);
+                Rc::new(move |r| {
+                    if let Some(p) = weak.upgrade() {
+                        p.note_done(r);
+                    }
+                })
+            },
+        );
+        *self.note.borrow_mut() = NoteJob::Running(cancel);
+        self.note_button.set_label("Stop");
+        self.note_button.set_sensitive(true);
+        self.note_bar.set_reveal_child(true);
+        let tick = {
+            let weak = Rc::downgrade(self);
+            move || {
+                let Some(p) = weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                if !matches!(*p.note.borrow(), NoteJob::Running(_)) {
+                    return glib::ControlFlow::Break;
+                }
+                let s = started.elapsed().as_secs();
+                let clock = format!("{}:{:02}", s / 60, s % 60);
+                p.note_label.set_text(&match progress.get() {
+                    Some(Progress::Loading) => format!("Loading {name} · {clock}"),
+                    Some(Progress::Parts { done, parts }) if parts > 1 => format!(
+                        "{name} is rewriting the dictation as a meeting note · {done} of {parts} parts · {clock}"
+                    ),
+                    _ => format!("{name} is rewriting the dictation as a meeting note · {clock}"),
+                });
+                glib::ControlFlow::Continue
+            }
+        };
+        tick();
+        glib::timeout_add_seconds_local(1, tick);
+    }
+
+    fn note_done(self: &Rc<Self>, result: Result<DocumentId, AiError>) {
+        let next = match result {
+            Ok(id) => {
+                let title = self.store.document(id).map(|d| d.title).unwrap_or_default();
+                self.note_label.set_text(&format!(
+                    "The meeting note is ready: “{title}”, next to this dictation."
+                ));
+                self.note_button.set_label("Open");
+                // The new document shows in the sidebar's counts.
+                if let Some(f) = self.on_document_changed.borrow().clone() {
+                    f(());
+                }
+                NoteJob::Done(id)
+            }
+            Err(AiError::Cancelled) => {
+                self.note_bar.set_reveal_child(false);
+                NoteJob::Idle
+            }
+            Err(e) => {
+                self.note_label.set_text(&format!(
+                    "The meeting note could not be written. {}",
+                    super::ai::error_text(&e)
+                ));
+                self.note_button.set_label("Dismiss");
+                NoteJob::Failed
+            }
+        };
+        self.note_button.set_sensitive(true);
+        *self.note.borrow_mut() = next;
+    }
+
+    fn note_button_clicked(self: &Rc<Self>) {
+        let job = std::mem::take(&mut *self.note.borrow_mut());
+        match job {
+            NoteJob::Running(cancel) => {
+                cancel.cancel();
+                self.note_button.set_sensitive(false);
+                self.note_label.set_text("Stopping…");
+                *self.note.borrow_mut() = NoteJob::Running(cancel);
+            }
+            NoteJob::Done(id) => {
+                self.note_bar.set_reveal_child(false);
+                if let Err(e) = self.open_document(id) {
+                    tracing::warn!("opening the meeting note: {e}");
+                }
+            }
+            NoteJob::Idle | NoteJob::Failed => self.note_bar.set_reveal_child(false),
+        }
+    }
+
+    /// The meeting-note bar's text, if it shows (tests).
+    pub fn note_status(&self) -> Option<String> {
+        self.note_bar
+            .reveals_child()
+            .then(|| self.note_label.text().to_string())
+    }
+
+    /// Presses the meeting-note bar's button: Stop, Open or Dismiss (tests).
+    pub fn press_note_button(self: &Rc<Self>) {
+        self.note_button_clicked();
     }
 
     pub fn ai_cleanup(self: &Rc<Self>) {

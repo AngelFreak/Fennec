@@ -1173,6 +1173,9 @@ fn fake_model(rec: &Recorded) -> Reply {
             .collect();
         return Reply::Text(serde_json::json!({ "paragraphs": paragraphs }).to_string());
     }
+    if prompt.contains("Skriv diktatet om til et mødenotat") {
+        return Reply::Text("Jens sender tilbuddet på fredag.".into());
+    }
     if prompt.contains("Find konkrete opgaver") {
         return Reply::Text(
             r#"{"items": [{"what": "Send tilbud", "who": "Jens", "due": "2026-10-09", "paragraph": null}]}"#
@@ -1404,6 +1407,34 @@ fn ai_checks(root: &std::path::Path) {
     );
     w.dictation.cleanup.done.emit_clicked();
     check("Back returns to the document", w.visible_page() == "dictate");
+
+    // Rewrite as meeting note: a new document beside the dictation.
+    w.dictation.ai_rewrite_note();
+    check(
+        "the rewrite shows its progress over the text",
+        w.dictation
+            .note_status()
+            .is_some_and(|s| s.contains("rewriting the dictation")),
+    );
+    let ready = pump_until(Duration::from_secs(5), || {
+        w.dictation.note_status().is_some_and(|s| s.contains("is ready"))
+    });
+    check("the meeting note is written", ready);
+    check(
+        "the dictation itself is unchanged",
+        w.dictation.document() == Some(doc)
+            && store.paragraphs(doc).unwrap()[0].text == "Jens sender øh tilbuddet på fredag.",
+    );
+    w.dictation.press_note_button();
+    let note = w.dictation.document().unwrap();
+    check(
+        "Open shows the meeting note, in its own document",
+        note != doc
+            && w.dictation.title.text().starts_with("Mødenotat – ")
+            && store.paragraphs(note).unwrap()[0].text == "Jens sender tilbuddet på fredag."
+            && w.dictation.note_status().is_none(),
+    );
+    w.dictation.open_document(doc).unwrap();
 
     // Action items.
     w.dictation.ai_action_items();

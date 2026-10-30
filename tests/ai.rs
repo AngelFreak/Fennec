@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use fennec::ai::actions::Proofreading;
+use fennec::ai::actions::{Progress, Proofreading};
 use fennec::ai::service::Scope;
 use fennec::ai::{
     AiError, AiJob, AiService, AiSettings, Cancel, Locality, MemorySecrets, Protocol, ProviderConfig,
@@ -327,6 +327,83 @@ fn long_texts_are_proofread_in_parts_at_once_and_reported_as_they_return() {
     let got: Vec<_> = cleaned.iter().map(|c| c.paragraph_id).collect();
     assert_eq!(got, ids);
     assert!(cleaned.iter().all(|c| !c.cleaned.contains("øh")));
+}
+
+#[test]
+fn a_meeting_note_is_rewritten_in_parts_into_a_new_document_beside_the_dictation() {
+    let mock = MockLlm::start(Wire::OpenAi, |rec| {
+        let user = rec.body["messages"][1]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        // Each paragraph comes back reworded, paragraph breaks kept.
+        let text = user
+            .split("\n\n")
+            .map(|p| p.replace("vi ", "FE ").replace("øh ", ""))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        Reply::Text(text)
+    });
+    let ai = service(
+        provider("ollama", Protocol::OpenAi, &mock.url, Locality::ThisComputer),
+        None,
+    );
+    let texts: Vec<String> = (0..10)
+        .map(|i| {
+            format!(
+                "Punkt {i}: øh vi aftalte at følge op. {}",
+                "Mere tekst om mødet. ".repeat(12)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let (store, doc) = store_with_doc(&refs);
+    let project = store.create_project("MSAB", "#2563eb").unwrap();
+    store.move_document(doc, Some(project)).unwrap();
+    let fields = std::collections::BTreeMap::from([("referent".to_string(), "Teis".to_string())]);
+    store
+        .update_document(doc, "MSAB leverandørmøde", Some("moedereferat"), &fields)
+        .unwrap();
+    store.set_tags(doc, &["msab".to_string()]).unwrap();
+
+    let mut progress = Vec::new();
+    let id = ai
+        .rewrite_note(&store, doc, &Cancel::default(), &mut |p| progress.push(p))
+        .unwrap();
+
+    let parts = mock.count();
+    assert!(parts > 1, "{parts} requests");
+    assert_eq!(progress.last(), Some(&Progress::Parts { done: parts, parts }));
+    let reqs = mock.requests();
+    assert!(
+        reqs.iter()
+            .all(|r| r.prompt_text().contains("Skriv diktatet om til et mødenotat"))
+    );
+    // Later parts see how the dictation begins.
+    assert_eq!(
+        reqs.iter()
+            .filter(|r| r.prompt_text().contains("Diktatet begynder sådan"))
+            .count(),
+        parts - 1
+    );
+    let note = store.document(id).unwrap();
+    assert_eq!(note.title, "Mødenotat – MSAB leverandørmøde");
+    assert_eq!(note.project_id, Some(project));
+    assert_eq!(note.template_id.as_deref(), Some("moedereferat"));
+    assert_eq!(note.fields, fields);
+    assert_eq!(note.tags, vec!["msab".to_string()]);
+    let written: Vec<String> = store
+        .paragraphs(id)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect();
+    assert_eq!(written.len(), 10, "every paragraph, in order: {written:?}");
+    for (i, p) in written.iter().enumerate() {
+        assert!(p.starts_with(&format!("Punkt {i}: FE aftalte")), "{p}");
+    }
+    // The dictation is left as it was.
+    assert!(store.paragraphs(doc).unwrap()[0].text.contains("øh vi"));
 }
 
 #[test]
