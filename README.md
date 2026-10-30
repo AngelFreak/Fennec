@@ -15,7 +15,7 @@ No audio leaves the machine, and no account or internet connection is needed onc
 ![Linux](https://img.shields.io/badge/platform-Linux-333?logo=linux&logoColor=white)
 ![Vulkan · CUDA · CPU](https://img.shields.io/badge/GPU-Vulkan_·_CUDA_·_CPU-5b3e96)
 
-<img src="docs/screenshots/hero.png" width="860" alt="A meeting document in Fennec, with report fields and a local AI summary">
+<img src="docs/screenshots/hero.png" width="860" alt="Dictating an inspection report in Fennec, with report fields and an AI suggestion">
 
 </div>
 
@@ -51,34 +51,43 @@ disk.
   them together.
 - 🤖 **Optional AI** (off by default): meeting notes (summary, decisions,
   tasks with owners and dates, open questions), summaries, proofreading shown
-  as a diff,
-  action items and questions answered from a project with sources. Works with
-  a built-in model that runs on this computer (Gemma 4, one-click download),
-  Claude, ChatGPT, or your own server (Ollama, llama.cpp, LM Studio, vLLM).
+  as a diff, action items and questions answered from a project with sources.
+  Works with a built-in model that runs on this computer (Gemma 4, one-click
+  download), Claude, ChatGPT, or your own server (Ollama, llama.cpp,
+  LM Studio, vLLM).
 - 📱 **Record on your phone**: Fennec Recorder for Android records meetings
   and sends the audio straight to Fennec over your own network, where it is
   transcribed like any file. See [`android/`](android/README.md).
 
-The interface is in English; transcripts are in Danish or English, and AI answers in the transcript's language unless you pick one.
+The interface is in English; transcripts are in Danish or English, and AI
+answers in the transcript's language unless you pick one.
 
 ## Screenshots
 
 <table>
   <tr>
     <td><img src="docs/screenshots/files.png" alt="Transcribing a file"></td>
-    <td><img src="docs/screenshots/settings.png" alt="Speech model settings"></td>
+    <td><img src="docs/screenshots/speech-model.png" alt="Speech model settings with Edda v0.2, the English model and links to more models"></td>
   </tr>
   <tr>
     <td align="center"><sub>Transcribe audio and video files</sub></td>
-    <td align="center"><sub>Pick and install speech models</sub></td>
+    <td align="center"><sub>Danish and English speech models</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/ai-actions.png" alt="The AI actions menu: meeting notes, summary, proofreading, action items, field suggestions"></td>
+    <td><img src="docs/screenshots/built-in-ai.png" alt="Built-in Gemma 4 models ready to download in AI providers"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Meeting notes, summaries and proofreading</sub></td>
+    <td align="center"><sub>Built-in AI that runs on this computer</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/ask.png" alt="Asking a question about a project, answered with sources"></td>
     <td><img src="docs/screenshots/templates.png" alt="Report template editor with a PDF preview"></td>
-    <td><img src="docs/screenshots/dark.png" alt="Dark style"></td>
   </tr>
   <tr>
+    <td align="center"><sub>Ask a project, with sources</sub></td>
     <td align="center"><sub>Report templates with a live preview</sub></td>
-    <td align="center"><sub>Dictation, in the dark style</sub></td>
   </tr>
 </table>
 
@@ -110,8 +119,10 @@ package, run `make deb FEATURES=vulkan` and then
 `sudo apt install ./target/debian/fennec_*.deb`.
 
 On first launch, a bar offers a **single download** of everything dictation
-needs: the speech model, the voice detector and the punctuation model, about
-1 GB together. Nothing else needs to be set up.
+needs: the speech model, the voice detector and the punctuation model, plus
+the English model if you may speak English, up to about 1.6 GB together.
+Nothing else needs to be set up. The built-in AI models are optional and
+downloaded separately (see [Built-in AI](#built-in-ai)).
 
 <details>
 <summary>Optional extras and building without root</summary>
@@ -324,11 +335,9 @@ The design, with its reasoning and measurements, is in
 - The AI actions are tested against mock servers that speak each API, but not
   yet with a real Claude or ChatGPT key. The built-in models were tried with
   llama.cpp started by hand (`cargo test --test ai -- --ignored`, see
-  `real_built_in_model_writes_meeting_notes`), not yet from the installed
-  package. A source install (`make install`) uses a `llama-server` on the
+  `real_built_in_model_writes_meeting_notes`), and the 0.4.0 package was
+  installed and tried on Ubuntu with an AMD 780M. A source install (`make install`) uses a `llama-server` on the
   PATH, or `FENNEC_LLAMA_SERVER`.
-- Hviske v6 is tested with a stand-in model; the real 2.8 GB model has not
-  been run (`cargo test --test sidecar -- --ignored` once it is downloaded).
 
 ## Credits
 

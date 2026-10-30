@@ -256,6 +256,12 @@ viceværten været kendt siden sidste vinter.\n\n**Opfølgning**\n- Undersøg ne
 fn seed(root: &Path) -> (DocumentId, ProjectId, DocumentId) {
     std::fs::create_dir_all(root.join("data/models")).unwrap();
     std::fs::write(root.join("data/models/edda-v0.2-q4_k.bin"), b"stand-in").unwrap();
+    // English too, so Dictate shows no download offer.
+    std::fs::write(
+        root.join("data/models").join(fennec::models::english().file_name),
+        b"stand-in",
+    )
+    .unwrap();
     std::fs::write(
         root.join("data/models").join(fennec::models::VAD_FILE),
         b"stand-in",
@@ -706,6 +712,7 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
             });
             std::fs::create_dir_all(p.models().join(fennec::punctuation::DIR)).unwrap();
             std::fs::write(s.model_path(p), b"stand-in").unwrap();
+            std::fs::write(s.english_model_path(p), b"stand-in").unwrap();
             std::fs::write(p.models().join(fennec::models::VAD_FILE), b"stand-in").unwrap();
             for f in fennec::punctuation::FILES {
                 std::fs::write(p.models().join(fennec::punctuation::DIR).join(f), b"stand-in").unwrap();
