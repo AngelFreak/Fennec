@@ -36,8 +36,6 @@ pub struct Sidecar {
     pub ext: String,
     pub size: u64,
     pub sha256: String,
-    /// The pairing the phone had when it recorded, if any.
-    pub device_id: Option<i64>,
 }
 
 /// A recording waiting in the phone's folder.
@@ -177,12 +175,8 @@ pub fn import(store: &Store, target: &Target, w: &Waiting) -> Result<Option<Arri
             m.title
         ));
     }
-    let device = m
-        .device_id
-        .filter(|d| store.devices().is_ok_and(|ds| ds.iter().any(|x| x.id == *d)));
     let info = NewInbound {
         uuid: m.id.clone(),
-        device_id: device,
         title: if m.title.trim().is_empty() {
             "Optagelse".into()
         } else {

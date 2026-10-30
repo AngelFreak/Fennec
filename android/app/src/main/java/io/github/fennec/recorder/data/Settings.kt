@@ -5,12 +5,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 data class AppSettings(
-    /** Send only on networks without a data limit (home Wi-Fi). */
-    val unmeteredOnly: Boolean = true,
     /** 48 kHz instead of 16 kHz, for keeping the audio itself. */
     val highQuality: Boolean = true,
-    /** Delete a recording from the phone this many days after Fennec has
-     *  transcribed it; 0 keeps it. */
+    /** Delete a recording from the phone this many days after it was sent
+     *  to Fennec; 0 keeps it. */
     val keepDays: Int = 0,
     /** Template for new recordings when their project has no default;
      *  null leaves it to Fennec. */
@@ -29,7 +27,6 @@ class SettingsStore(private val prefs: SharedPreferences) {
     private fun read(): AppSettings {
         val d = AppSettings()
         return AppSettings(
-            unmeteredOnly = prefs.getBoolean("unmetered_only", d.unmeteredOnly),
             highQuality = prefs.getBoolean("high_quality", d.highQuality),
             keepDays = prefs.getInt("keep_days", d.keepDays),
             defaultTemplate = prefs.getString("default_template", null),
@@ -41,7 +38,6 @@ class SettingsStore(private val prefs: SharedPreferences) {
     fun update(f: (AppSettings) -> AppSettings) {
         val s = f(_settings.value)
         prefs.edit()
-            .putBoolean("unmetered_only", s.unmeteredOnly)
             .putBoolean("high_quality", s.highQuality)
             .putInt("keep_days", s.keepDays)
             .putString("default_template", s.defaultTemplate)

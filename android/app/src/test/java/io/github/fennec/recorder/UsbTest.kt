@@ -1,12 +1,14 @@
 package io.github.fennec.recorder
 
 import androidx.test.core.app.ApplicationProvider
-import io.github.fennec.recorder.data.Paired
 import io.github.fennec.recorder.data.Recording
 import io.github.fennec.recorder.data.SyncState
 import io.github.fennec.recorder.sync.SharedCopies
 import io.github.fennec.recorder.sync.usbSidecar
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -46,7 +48,7 @@ class UsbTest {
 
     @Before
     fun setUp() {
-        app = FennecApp.build(ApplicationProvider.getApplicationContext(), PlainCipher, inMemory = true, copies = copies, schedule = {})
+        app = FennecApp.build(ApplicationProvider.getApplicationContext(), inMemory = true, copies = copies)
     }
 
     private fun saved(id: String, state: SyncState = SyncState.WAITING) = runBlocking {
@@ -66,26 +68,27 @@ class UsbTest {
             durationMs = 1_083_000, projectId = 3, templateId = "moedereferat", fileName = "x.aac", ext = "aac", size = 4,
             sha256 = "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
         )
-        assertEquals("Fennec's tests/usb_import.rs reads the same file", fixture, usbSidecar(r, 7))
+        // The fixture may still name a pairing (Fennec reads device_id if there is one); the phone writes none now.
+        val expected = Json.parseToJsonElement(fixture).jsonObject.filterKeys { it != "device_id" }
+        assertEquals("Fennec's tests/usb_import.rs reads the same file", JsonObject(expected).toString(), usbSidecar(r))
     }
 
     @Test
     fun `recordings not sent get a copy, and lose it when Fennec has them`() = runBlocking {
-        app.pairing.save(Paired("pc", "id", "1.2.3.4:1", "pin", 9, "s"))
         saved("a")
-        saved("b", SyncState.DONE)
+        saved("b", SyncState.SENT)
         app.exportForUsb()
         val a = get("a")
         assertNotNull(a.usbAudio)
-        assertTrue("the sidecar names the pairing", copies.files[a.usbMeta]!!.contains("\"device_id\":9"))
-        assertNull("already transcribed: no copy", get("b").usbAudio)
+        assertFalse("no pairing to name", copies.files[a.usbMeta]!!.contains("device_id"))
+        assertNull("already sent: no copy", get("b").usbAudio)
 
         // Sent over Wi-Fi meanwhile: the copy goes, the state stays.
-        app.db.recordings().update(a.copy(state = SyncState.QUEUED, deliveredAt = 1))
+        app.db.recordings().update(a.copy(state = SyncState.SENT, deliveredAt = 1))
         app.checkUsb()
         assertNull(get("a").usbAudio)
         assertTrue(copies.files.isEmpty())
-        assertEquals(SyncState.QUEUED, get("a").state)
+        assertEquals(SyncState.SENT, get("a").state)
     }
 
     @Test
@@ -103,8 +106,7 @@ class UsbTest {
         assertEquals(100L, sent.deliveredAt)
         assertNull(sent.usbAudio)
         assertTrue("the leftover sidecar is removed too", copies.files.isEmpty())
-        assertTrue(app.db.recordings().toSend().isEmpty())
-        assertEquals("followed once Fennec can be reached", listOf("a"), app.db.recordings().toFollow().map { it.id })
+        assertTrue("not sent again with the next scan", app.db.recordings().toSend().isEmpty())
     }
 
     @Test

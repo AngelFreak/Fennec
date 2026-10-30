@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.fennec.recorder.data.AppDatabase
 import io.github.fennec.recorder.data.Recording
 import io.github.fennec.recorder.data.SyncState
+import io.github.fennec.recorder.net.Api
 import io.github.fennec.recorder.net.FennecClient
 import io.github.fennec.recorder.record.Recorder
 import io.github.fennec.recorder.sync.Outcome
@@ -21,7 +22,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
 
-/** Sending recordings to Fennec: chunks, resuming, damage, unpairing. */
+/** Sending recordings over a session: chunks, resuming, damage, Fennec stopping. */
 @RunWith(RobolectricTestRunner::class)
 class UploaderTest {
     @get:Rule val tmp = TemporaryFolder()
@@ -53,17 +54,33 @@ class UploaderTest {
         r to data
     }
 
-    private fun uploader(chunk: Int = 100_000) =
-        Uploader(db.recordings(), FennecClient(fennec.address, fennec.pin, fennec.secret), dir, { 5L }, chunk)
+    private val session: FennecClient by lazy {
+        runBlocking {
+            val client = FennecClient(fennec.address, fennec.pin)
+            client.withSession((client.hello(fennec.ticket, "Pixel 8") as Api.Ok).value.session)
+        }
+    }
+
+    private fun uploader(chunk: Int = 100_000) = Uploader(db.recordings(), session, dir, { 5L }, chunk)
 
     private fun stored(id: String) = runBlocking { db.recordings().get(id)!! }
 
+    /** Every recording not sent, until one does not end DONE. */
+    private suspend fun Uploader.sendAll(): Outcome {
+        for (r in db.recordings().toSend()) {
+            val o = send(r)
+            if (o != Outcome.DONE) return o
+        }
+        return Outcome.DONE
+    }
+
     @Test
-    fun `a recording goes in chunks and is queued in Fennec`() = runBlocking {
+    fun `a recording goes in chunks and is sent once complete answers`() = runBlocking {
         val (_, data) = recording("aaaaaaaa-1", 250_000)
         assertEquals(Outcome.DONE, uploader().sendAll())
         val r = stored("aaaaaaaa-1")
-        assertEquals(SyncState.QUEUED, r.state)
+        assertEquals(SyncState.SENT, r.state)
+        assertEquals(250_000L, r.sentBytes)
         assertEquals(41L, r.documentId)
         assertEquals(5L, r.deliveredAt)
         assertArrayEquals(data, fennec.recordings["aaaaaaaa-1"]!!.data.toByteArray())
@@ -78,12 +95,12 @@ class UploaderTest {
     fun `a lost answer is resumed where Fennec's copy ends`() = runBlocking {
         val (_, data) = recording("bbbbbbbb-1", 250_000)
         fennec.loseChunkAnswers = 1
-        assertEquals(Outcome.RETRY, uploader().sendAll())
+        assertEquals(Outcome.UNREACHABLE, uploader().sendAll())
         assertEquals(SyncState.SENDING, stored("bbbbbbbb-1").state)
         // Fennec stored the chunk whose answer was lost; the next round goes on after it.
         assertEquals(Outcome.DONE, uploader().sendAll())
         assertArrayEquals(data, fennec.recordings["bbbbbbbb-1"]!!.data.toByteArray())
-        assertEquals(SyncState.QUEUED, stored("bbbbbbbb-1").state)
+        assertEquals(SyncState.SENT, stored("bbbbbbbb-1").state)
     }
 
     @Test
@@ -91,16 +108,16 @@ class UploaderTest {
         val (_, data) = recording("cccccccc-1", 150_000)
         fennec.damageNext = true
         assertEquals(Outcome.DONE, uploader().sendAll())
-        assertEquals(SyncState.QUEUED, stored("cccccccc-1").state)
+        assertEquals(SyncState.SENT, stored("cccccccc-1").state)
         assertEquals(1, stored("cccccccc-1").resends)
         assertArrayEquals(data, fennec.recordings["cccccccc-1"]!!.data.toByteArray())
     }
 
     @Test
-    fun `a phone removed in Fennec stops sending and keeps the recording`() = runBlocking {
+    fun `Fennec ending the session stops sending and keeps the recording`() = runBlocking {
         recording("dddddddd-1", 1000)
-        fennec.unpaired = true
-        assertEquals(Outcome.UNPAIRED, uploader().sendAll())
+        session.done()
+        assertEquals(Outcome.STOPPED, uploader().sendAll())
         assertEquals(SyncState.WAITING, stored("dddddddd-1").state)
     }
 
@@ -111,7 +128,7 @@ class UploaderTest {
         File(dir, r.fileName).delete()
         assertEquals(Outcome.DONE, uploader().sendAll())
         assertEquals(SyncState.FAILED, stored("eeeeeeee-1").state)
-        assertEquals(SyncState.QUEUED, stored("ffffffff-1").state)
+        assertEquals(SyncState.SENT, stored("ffffffff-1").state)
     }
 
     @Test
@@ -122,6 +139,6 @@ class UploaderTest {
         val chunks = fennec.requests.count { it.endsWith("/audio") }
         assertEquals(Outcome.DONE, uploader().sendAll())
         assertEquals(chunks, fennec.requests.count { it.endsWith("/audio") })
-        assertEquals(SyncState.QUEUED, stored("gggggggg-1").state)
+        assertEquals(SyncState.SENT, stored("gggggggg-1").state)
     }
 }

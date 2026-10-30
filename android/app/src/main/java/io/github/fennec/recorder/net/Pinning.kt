@@ -14,18 +14,13 @@ fun pinOf(cert: X509Certificate): String =
 /**
  * Accepts exactly one certificate: the one whose public key has [expected]
  * as its pin. Fennec's certificate has no authority behind it; the pin from
- * the QR code is what proves it. With no pin yet (an address typed in), the
- * first certificate seen is accepted and its pin reported through [seen].
+ * the QR code is what proves it.
  */
-class PinningTrustManager(
-    private val expected: String?,
-    private val seen: (String) -> Unit = {},
-) : X509TrustManager {
+class PinningTrustManager(private val expected: String) : X509TrustManager {
     override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String) {
         val leaf = chain.firstOrNull() ?: throw CertificateException("no certificate")
         val pin = pinOf(leaf)
-        if (expected != null && pin != expected) throw PinMismatch(pin)
-        seen(pin)
+        if (pin != expected) throw PinMismatch(pin)
     }
 
     override fun checkClientTrusted(chain: Array<out X509Certificate>, authType: String) =
@@ -34,4 +29,4 @@ class PinningTrustManager(
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 }
 
-class PinMismatch(val pin: String) : CertificateException("This is not the Fennec this phone was paired with")
+class PinMismatch(val pin: String) : CertificateException("This is not the Fennec that showed the code")

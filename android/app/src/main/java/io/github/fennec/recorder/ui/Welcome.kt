@@ -34,7 +34,7 @@ import io.github.fennec.recorder.R
 import io.github.fennec.recorder.ui.theme.Fennec
 import io.github.fennec.recorder.ui.theme.SourceSerif
 
-/** Steps of the first run: what the app does, the microphone, pairing (see [PairScreen]). */
+/** Steps of the first run: what the app does, the microphone, how sending works. */
 const val WELCOME_STEPS = 3
 
 /** The frame of a welcome step: step dots on top, the content, buttons below. */
@@ -92,7 +92,7 @@ fun WelcomeIntro(onNext: () -> Unit) {
         )
         Gap(4.dp)
         Feature(R.drawable.ic_mic, "Record anywhere", "With the screen off, for as long as you need. Pause when you need to.")
-        Feature(R.drawable.ic_send, "Sent over your Wi-Fi", "Straight to Fennec on your computer, encrypted. Nothing passes through the internet.")
+        Feature(R.drawable.ic_send, "Sent over your Wi-Fi", "Scan the code Fennec shows, and recordings go straight to your computer, encrypted. Nothing passes through the internet.")
         Feature(R.drawable.ic_file, "Transcribed in Fennec", "Its Danish models turn each recording into a document, filed under your projects.")
         SameNetworkNote()
     }
@@ -134,6 +134,23 @@ fun WelcomeMicrophone(allowed: Boolean, denied: Boolean, onAllow: () -> Unit, on
     }
 }
 
+/** Step 3: how recordings get to Fennec. Nothing to set up: each transfer starts from a code. */
+@Composable
+fun WelcomeSend(onDone: () -> Unit) {
+    val c = Fennec.colors
+    WelcomeFrame(2, onSkip = null, buttons = { PrimaryButton("Start recording", Modifier.fillMaxWidth(), onClick = onDone) }) {
+        Gap(12.dp)
+        IconDisc(R.drawable.ic_send, 64.dp)
+        Text("Sending to Fennec", fontFamily = SourceSerif, fontSize = 28.sp, fontWeight = FontWeight.Medium, color = c.text)
+        Text(HOW_TO_SEND, style = MaterialTheme.typography.bodyLarge, color = c.textSoft)
+        Text(
+            "Every recording not sent yet goes, one after another, while you watch. Until then they stay on this phone.",
+            style = MaterialTheme.typography.bodyMedium, color = c.muted,
+        )
+        SameNetworkNote()
+    }
+}
+
 /** Asks for the camera before scanning, in Fennec's style. */
 @Composable
 fun CameraPermissionCard(onAllow: () -> Unit) {
@@ -147,7 +164,7 @@ fun CameraPermissionCard(onAllow: () -> Unit) {
         IconDisc(R.drawable.ic_camera, 56.dp)
         Text("Scan Fennec's code", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text)
         Text(
-            "The camera is used only to read the pairing code.",
+            "The camera is used only to read the code Fennec shows.",
             fontSize = 13.sp, color = c.muted, textAlign = TextAlign.Center,
         )
         PrimaryButton("Allow camera", onClick = onAllow)

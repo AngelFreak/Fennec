@@ -58,9 +58,10 @@ fn folder_of(p: &Phone) -> gio::File {
 fn the_sidecar_the_app_writes_is_read() {
     let m: Sidecar = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(m.title, "Møde med Jensen");
+    // Older apps also wrote the pairing's device_id; it is ignored.
     assert_eq!(
-        (m.project_id, m.template_id.as_deref(), m.device_id),
-        (Some(3), Some("moedereferat"), Some(7))
+        (m.project_id, m.template_id.as_deref()),
+        (Some(3), Some("moedereferat"))
     );
 }
 
@@ -87,7 +88,6 @@ fn a_recording_is_imported_filed_and_removed_from_the_phone() {
     assert!(arrived.path.starts_with(p.paths.audio()));
     let r = store.inbound(&m.id).unwrap().unwrap();
     assert_eq!(r.state, InboundState::Queued);
-    assert_eq!(r.info.device_id, None, "no such pairing here");
     assert!(
         std::fs::read_dir(&p.folder).unwrap().next().is_none(),
         "both files are gone from the phone: that tells the app"
@@ -102,7 +102,6 @@ fn a_recording_fennec_already_has_is_only_removed_from_the_phone() {
     store
         .add_inbound(&NewInbound {
             uuid: m.id.clone(),
-            device_id: None,
             title: m.title.clone(),
             recorded_at: m.recorded_at,
             duration_ms: m.duration_ms,

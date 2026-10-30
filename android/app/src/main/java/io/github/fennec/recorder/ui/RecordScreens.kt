@@ -56,22 +56,22 @@ fun RecordScreen(
     status: Recorder.Status,
     next: NextRecording,
     info: DesktopInfo,
-    /** Something waits in Settings: not paired, or Fennec not reachable. */
-    attention: Boolean,
+    /** Recordings the next scan sends. */
+    unsent: Int,
     phoneDefault: String?,
-    onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
     onRecord: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
     onSettings: () -> Unit,
+    onSend: () -> Unit,
 ) {
     when (status) {
         is Recorder.Status.Recording -> RecordingNow(status, onPause, onResume, onStop)
         else -> ReadyToRecord(
-            next, info, attention, (status as? Recorder.Status.Failed)?.message, phoneDefault,
-            onManageProjects, onNext, onRecord, onSettings,
+            next, info, unsent, (status as? Recorder.Status.Failed)?.message, phoneDefault,
+            onNext, onRecord, onSettings, onSend,
         )
     }
 }
@@ -80,19 +80,22 @@ fun RecordScreen(
 private fun ReadyToRecord(
     next: NextRecording,
     info: DesktopInfo,
-    attention: Boolean,
+    unsent: Int,
     error: String?,
     phoneDefault: String?,
-    onManageProjects: () -> Unit,
     onNext: (NextRecording) -> Unit,
     onRecord: () -> Unit,
     onSettings: () -> Unit,
+    onSend: () -> Unit,
 ) {
     val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
         Header("Fennec", navigation = {
             Box(Modifier.padding(start = 12.dp, end = 10.dp)) { FennecLogo(28.dp) }
-        }) { HeaderIconWithDot(R.drawable.ic_settings, "Settings", attention, onSettings) }
+        }) {
+            SendAction(unsent, onSend)
+            HeaderIcon(R.drawable.ic_settings, "Settings", onSettings)
+        }
         Column(Modifier.weight(1f).padding(horizontal = 20.dp, vertical = 16.dp)) {
             SectionTitle("New recording")
             FennecBox {
@@ -118,13 +121,14 @@ private fun ReadyToRecord(
                     next.project?.name ?: "Unsorted",
                     next.project?.color,
                     listOf<Pair<String, Project?>>("Unsorted" to null) + info.projects.map { it.name to it },
-                    manage = "Manage projects" to onManageProjects,
+                    hint = NOT_LOADED.takeIf { info.empty },
                 ) { onNext(next.copy(project = it)) }
                 Picker(
                     "Template",
                     next.template?.name ?: defaultTemplateLabel(next.project, info, phoneDefault),
                     null,
                     listOf<Pair<String, Template?>>("Default" to null) + info.templates.map { it.name to it },
+                    hint = NOT_LOADED.takeIf { info.empty },
                 ) { onNext(next.copy(template = it)) }
             }
             Column(
@@ -156,7 +160,7 @@ private fun <T> Picker(
     shown: String,
     color: String?,
     options: List<Pair<String, T>>,
-    manage: Pair<String, () -> Unit>? = null,
+    hint: String? = null,
     onPick: (T) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -176,13 +180,7 @@ private fun <T> Picker(
                     onPick(value)
                 })
             }
-            manage?.let { (name, go) ->
-                HorizontalDivider(color = c.divider)
-                DropdownMenuItem(text = { Text(name, color = c.accentText) }, onClick = {
-                    open = false
-                    go()
-                })
-            }
+            hint?.let { PickerHint(it) }
         }
     }
 }
@@ -269,14 +267,12 @@ fun dayLabel(t: Long, now: Long = System.currentTimeMillis()): String {
 fun RecordingsScreen(
     recordings: List<Recording>,
     projects: Map<Long, Project>,
-    pairedName: String?,
-    attention: Boolean,
     onOpen: (String) -> Unit,
     onSettings: () -> Unit,
+    onSend: () -> Unit,
 ) {
-    val c = Fennec.colors
     Column(Modifier.fillMaxSize()) {
-        Header("Recordings") { HeaderIconWithDot(R.drawable.ic_settings, "Settings", attention, onSettings) }
+        Header("Recordings") { HeaderIcon(R.drawable.ic_settings, "Settings", onSettings) }
         if (recordings.isEmpty()) {
             Column(
                 Modifier.weight(1f).fillMaxWidth().padding(32.dp),
@@ -286,17 +282,18 @@ fun RecordingsScreen(
                 Text("Your recordings appear here", style = MaterialTheme.typography.titleSmall)
                 Gap(6.dp)
                 Text(
-                    "Record on the Record tab. Each recording goes to Fennec on your computer, which transcribes it.",
+                    "Record on the Record tab. $HOW_TO_SEND",
                     style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
                 )
             }
         } else {
             val groups = recordings.groupBy { dayLabel(it.recordedAt) }
             LazyColumn(Modifier.weight(1f).padding(horizontal = 20.dp)) {
+                item(key = "send") { SendBar(recordings.unsentCount(), onSend) }
                 for ((day, rows) in groups) {
                     item(key = "day-$day") { SectionTitle(day, Modifier.padding(top = 12.dp)) }
                     items(rows, key = { it.id }) { r ->
-                        RecordingRow(r, projects[r.projectId], pairedName != null) { onOpen(r.id) }
+                        RecordingRow(r, projects[r.projectId]) { onOpen(r.id) }
                     }
                 }
             }
@@ -305,7 +302,7 @@ fun RecordingsScreen(
 }
 
 @Composable
-private fun RecordingRow(r: Recording, project: Project?, paired: Boolean, onClick: () -> Unit) {
+private fun RecordingRow(r: Recording, project: Project?, onClick: () -> Unit) {
     val c = Fennec.colors
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).testTag("recording-${r.id}")) {
         Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -323,7 +320,7 @@ private fun RecordingRow(r: Recording, project: Project?, paired: Boolean, onCli
                         (r.projectName ?: project?.name ?: "Unsorted"),
                     fontSize = 12.5.sp, color = c.muted, modifier = Modifier.weight(1f), maxLines = 1,
                 )
-                StateChip(r, paired)
+                StateChip(r)
             }
             if (r.state == SyncState.SENDING) ProgressLine(percent(r) / 100f)
         }

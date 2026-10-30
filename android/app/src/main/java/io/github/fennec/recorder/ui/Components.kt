@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -183,15 +184,13 @@ fun Chip(text: String, background: Color, foreground: Color, icon: Int? = null) 
 
 /** Where a recording is, as a chip. */
 @Composable
-fun StateChip(r: Recording, paired: Boolean) {
+fun StateChip(r: Recording) {
     val c = Fennec.colors
     when (r.state) {
         SyncState.RECORDING -> Chip("Recording", c.accentSoft, c.accentText)
-        SyncState.WAITING -> Chip(if (paired) "Waiting for Fennec" else "Not paired", c.chip, c.muted)
+        SyncState.WAITING -> Chip("Not sent", c.chip, c.muted)
         SyncState.SENDING -> Chip("Sending ${percent(r)}%", c.accentSoft, c.accentText)
-        SyncState.QUEUED -> Chip("Queued", c.aiBg, c.aiText)
-        SyncState.TRANSCRIBING -> Chip("Transcribing", c.aiBg, c.aiText)
-        SyncState.DONE -> Chip("Transcribed", c.netBg, c.netText, R.drawable.ic_check)
+        SyncState.SENT -> Chip("Sent", c.netBg, c.netText, R.drawable.ic_check)
         SyncState.FAILED -> Chip("Failed", c.error.copy(alpha = 0.14f), c.error)
         SyncState.USB -> Chip("Sent by USB", c.netBg, c.netText, R.drawable.ic_check)
     }
@@ -327,40 +326,6 @@ fun SecondaryButton(
     ) { Text(text, style = MaterialTheme.typography.labelLarge, color = color) }
 }
 
-/** A header button with a red dot when something needs the user (see Settings). */
-@Composable
-fun HeaderIconWithDot(@DrawableRes id: Int, description: String, dot: Boolean, onClick: () -> Unit) {
-    val c = Fennec.colors
-    IconButton(onClick = onClick, modifier = Modifier.semantics {
-        contentDescription = if (dot) "$description, needs attention" else description
-    }) {
-        Box {
-            FennecIcon(id, c.muted)
-            if (dot) {
-                Box(
-                    Modifier.align(Alignment.TopEnd).size(10.dp).clip(CircleShape).background(c.surface)
-                        .padding(1.5.dp).clip(CircleShape).background(c.error),
-                )
-            }
-        }
-    }
-}
-
-/** What needs the user, shown at the top of Settings (the red dot points here). */
-@Composable
-fun AttentionNote(text: String, modifier: Modifier = Modifier) {
-    val c = Fennec.colors
-    Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.error.copy(alpha = 0.10f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Dot(c.error, 10.dp)
-        Text(text, fontSize = 13.5.sp, lineHeight = 19.sp, color = c.text, modifier = Modifier.weight(1f))
-    }
-}
-
 @Composable
 fun Gap(h: Dp) = Spacer(Modifier.height(h))
 
@@ -380,7 +345,7 @@ fun SameNetworkNote(modifier: Modifier = Modifier) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text("Same Wi-Fi network", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.accentText)
             Text(
-                "$SAME_NETWORK Recordings made elsewhere wait on the phone and are sent when you are back on that network with Fennec open.",
+                "$SAME_NETWORK Recordings stay on the phone until you send them.",
                 fontSize = 13.sp, lineHeight = 19.sp, color = c.text,
             )
             Text(
@@ -389,4 +354,18 @@ fun SameNetworkNote(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/** What the project and template pickers say before the first scan. */
+const val NOT_LOADED = "Fennec's projects and templates appear here once you have sent to Fennec."
+
+/** A note at the foot of a picker's menu. */
+@Composable
+fun PickerHint(text: String) {
+    val c = Fennec.colors
+    HorizontalDivider(color = c.divider)
+    Text(
+        text, fontSize = 12.5.sp, lineHeight = 17.sp, color = c.muted,
+        modifier = Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+    )
 }

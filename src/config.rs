@@ -144,8 +144,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PhoneSettings {
-    /// Listen on the local network for paired phones.
-    pub enabled: bool,
+    /// Port phones send to while the Receive from phone code is shown.
     pub port: u16,
     /// Project for recordings that name none, or one that no longer exists.
     pub default_project: Option<i64>,
@@ -156,7 +155,6 @@ pub struct PhoneSettings {
 impl Default for PhoneSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
             port: crate::sync::DEFAULT_PORT,
             default_project: None,
             usb_import: true,

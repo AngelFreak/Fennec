@@ -1,22 +1,10 @@
-//! Phones paired with Fennec Recorder, and the recordings they send.
+//! Recordings sent by Fennec Recorder on a phone, over the network or USB.
 
 use rusqlite::{OptionalExtension, Row, params};
 
 use super::{DocumentId, ProjectId, Result, Store, now_ms};
 
-pub type DeviceId = i64;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Device {
-    pub id: DeviceId,
-    pub name: String,
-    pub paired_at: i64,
-    pub last_seen_at: Option<i64>,
-    /// Recordings it has sent (finished uploads).
-    pub recordings: usize,
-}
-
-/// Where a recording from the phone is. The phone asks for this.
+/// Where a recording from the phone is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundState {
     /// Arriving in chunks.
@@ -54,9 +42,6 @@ impl InboundState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewInbound {
     pub uuid: String,
-    /// The paired phone that sent it; `None` for one imported over USB from a
-    /// phone Fennec has no pairing for.
-    pub device_id: Option<DeviceId>,
     pub title: String,
     /// When recording started, in ms since the epoch.
     pub recorded_at: i64,
@@ -81,99 +66,41 @@ pub struct Inbound {
     pub updated_at: i64,
 }
 
-const INBOUND_COLUMNS: &str = "uuid, device_id, title, recorded_at, duration_ms, project_id, template_id,
+const INBOUND_COLUMNS: &str = "uuid, title, recorded_at, duration_ms, project_id, template_id,
      ext, size, sha256, received, state, document_id, error, updated_at";
 
 fn inbound_row(r: &Row<'_>) -> rusqlite::Result<Inbound> {
     Ok(Inbound {
         info: NewInbound {
             uuid: r.get(0)?,
-            device_id: r.get(1)?,
-            title: r.get(2)?,
-            recorded_at: r.get(3)?,
-            duration_ms: r.get(4)?,
-            project_id: r.get(5)?,
-            template_id: r.get(6)?,
-            ext: r.get(7)?,
-            size: r.get::<_, i64>(8)? as u64,
-            sha256: r.get(9)?,
+            title: r.get(1)?,
+            recorded_at: r.get(2)?,
+            duration_ms: r.get(3)?,
+            project_id: r.get(4)?,
+            template_id: r.get(5)?,
+            ext: r.get(6)?,
+            size: r.get::<_, i64>(7)? as u64,
+            sha256: r.get(8)?,
         },
-        received: r.get::<_, i64>(10)? as u64,
-        state: InboundState::parse(&r.get::<_, String>(11)?),
-        document_id: r.get(12)?,
-        error: r.get(13)?,
-        updated_at: r.get(14)?,
+        received: r.get::<_, i64>(9)? as u64,
+        state: InboundState::parse(&r.get::<_, String>(10)?),
+        document_id: r.get(11)?,
+        error: r.get(12)?,
+        updated_at: r.get(13)?,
     })
 }
 
 impl Store {
-    // ---- devices ----
-
-    /// Records a newly paired phone. `secret_hash` identifies it from now on.
-    pub fn add_device(&self, name: &str, secret_hash: &str) -> Result<DeviceId> {
-        self.conn.execute(
-            "INSERT INTO devices (name, secret_hash, paired_at) VALUES (?1, ?2, ?3)",
-            params![name, secret_hash, now_ms()],
-        )?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// Paired phones, most recently paired first.
-    pub fn devices(&self) -> Result<Vec<Device>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT d.id, d.name, d.paired_at, d.last_seen_at,
-                    (SELECT COUNT(*) FROM inbound_recordings i
-                     WHERE i.device_id = d.id AND i.state != 'receiving')
-             FROM devices d ORDER BY d.paired_at DESC, d.id DESC",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(Device {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                paired_at: r.get(2)?,
-                last_seen_at: r.get(3)?,
-                recordings: r.get::<_, i64>(4)? as usize,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// The phone holding this secret, marking it as seen now.
-    pub fn device_by_secret_hash(&self, secret_hash: &str) -> Result<Option<DeviceId>> {
-        let id: Option<DeviceId> = self
-            .conn
-            .query_row(
-                "SELECT id FROM devices WHERE secret_hash = ?1",
-                [secret_hash],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(id) = id {
-            self.conn.execute(
-                "UPDATE devices SET last_seen_at = ?2 WHERE id = ?1",
-                params![id, now_ms()],
-            )?;
-        }
-        Ok(id)
-    }
-
-    /// Unpairs a phone; its secret stops working at once.
-    pub fn remove_device(&self, id: DeviceId) -> Result<()> {
-        self.conn.execute("DELETE FROM devices WHERE id = ?1", [id])?;
-        Ok(())
-    }
-
     // ---- recordings from phones ----
 
     pub fn add_inbound(&self, r: &NewInbound) -> Result<()> {
         self.conn.execute(
             "INSERT INTO inbound_recordings
-                (uuid, device_id, title, recorded_at, duration_ms, project_id, template_id,
+                (uuid, title, recorded_at, duration_ms, project_id, template_id,
                  ext, size, sha256, state, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'receiving', ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'receiving', ?10)",
             params![
                 r.uuid,
-                r.device_id,
                 r.title,
                 r.recorded_at,
                 r.duration_ms,

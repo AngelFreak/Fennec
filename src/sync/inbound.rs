@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::hex;
 use super::http::Response;
-use crate::store::{DeviceId, DocumentId, InboundState, NewDocument, NewInbound, Store};
+use crate::store::{DocumentId, InboundState, NewDocument, NewInbound, Store};
 
 /// Largest recording accepted (about 190 hours at the phone's 48 kbit/s).
 pub const MAX_SIZE: u64 = 4 * 1024 * 1024 * 1024;
@@ -77,8 +77,9 @@ fn state_body(
 }
 
 /// `PUT /v1/recordings/{uuid}`: announces a recording. Repeating it is
-/// harmless and tells the phone how much has arrived.
-pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, body: &[u8]) -> Response {
+/// harmless and tells the phone how much has arrived, also after an earlier
+/// transfer stopped halfway.
+pub fn announce(store: &Store, target: &Target, uuid: &str, body: &[u8]) -> Response {
     let meta: Meta = match serde_json::from_slice(body) {
         Ok(m) => m,
         Err(e) => return Response::error(400, "bad_metadata", &e.to_string()),
@@ -97,7 +98,6 @@ pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, bo
     let title: String = meta.title.trim().chars().take(200).collect();
     let info = NewInbound {
         uuid: uuid.to_string(),
-        device_id: Some(device),
         title: if title.is_empty() {
             "Optagelse".into()
         } else {
@@ -114,9 +114,6 @@ pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, bo
 
     match store.inbound(uuid) {
         Err(e) => internal(e),
-        Ok(Some(existing)) if existing.info.device_id != Some(device) => {
-            Response::error(409, "taken", "Another phone sent a recording with this id.")
-        }
         Ok(Some(existing))
             if existing.state != InboundState::Receiving
                 || (existing.info.size == info.size && existing.info.sha256 == info.sha256) =>
@@ -152,16 +149,9 @@ pub fn announce(store: &Store, target: &Target, device: DeviceId, uuid: &str, bo
 
 /// `PUT /v1/recordings/{uuid}/audio?offset=N`: one chunk. It must start where
 /// the stored part ends; otherwise 409 says where to resume.
-pub fn chunk(
-    store: &Store,
-    target: &Target,
-    device: DeviceId,
-    uuid: &str,
-    offset: Option<u64>,
-    body: &[u8],
-) -> Response {
+pub fn chunk(store: &Store, target: &Target, uuid: &str, offset: Option<u64>, body: &[u8]) -> Response {
     let rec = match store.inbound(uuid) {
-        Ok(Some(r)) if r.info.device_id == Some(device) => r,
+        Ok(Some(r)) => r,
         Ok(_) => return Response::error(404, "unknown", "Announce the recording first."),
         Err(e) => return internal(e),
     };
@@ -205,9 +195,9 @@ pub struct Arrived {
 
 /// `POST /v1/recordings/{uuid}/complete`: checks the file and makes its
 /// document. Repeating it returns the same document.
-pub fn complete(store: &Store, target: &Target, device: DeviceId, uuid: &str) -> (Response, Option<Arrived>) {
+pub fn complete(store: &Store, target: &Target, uuid: &str) -> (Response, Option<Arrived>) {
     let rec = match store.inbound(uuid) {
-        Ok(Some(r)) if r.info.device_id == Some(device) => r,
+        Ok(Some(r)) => r,
         Ok(_) => {
             return (
                 Response::error(404, "unknown", "Announce the recording first."),
@@ -308,33 +298,6 @@ pub fn file_recording(
     store.set_inbound_received(&info.uuid, info.size)?;
     store.set_inbound_state(&info.uuid, InboundState::Queued, Some(doc), None)?;
     Ok(doc)
-}
-
-/// `GET /v1/recordings?ids=a,b`: where each recording is.
-pub fn statuses(store: &Store, target: &Target, device: DeviceId, ids: &str) -> Response {
-    let mut out = Vec::new();
-    for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()).take(200) {
-        match store.inbound(id) {
-            // Also ones imported over USB without a pairing: the id is the phone's own secret.
-            Ok(Some(r)) if r.info.device_id == Some(device) || r.info.device_id.is_none() => {
-                let received = if r.state == InboundState::Receiving {
-                    on_disk(&part_path(target, id))
-                } else {
-                    r.info.size
-                };
-                out.push(state_body(
-                    id,
-                    received,
-                    r.state,
-                    r.document_id,
-                    r.error.as_deref(),
-                ));
-            }
-            Ok(_) => out.push(json!({ "id": id, "state": "unknown" })),
-            Err(e) => return internal(e),
-        }
-    }
-    Response::ok(json!({ "recordings": out }))
 }
 
 /// Deletes uploads that stopped arriving more than `max_age_ms` ago.

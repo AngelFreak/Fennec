@@ -7,7 +7,6 @@ import android.net.Uri
 import android.os.Build
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -16,7 +15,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.onLast
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -28,10 +26,12 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Against the real Fennec (android/e2e/run-e2e.sh starts it on the host and
- * passes its pairing link as the runner argument `pairUri`): pair, record,
- * pause, send, see both recordings transcribed, then unpair. The host script
- * checks what arrived on the desktop side.
+ * Against the real Fennec (android/e2e/run-e2e.sh starts it on the host,
+ * receiving, and passes the link its QR code holds as the runner argument
+ * `sendUri`): go through the welcome, record twice (once with a pause), open
+ * the link as another camera app would, and see both recordings sent and
+ * Fennec's projects arrive for the pickers. The host script checks what
+ * arrived on the desktop side.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -79,74 +79,64 @@ class EndToEndTest {
     }
 
     @Test
-    fun pairRecordSendAndUnpair() {
-        val encoded = InstrumentationRegistry.getArguments().getString("pairUri")
-        assumeTrue("run through android/e2e/run-e2e.sh (no pairUri given)", encoded != null)
+    fun recordAndSendByCode() {
+        val encoded = InstrumentationRegistry.getArguments().getString("sendUri")
+        assumeTrue("run through android/e2e/run-e2e.sh (no sendUri given)", encoded != null)
         // Base64 (URL-safe): the device's shell would split the link at "&".
         val link = String(android.util.Base64.decode(encoded, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
-        val open = Intent(Intent.ACTION_VIEW, Uri.parse(link))
-            .setClassName(instrumentation.targetContext, MainActivity::class.java.name)
-        ActivityScenario.launch<MainActivity>(open).use {
-            // The link asks before connecting.
-            waitForText("Pair with")
-            shot("pair-confirm")
-            compose.onNodeWithText("Pair").performClick()
-            waitForText("Paired with", 60)
-            shot("paired")
+        ActivityScenario.launch(MainActivity::class.java).use {
+            // A first run: the welcome, ending with how sending works.
+            waitForText("Get started")
+            compose.onNodeWithText("Get started").performClick()
+            waitForText("Microphone allowed")
+            compose.onNodeWithText("Continue").performClick()
+            waitForText("Receive from phone")
+            shot("welcome-send")
             compose.onNodeWithText("Start recording").performClick()
 
-            // This phone's default template for recordings without a project default.
+            // Nothing read from Fennec yet: Unsorted and Fennec's default template.
             waitForText("NEW RECORDING")
-            compose.onNodeWithContentDescription("Settings").performClick()
-            compose.onNodeWithText("Templates").performClick()
-            waitForText("Afhøringsrapport", 20)
-            compose.onNodeWithTag("template-Afhøringsrapport").performClick()
-            shot("templates")
-            compose.onNodeWithContentDescription("Back").performClick()
-
-            // A project made on the phone, with its own default template.
-            compose.onNodeWithText("Projects").performClick()
-            compose.onNodeWithText("New project").performClick()
-            compose.onNodeWithTag("project-name").performTextInput("Fra telefonen")
-            compose.onNodeWithText("Fennec's default").performClick()
-            compose.onAllNodesWithText("Mødereferat").onLast().performClick()
-            shot("project-editor")
-            compose.onNodeWithText("Add").performClick()
-            compose.waitUntilAtLeastOneExists(hasTestTag("project-Fra telefonen"), 20_000)
-            shot("projects")
-            compose.onNodeWithContentDescription("Back").performClick()
-            compose.onNodeWithContentDescription("Back").performClick()
-
-            // Into the new project: its default template applies.
-            waitForText("NEW RECORDING")
-            compose.onNodeWithText("Unsorted").performClick()
-            compose.onAllNodesWithText("Fra telefonen").onLast().performClick()
-            waitForText("Mødereferat · project default")
             shot("record")
             record("E2E møde", seconds = 6)
-
-            // Unsorted: this phone's default applies.
-            compose.onNodeWithText("Fra telefonen").performClick()
-            compose.onAllNodesWithText("Unsorted").onLast().performClick()
-            waitForText("Afhøringsrapport · default")
             record("E2E med pause", seconds = 4, pauseFor = 3)
 
             compose.onNodeWithText("Recordings").performClick()
-            compose.waitUntil(120_000) {
-                compose.onAllNodesWithText("Transcribed").fetchSemanticsNodes().size == 2
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("Not sent").fetchSemanticsNodes().size == 2 }
+            waitForText("2 recordings not sent")
+            shot("not-sent")
+
+            // Fennec's code, opened from another camera app: sends at once.
+            instrumentation.targetContext.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(link))
+                    .setClassName(instrumentation.targetContext, MainActivity::class.java.name)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            // Two short recordings may be sent before a screenshot can catch them going.
+            compose.waitUntil(30_000) {
+                listOf("Sending to", "Sent 2 recordings to").any { t ->
+                    compose.onAllNodes(hasText(t, substring = true)).fetchSemanticsNodes().isNotEmpty()
+                }
             }
-            shot("transcribed")
+            shot("sending")
+            waitForText("Sent 2 recordings to", 120)
+            shot("sent")
+            compose.onNodeWithText("Done").performClick()
+
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("Sent").fetchSemanticsNodes().size == 2 }
+            waitForText("Everything is sent")
+            shot("recordings")
 
             compose.onNodeWithText("E2E møde").performClick()
             waitForText("Sent to")
             shot("detail")
             compose.onNodeWithContentDescription("Back to recordings").performClick()
 
-            compose.onNodeWithContentDescription("Settings").performClick()
-            compose.onNodeWithText("Unpair").performClick()
-            compose.onAllNodesWithText("Unpair").onLast().performClick()
-            waitForText("Not paired")
-            shot("unpaired")
+            // The scan brought Fennec's projects for filing the next recording.
+            compose.onNodeWithText("Record").performClick()
+            waitForText("NEW RECORDING")
+            compose.onNodeWithText("Unsorted").performClick()
+            compose.waitUntilAtLeastOneExists(hasText("Kundemøder"), 10_000)
+            shot("projects")
         }
     }
 }

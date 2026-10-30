@@ -547,16 +547,17 @@ impl MainWindow {
         self.update_header();
     }
 
-    /// Starts receiving from phones if Settings says so, and queues phone
-    /// recordings that arrived before Fennec last closed but were not
-    /// transcribed to the end.
+    /// Wires up receiving from phones, and queues phone recordings that
+    /// arrived before Fennec last closed but were not transcribed to the end.
     fn start_phone_link(self: &Rc<Self>) {
         self.phone.set_parent(&self.window);
         let files = Rc::clone(&self.files);
         self.phone
             .connect_received(move |(doc, path)| files.add_document(doc, path));
         let sidebar = Rc::clone(&self.sidebar);
-        self.phone.connect_projects_changed(move |()| sidebar.refresh());
+        self.phone.connect_show_files(move |()| sidebar.go(Nav::Files));
+        let phone = Rc::clone(&self.phone);
+        self.files.receive.connect_clicked(move |_| phone.receive());
         self.usb.set_parent(&self.window);
         let files = Rc::clone(&self.files);
         self.usb
@@ -588,7 +589,6 @@ impl MainWindow {
             }
             Err(e) => tracing::warn!("looking for unfinished phone recordings: {e}"),
         }
-        self.phone.apply();
     }
 
     pub fn open_in_editor(&self, doc: crate::store::DocumentId) {

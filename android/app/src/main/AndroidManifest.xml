@@ -33,12 +33,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Fennec's pairing QR code, opened from another camera app. -->
+            <!-- Fennec's QR code for one transfer (fennec://send), opened from another camera app. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="fennec" android:host="pair" />
+                <data android:scheme="fennec" android:host="send" />
             </intent-filter>
         </activity>
 

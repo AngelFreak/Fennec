@@ -55,9 +55,10 @@ disk.
   Works with a built-in model that runs on this computer (Gemma 4, one-click
   download), Claude, ChatGPT, or your own server (Ollama, llama.cpp,
   LM Studio, vLLM).
-- 📱 **Record on your phone**: Fennec Recorder for Android records meetings
-  and sends the audio straight to Fennec over your own network, where it is
-  transcribed like any file. See [`android/`](android/README.md).
+- 📱 **Record on your phone**: Fennec Recorder for Android records meetings.
+  To send them, choose **Receive from phone** in Fennec and scan the code;
+  the audio goes straight to Fennec over your own network (or a USB cable)
+  and is transcribed like any file. See [`android/`](android/README.md).
 
 The interface is in English; transcripts are in Danish or English, and AI
 answers in the transcript's language unless you pick one.
@@ -268,9 +269,10 @@ flowchart LR
 ## Privacy
 
 - Audio is processed on this computer and is never uploaded.
-- Receiving from phones is off until you pair one in **Settings → Phone**.
-  Recordings travel encrypted from the phone to this computer only; only
-  phones you pair (and press Allow for) can send, and Remove shuts one out.
+- Fennec listens for a phone only while the **Receive from phone** code is
+  shown. Recordings travel encrypted from the phone to this computer only;
+  each code works once, for the phone that scans it, and nothing stays
+  paired.
 - AI stays off until you switch it on in **Settings → AI providers**, and
   nothing is sent until you start an action yourself.
 - The first time a document or project goes to a **cloud** provider, Fennec
@@ -289,7 +291,7 @@ flowchart LR
 | Documents (SQLite) | `~/.local/share/fennec/fennec.db` |
 | Models | `~/.local/share/fennec/models/` (built-in AI models in `ai/`) |
 | Dictation and phone audio | `~/.local/share/fennec/audio/` |
-| Phone pairing certificate | `~/.local/share/fennec/sync/` |
+| Certificate phones check | `~/.local/share/fennec/sync/` |
 | Exports | `~/Documents/Fennec/` |
 
 ## Development
@@ -327,10 +329,9 @@ The design, with its reasoning and measurements, is in
 ### Not yet verified
 
 - Fennec Recorder is tested in the Android emulator, whose microphone gives
-  silence and whose network carries no mDNS; recording real speech and
-  finding Fennec again after its address changes have not been tried on a
-  real phone yet. Camera scanning is tested by reading a screenshot of
-  Fennec's code with the app's scanner, not through a camera.
+  silence; recording real speech has not been tried on a real phone yet.
+  Camera scanning is tested by reading a screenshot of Fennec's code with the
+  app's scanner, not through a camera.
 
 - The AI actions are tested against mock servers that speak each API, but not
   yet with a real Claude or ChatGPT key. The built-in models were tried with

@@ -2,7 +2,7 @@
 
 A phone app that records meetings and interviews and hands the audio to
 Fennec on your computer, which transcribes it with the models it already has.
-Status: proposed and built 2026-10-06 (all five stages); tested end to end
+Status: proposed and built 2026-10-06 (all five stages); pairing replaced by a QR code per transfer on 2026-10-30 (`2026-10-30-send-by-qr.md`); tested end to end
 with the app in the Android emulator. UI mockup:
 https://claude.ai/artifact/F1XMmhXxkgaciWFxH7h7sx
 
@@ -72,6 +72,10 @@ The Android theme is Fennec's tokens, not Material's defaults:
   match. Later, one `design/tokens.toml` can generate both.
 
 ## Protocol (v1)
+
+> Replaced by protocol v2 (a QR code per transfer, no pairing): see
+> [`2026-10-30-send-by-qr.md`](2026-10-30-send-by-qr.md). v1 is kept here
+> for the record.
 
 ### Discovery
 

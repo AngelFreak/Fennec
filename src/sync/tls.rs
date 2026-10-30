@@ -1,6 +1,6 @@
-//! Fennec's own certificate. Made the first time receiving is turned on and
-//! kept in `<data>/sync/`. Phones learn its public key's hash (the pin) from
-//! the pairing QR code and accept no other certificate, so the certificate
+//! Fennec's own certificate. Made the first time Fennec receives from a
+//! phone and kept in `<data>/sync/`. Phones learn its public key's hash (the
+//! pin) from the QR code and accept no other certificate, so the certificate
 //! needs no authority behind it.
 
 use std::io::Write;
@@ -32,7 +32,7 @@ impl Identity {
         if let (Ok(cert_der), Ok(key_der)) = (std::fs::read(&cert), std::fs::read(&key)) {
             match Self::from_der(cert_der, key_der) {
                 Ok(id) => return Ok(id),
-                // Paired phones will refuse the new certificate; they pair again.
+                // The next code shown carries the new certificate's pin.
                 Err(e) => tracing::warn!("{}: {e}; making a new certificate", dir.display()),
             }
         }
