@@ -73,4 +73,6 @@ pub fn capture_rewrite(s: &Scene) {
         d.note_status().is_some_and(|t| t.contains("is ready"))
     });
     s.shot("rewrite-note-ready");
+    d.press_note_button();
+    s.shot("rewrite-note-open");
 }

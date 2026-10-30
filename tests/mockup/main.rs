@@ -9,6 +9,7 @@ mod cleanup;
 mod dictate;
 mod export;
 mod files;
+mod phone;
 mod project;
 mod settings;
 #[path = "../support/mod.rs"]
@@ -641,7 +642,13 @@ fn model(rec: &Recorded) -> Reply {
     if prompt.contains("Skriv diktatet om til et mødenotat") {
         std::thread::sleep(Duration::from_millis(2500));
         return Reply::Text(
-            "Besigtigelsen blev foretaget tirsdag formiddag sammen med ejendommens vicevært.".into(),
+            "Besigtigelsen blev foretaget tirsdag formiddag sammen med ejendommens vicevært. \
+             Der blev givet adgang til kælderen, trappeopgangen og to lejligheder på tredje sal.\n\n\
+             I kælderen blev der konstateret fugt langs den nordlige ydermur. Fugten stammer \
+             sandsynligvis fra en utæt nedløbsbrønd, og der er tydelige saltudtræk på murværket.\n\n\
+             Trappeopgangen er i god stand. Der er dog revner i pudsen over hoveddøren, som bør \
+             følges."
+                .into(),
         );
     }
     if prompt.contains("Korrekturlæs hvert afsnit") {
@@ -736,6 +743,8 @@ fn deps(root: &Path, llm: &MockLlm) -> Deps {
         ("action-items", "claude"),
         ("ask", "claude"),
         ("fill-fields", "workstation"),
+        // Rewrite as meeting note runs here; the Summary shown is seeded.
+        ("meeting-notes", "workstation"),
     ] {
         settings.ai.jobs.insert(job.into(), p.into());
     }
@@ -820,5 +829,9 @@ fn main() {
     // Last: it adds three documents, which would change other screens' counts.
     if run("files") {
         files::capture(&scene, &root);
+    }
+    // After Files: the recording that arrives joins its queue.
+    if run("phone") {
+        phone::capture(&scene);
     }
 }
