@@ -36,6 +36,18 @@ pub fn capture(s: &Scene) {
     d.inspector.show_suggestions(&suggestions);
     d.show_view("transcript");
     s.shot("dictate");
+    // In a narrow window, the folded panels opened over the page.
+    let (sidebar, panel) = s.w.folded();
+    if panel {
+        s.w.toggle_side_panel();
+        s.shot("dictate-panel");
+        s.w.toggle_side_panel();
+    }
+    if sidebar {
+        s.w.toggle_sidebar();
+        s.shot("dictate-sidebar");
+        s.w.toggle_sidebar();
+    }
 
     d.ai_menu.popup();
     pump(Duration::from_millis(300));

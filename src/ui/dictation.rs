@@ -52,6 +52,8 @@ struct State {
 
 pub struct DictationPage {
     pub root: gtk::Box,
+    /// Report fields; folds away on narrow windows.
+    pub side_panel: adw::OverlaySplitView,
     pub editor: Rc<Editor>,
     pub dock: Dock,
     pub inspector: Rc<Inspector>,
@@ -247,12 +249,13 @@ impl DictationPage {
             .build();
         side.add_css_class("fx-inspector-scroll");
 
+        let side_panel = super::side_panel(&main, &side, 300.0);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&main);
-        root.append(&side);
+        root.append(&side_panel);
 
         let page = Rc::new(Self {
             root,
+            side_panel,
             editor,
             dock,
             inspector,

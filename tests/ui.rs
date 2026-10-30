@@ -906,6 +906,31 @@ fn main() {
     w.settings.audio_retention.set_selected(0);
     w.settings.show_section("model");
 
+    // --- every screen fits the window; a wider one would be cut off
+    let content = adw::prelude::AdwApplicationWindowExt::content(&w.window).unwrap();
+    let mut too_wide = Vec::new();
+    for nav in [
+        fennec::ui::Nav::Dictate,
+        fennec::ui::Nav::Files,
+        fennec::ui::Nav::Templates,
+        fennec::ui::Nav::Settings,
+        fennec::ui::Nav::Project(fennec::store::ProjectFilter::All),
+    ] {
+        w.sidebar.go(nav.clone());
+        pump_until(Duration::from_millis(100), || false);
+        let (min, ..) = content.measure(gtk::Orientation::Horizontal, -1);
+        if min > w.window.width() {
+            too_wide.push(format!("{nav:?} needs {min} px"));
+        }
+    }
+    check(
+        &format!("every screen fits the window ({} px)", w.window.width()),
+        too_wide.is_empty(),
+    );
+    for t in &too_wide {
+        println!("     {t}");
+    }
+
     // --- first run: one download of everything dictation needs
     let root_s = tmp.path().join("setup");
     let d = deps(&root_s, vec![], true);

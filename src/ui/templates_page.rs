@@ -37,6 +37,8 @@ struct FieldRow {
 
 pub struct TemplatesPage {
     pub root: gtk::Box,
+    /// The preview; folds away on narrow windows.
+    pub side_panel: adw::OverlaySplitView,
     /// Buttons for the window header while this screen shows.
     pub header_actions: gtk::Box,
     /// The template list; the window shows it in the sidebar.
@@ -223,26 +225,26 @@ impl TemplatesPage {
             .content_fit(gtk::ContentFit::Contain)
             .build();
         // A non-scrolling frame keeps the picture's natural size out of the
-        // layout, so the aside stays 340px wide.
+        // layout, so the aside stays 300px wide.
         let page_frame = gtk::ScrolledWindow::builder()
             .child(&preview)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Never)
             .halign(gtk::Align::Center)
             .build();
-        page_frame.set_size_request(292, 413);
+        page_frame.set_size_request(260, 368);
         page_frame.add_css_class("fx-page-preview");
         let preview_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
         preview_box.add_css_class("fx-preview-area");
         preview_box.add_css_class("fx-template-preview");
-        preview_box.set_size_request(340, -1);
+        preview_box.set_size_request(300, -1);
         preview_box.set_hexpand(false);
         preview_box.append(&label("PREVIEW", &["fx-section-title"]));
         preview_box.append(&page_frame);
 
+        let side_panel = super::side_panel(&editor_scroll, &preview_box, 300.0);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&editor_scroll);
-        root.append(&preview_box);
+        root.append(&side_panel);
 
         let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let open_file = gtk::Button::with_label("Open as file");
@@ -254,6 +256,7 @@ impl TemplatesPage {
 
         let page = Rc::new(Self {
             root,
+            side_panel,
             header_actions,
             list_panel: left_scroll,
             dir,

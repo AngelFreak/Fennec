@@ -206,6 +206,8 @@ impl PlayerBar {
 
 pub struct FilesPage {
     pub root: gtk::Box,
+    /// The queue; folds away on narrow windows.
+    pub side_panel: adw::OverlaySplitView,
     /// Extra buttons for the window header.
     pub header_actions: gtk::Box,
     on_header_changed: super::Handler<()>,
@@ -327,9 +329,9 @@ impl FilesPage {
         paragraph_pauses.set_tooltip_text(Some("Applies to files added from now on"));
         queue.append(&paragraph_pauses);
 
+        let side_panel = super::side_panel(&center, &queue, 300.0);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        root.append(&center);
-        root.append(&queue);
+        root.append(&side_panel);
 
         let header_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let open_editor = icon_button("document-edit-symbolic", "Open in editor", &["fx-header-chip"]);
@@ -338,6 +340,7 @@ impl FilesPage {
 
         let page = Rc::new(Self {
             root,
+            side_panel,
             header_actions,
             on_header_changed: RefCell::default(),
             store,
