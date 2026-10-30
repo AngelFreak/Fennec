@@ -16,6 +16,7 @@ use super::editor::Editor;
 use super::engine::EngineHolder;
 use super::inspector::Inspector;
 use super::{Deps, label};
+use crate::ai::actions::Proofreading;
 use crate::ai::service::Scope;
 use crate::live::{LiveConfig, LiveEvent, LiveSession};
 use crate::store::{DocumentId, NewDocument, Store};
@@ -1460,17 +1461,31 @@ impl DictationPage {
         let Some(doc) = self.document() else { return };
         self.cleanup
             .set_local_only(self.store.document_is_local_only(doc).unwrap_or(false));
-        self.cleanup.begin(self.title.text().trim());
+        self.cleanup
+            .begin(&self.store.paragraphs(doc).unwrap_or_default());
         self.navigate("cleanup");
-        super::ai::run(
+        // Parts come back one by one, on their own channel.
+        let (tx, rx) = async_channel::unbounded::<Proofreading>();
+        let progress = self.for_doc(doc, |p, e| p.cleanup.progress(e));
+        glib::spawn_future_local(async move {
+            while let Ok(e) = rx.recv().await {
+                progress(e);
+            }
+        });
+        let cancel = super::ai::run(
             self.root.upcast_ref(),
             &self.deps,
             Scope::Document(doc),
             self.what(),
-            Arc::new(move |ai, store, cancel, _| ai.cleanup(store, doc, cancel)),
+            Arc::new(move |ai, store, cancel, _| {
+                ai.cleanup_with_progress(store, doc, cancel, &mut |e| {
+                    let _ = tx.send_blocking(e);
+                })
+            }),
             Rc::new(|_: &str| {}),
             self.for_doc(doc, |p, r| p.cleanup.finish(r)),
         );
+        self.cleanup.set_cancel(cancel);
     }
 
     pub fn ai_action_items(self: &Rc<Self>) {

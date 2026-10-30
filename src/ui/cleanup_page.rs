@@ -1,19 +1,24 @@
 //! The Clean-up review: one card per changed paragraph with a word diff,
 //! accept / keep original, and undo. The original stays until accepted.
+//! The document's paragraphs show at once; suggestions fill in as the AI
+//! sends each part back, under a progress bar with a Stop button.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use super::project::locality_word;
 use super::{Handler, label};
-use crate::ai::actions::Cleaned;
+use crate::ai::actions::{Cleaned, Proofreading};
 use crate::ai::diff::{Change, word_diff};
-use crate::ai::{AiError, Locality};
+use crate::ai::{AiError, Cancel, Locality};
 use crate::config::Settings;
-use crate::store::{DocumentFilter, ParagraphId, Store};
+use crate::store::{DocumentFilter, Paragraph, ParagraphId, Store};
 use crate::text::clock;
 
 /// Replaces paragraph text (`from` → `to`); false if the text has changed.
@@ -44,12 +49,44 @@ struct Row {
     note: gtk::Label,
 }
 
+/// A paragraph's place in the review: waiting for the AI, then its card.
+struct Slot {
+    id: ParagraphId,
+    text: String,
+    place: String,
+    holder: gtk::Box,
+    done: Cell<bool>,
+}
+
+/// How far the AI has got.
+#[derive(Default)]
+struct Run {
+    active: bool,
+    loading: bool,
+    /// When the parts went out.
+    started: Option<Instant>,
+    paragraphs: usize,
+    done: usize,
+    chars: usize,
+    done_chars: usize,
+    /// How the run ended early ("Stopped…", an error), if it did.
+    ended: Option<String>,
+}
+
 pub struct CleanupPage {
     pub root: gtk::Box,
     /// Provider, Discard all and Accept remaining, for the window header.
     pub header_actions: gtk::Box,
     pub status: gtk::Label,
     list: gtk::Box,
+    progress: gtk::Box,
+    bar: gtk::ProgressBar,
+    progress_label: gtk::Label,
+    stop: gtk::Button,
+    slots: RefCell<Vec<Slot>>,
+    run: RefCell<Run>,
+    cancel: RefCell<Option<Arc<Cancel>>>,
+    provider_name: RefCell<String>,
     /// "Accept remaining".
     pub accept_all: gtk::Button,
     /// "Discard all": back to the document without the suggestions.
@@ -101,11 +138,30 @@ impl CleanupPage {
         legend.append(&explain);
         let status = label("", &["fx-status"]);
         status.set_wrap(true);
+        let bar = gtk::ProgressBar::new();
+        bar.add_css_class("thin");
+        bar.set_hexpand(true);
+        bar.set_valign(gtk::Align::Center);
+        let progress_label = label("", &["fx-status"]);
+        progress_label.set_wrap(true);
+        let stop = gtk::Button::with_label("Stop");
+        stop.add_css_class("fx-secondary");
+        stop.set_valign(gtk::Align::Center);
+        let progress_text = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        progress_text.set_hexpand(true);
+        progress_text.append(&progress_label);
+        progress_text.append(&bar);
+        let progress = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        progress.add_css_class("fx-cleanup-progress");
+        progress.append(&progress_text);
+        progress.append(&stop);
+        progress.set_visible(false);
 
         let list = gtk::Box::new(gtk::Orientation::Vertical, 14);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
         content.add_css_class("fx-cleanup-page");
         content.append(&legend);
+        content.append(&progress);
         content.append(&status);
         content.append(&list);
         let scroller = gtk::ScrolledWindow::builder()
@@ -123,6 +179,14 @@ impl CleanupPage {
             header_actions,
             status,
             list,
+            progress,
+            bar,
+            progress_label,
+            stop,
+            slots: RefCell::default(),
+            run: RefCell::default(),
+            cancel: RefCell::default(),
+            provider_name: RefCell::default(),
             accept_all,
             done,
             provider,
@@ -144,6 +208,19 @@ impl CleanupPage {
         page.done.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
                 p.discard_all();
+            }
+        });
+        let weak = Rc::downgrade(&page);
+        page.stop.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.stop();
+            }
+        });
+        // Leaving the review (Back, Discard all) stops the AI too.
+        let weak = Rc::downgrade(&page);
+        page.root.connect_unmap(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.stop();
             }
         });
         let weak = Rc::downgrade(&page);
@@ -171,6 +248,7 @@ impl CleanupPage {
             self.list.remove(&c);
         }
         self.rows.borrow_mut().clear();
+        self.slots.borrow_mut().clear();
     }
 
     /// The pill naming the provider that does the clean-up.
@@ -191,6 +269,7 @@ impl CleanupPage {
             Some(p) => format!("{} · {}", p.name, locality_word(p.locality)),
             None => "No provider set up".into(),
         });
+        *self.provider_name.borrow_mut() = active.map(|p| p.name.clone()).unwrap_or_else(|| "the AI".into());
     }
 
     /// The provider pill's text (tests).
@@ -204,50 +283,242 @@ impl CleanupPage {
         self.refresh_provider();
     }
 
-    pub fn begin(&self, _doc_title: &str) {
+    /// Starts a review of `paragraphs`: they show at once, waiting.
+    pub fn begin(self: &Rc<Self>, paragraphs: &[Paragraph]) {
         self.clear();
         self.refresh_provider();
-        self.status.set_visible(true);
-        self.status.set_text("Asking the AI for a cleaned-up version…");
-        self.accept_all.set_sensitive(false);
-        self.done.set_label("Discard all");
+        self.lay_out(paragraphs);
+        *self.run.borrow_mut() = Run {
+            active: true,
+            paragraphs: self.slots.borrow().len(),
+            chars: self.slots.borrow().iter().map(|s| s.text.len()).sum(),
+            ..Run::default()
+        };
+        self.progress.set_visible(true);
+        self.stop.set_sensitive(true);
+        self.stop.set_label("Stop");
+        self.bar.set_fraction(0.0);
+        self.refresh_progress();
+        self.refresh_status();
+        // The clock and the bar move between parts.
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+            match weak.upgrade() {
+                Some(p) if p.run.borrow().active => {
+                    p.refresh_progress();
+                    glib::ControlFlow::Continue
+                }
+                _ => glib::ControlFlow::Break,
+            }
+        });
+    }
+
+    /// The flag that stops the running job.
+    pub fn set_cancel(&self, cancel: Arc<Cancel>) {
+        *self.cancel.borrow_mut() = Some(cancel);
+    }
+
+    /// Stops the AI; what came back so far stays to review.
+    pub fn stop(&self) {
+        if !self.run.borrow().active {
+            return;
+        }
+        if let Some(c) = self.cancel.borrow().as_ref() {
+            c.cancel();
+        }
+        self.stop.set_sensitive(false);
+        self.stop.set_label("Stopping…");
+    }
+
+    /// Whether the AI is still working (tests).
+    pub fn is_running(&self) -> bool {
+        self.run.borrow().active
+    }
+
+    /// The progress line (tests).
+    pub fn progress_text(&self) -> String {
+        self.progress_label.text().to_string()
+    }
+
+    pub fn progress(self: &Rc<Self>, event: Proofreading) {
+        if !self.run.borrow().active {
+            return;
+        }
+        match event {
+            Proofreading::Starting => self.run.borrow_mut().loading = true,
+            Proofreading::Working { .. } => {
+                let mut run = self.run.borrow_mut();
+                run.loading = false;
+                run.started = Some(Instant::now());
+            }
+            Proofreading::Part { covered, changed } => {
+                let chars: usize = self
+                    .slots
+                    .borrow()
+                    .iter()
+                    .filter(|s| covered.contains(&s.id))
+                    .map(|s| s.text.len())
+                    .sum();
+                {
+                    let mut run = self.run.borrow_mut();
+                    run.done += covered.len();
+                    run.done_chars += chars;
+                }
+                self.fill(&covered, changed);
+            }
+        }
+        self.refresh_progress();
     }
 
     pub fn finish(self: &Rc<Self>, result: Result<Vec<Cleaned>, AiError>) {
-        match result {
-            Ok(items) => self.show(items),
-            Err(e) => {
-                self.status.set_visible(true);
-                self.status.set_text(&super::ai::error_text(&e));
+        let ended = match result {
+            Ok(items) => {
+                // Anything not yet shown part by part.
+                let waiting: Vec<ParagraphId> = self
+                    .slots
+                    .borrow()
+                    .iter()
+                    .filter(|s| !s.done.get())
+                    .map(|s| s.id)
+                    .collect();
+                self.fill(&waiting, items);
+                None
             }
+            Err(e) => {
+                let run = self.run.borrow();
+                Some(match e {
+                    AiError::Cancelled => {
+                        format!("Stopped after {} of {} paragraphs.", run.done, run.paragraphs)
+                    }
+                    e => super::ai::error_text(&e),
+                })
+            }
+        };
+        for slot in self.slots.borrow().iter().filter(|s| !s.done.get()) {
+            set_side_note(slot, "Not proofread");
+        }
+        {
+            let mut run = self.run.borrow_mut();
+            run.active = false;
+            run.ended = ended;
+        }
+        *self.cancel.borrow_mut() = None;
+        self.progress.set_visible(false);
+        self.refresh_status();
+    }
+
+    /// Shows a finished set of suggestions for the document they belong to.
+    pub fn show(self: &Rc<Self>, items: Vec<Cleaned>) {
+        self.clear();
+        let paragraphs = self.document_paragraphs(items.first().map(|i| i.paragraph_id));
+        self.lay_out(&paragraphs);
+        *self.run.borrow_mut() = Run::default();
+        let all: Vec<ParagraphId> = self.slots.borrow().iter().map(|s| s.id).collect();
+        self.fill(&all, items);
+        self.refresh_status();
+    }
+
+    /// One waiting card per paragraph, in document order.
+    fn lay_out(&self, paragraphs: &[Paragraph]) {
+        let mut slots = self.slots.borrow_mut();
+        for (i, p) in paragraphs.iter().enumerate() {
+            let Some(id) = p.id else { continue };
+            if p.text.trim().is_empty() {
+                continue;
+            }
+            let place = p.start_ms.map_or_else(|| format!("¶{}", i + 1), clock);
+            let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            holder.append(&plain_card(&p.text, &place, "Waiting…", "waiting"));
+            self.list.append(&holder);
+            slots.push(Slot {
+                id,
+                text: p.text.clone(),
+                place,
+                holder,
+                done: Cell::new(false),
+            });
         }
     }
 
-    pub fn show(self: &Rc<Self>, items: Vec<Cleaned>) {
-        self.clear();
-        let places = self.places(&items);
-        // In document order, as in the mockup: paragraphs the AI left alone
-        // are listed too, marked as such, so the review reads like the text.
-        let mut items: HashMap<ParagraphId, Cleaned> =
-            items.into_iter().map(|i| (i.paragraph_id, i)).collect();
-        for p in self.document_paragraphs(items.keys().next().copied()) {
-            let Some(id) = p.id else { continue };
-            let place = places.get(&id).cloned().unwrap_or_default();
-            match items.remove(&id) {
+    /// Fills the `covered` paragraphs' cards: a suggestion where one came
+    /// back, otherwise "No changes suggested".
+    fn fill(self: &Rc<Self>, covered: &[ParagraphId], changed: Vec<Cleaned>) {
+        let mut changed: HashMap<ParagraphId, Cleaned> =
+            changed.into_iter().map(|c| (c.paragraph_id, c)).collect();
+        let slots = self.slots.borrow();
+        for slot in slots.iter() {
+            if slot.done.get() || !(covered.contains(&slot.id) || changed.contains_key(&slot.id)) {
+                continue;
+            }
+            slot.done.set(true);
+            while let Some(c) = slot.holder.first_child() {
+                slot.holder.remove(&c);
+            }
+            match changed.remove(&slot.id) {
                 Some(item) => {
-                    let row = self.card(item, &place);
+                    let (row, card) = self.card(item, &slot.place);
+                    slot.holder.append(&card);
                     self.rows.borrow_mut().push(row);
                 }
-                None if !p.text.trim().is_empty() => self.unchanged_card(&p.text, &place),
-                None => {}
+                None => slot.holder.append(&plain_card(
+                    &slot.text,
+                    &slot.place,
+                    "No changes suggested",
+                    "unchanged",
+                )),
             }
         }
-        // Anything not found in the document still gets its card.
-        for item in items.into_values() {
-            let row = self.card(item, "");
+        // A paragraph that is not in the list still gets its card.
+        for item in changed.into_values() {
+            if slots.iter().any(|s| s.id == item.paragraph_id) {
+                continue;
+            }
+            let (row, card) = self.card(item, "");
+            self.list.append(&card);
             self.rows.borrow_mut().push(row);
         }
+        // Rows follow the text, whatever order the parts came back in.
+        let order: HashMap<ParagraphId, usize> = slots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
+        self.rows
+            .borrow_mut()
+            .sort_by_key(|r| order.get(&r.item.paragraph_id).copied().unwrap_or(usize::MAX));
+        drop(slots);
         self.refresh_status();
+    }
+
+    /// The line over the bar: loading, then how far, then about how long.
+    fn refresh_progress(&self) {
+        let run = self.run.borrow();
+        if !run.active {
+            return;
+        }
+        let name = self.provider_name.borrow().clone();
+        let text = if run.loading {
+            self.bar.pulse();
+            format!("Loading {name}. The first proofread after a while waits for the model to load.")
+        } else if let Some(started) = run.started.filter(|_| run.done > 0) {
+            self.bar
+                .set_fraction(run.done_chars as f64 / run.chars.max(1) as f64);
+            let elapsed = started.elapsed().as_secs_f64();
+            let left =
+                elapsed * (run.chars - run.done_chars.min(run.chars)) as f64 / run.done_chars.max(1) as f64;
+            let left = if left < 60.0 {
+                "under a minute left".to_string()
+            } else {
+                format!("about {} min left", (left / 60.0).round() as u64)
+            };
+            format!("{} of {} paragraphs proofread · {left}", run.done, run.paragraphs)
+        } else {
+            self.bar.pulse();
+            let waited = run.started.map_or(0, |s| s.elapsed().as_secs());
+            format!(
+                "{name} is proofreading {} paragraphs · {}:{:02}",
+                run.paragraphs,
+                waited / 60,
+                waited % 60
+            )
+        };
+        self.progress_label.set_text(&text);
     }
 
     /// The paragraphs of the document holding `paragraph`.
@@ -264,57 +535,7 @@ impl CleanupPage {
             .unwrap_or_default()
     }
 
-    /// A paragraph the AI suggested nothing for.
-    fn unchanged_card(&self, text: &str, place: &str) {
-        let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
-        card.add_css_class("fx-diff-card");
-        card.add_css_class("unchanged");
-        let ts = label(place, &["fx-cleanup-ts"]);
-        ts.set_size_request(72, -1);
-        ts.set_valign(gtk::Align::Start);
-        card.append(&ts);
-        let t = label(text, &["fx-diff"]);
-        t.set_wrap(true);
-        t.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        t.set_xalign(0.0);
-        t.set_valign(gtk::Align::Start);
-        t.set_hexpand(true);
-        card.append(&t);
-        let side = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        side.set_size_request(200, -1);
-        side.append(&label("No changes suggested", &["fx-cleanup-outcome"]));
-        card.append(&side);
-        self.list.append(&card);
-    }
-
-    /// Where each paragraph sits: its start time, or ¶n without audio.
-    fn places(&self, items: &[Cleaned]) -> HashMap<ParagraphId, String> {
-        let mut out = HashMap::new();
-        let Some(first) = items.first() else {
-            return out;
-        };
-        // Clean-up works on one document; find it by its paragraphs.
-        let docs = self
-            .store
-            .documents(&DocumentFilter::default())
-            .unwrap_or_default();
-        for d in docs {
-            let paragraphs = self.store.paragraphs(d.id).unwrap_or_default();
-            if !paragraphs.iter().any(|p| p.id == Some(first.paragraph_id)) {
-                continue;
-            }
-            for (i, p) in paragraphs.iter().enumerate() {
-                if let Some(id) = p.id {
-                    let place = p.start_ms.map_or_else(|| format!("¶{}", i + 1), clock);
-                    out.insert(id, place);
-                }
-            }
-            break;
-        }
-        out
-    }
-
-    fn card(self: &Rc<Self>, item: Cleaned, place: &str) -> Rc<Row> {
+    fn card(self: &Rc<Self>, item: Cleaned, place: &str) -> (Rc<Row>, gtk::Box) {
         let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
         card.add_css_class("fx-diff-card");
         let ts = label(place, &["fx-cleanup-ts"]);
@@ -357,7 +578,6 @@ impl CleanupPage {
         buttons.append(&undo);
         buttons.append(&note);
         card.append(&buttons);
-        self.list.append(&card);
 
         let row = Rc::new(Row {
             item,
@@ -383,7 +603,7 @@ impl CleanupPage {
                 }
             });
         }
-        row
+        (row, card)
     }
 
     fn apply(&self, from: &str, to: &str, id: ParagraphId) -> bool {
@@ -472,13 +692,15 @@ impl CleanupPage {
 
     /// Cards for paragraphs without suggestions (tests).
     pub fn unchanged_count(&self) -> usize {
-        let mut n = 0;
-        let mut c = self.list.first_child();
-        while let Some(w) = c {
-            n += usize::from(w.has_css_class("unchanged"));
-            c = w.next_sibling();
-        }
-        n
+        self.slots
+            .borrow()
+            .iter()
+            .filter(|s| {
+                s.holder
+                    .first_child()
+                    .is_some_and(|c| c.has_css_class("unchanged"))
+            })
+            .count()
     }
 
     pub fn states(&self) -> Vec<RowState> {
@@ -487,19 +709,69 @@ impl CleanupPage {
 
     fn refresh_status(&self) {
         let rows = self.rows.borrow();
+        let run = self.run.borrow();
         let pending = rows.iter().filter(|r| r.state.get() == RowState::Pending).count();
         self.accept_all.set_sensitive(pending > 0);
-        self.done.set_label(if pending > 0 || rows.is_empty() {
-            "Discard all"
-        } else {
-            "Done"
-        });
-        self.status.set_visible(pending == 0);
-        self.status.set_text(&match (rows.len(), pending) {
-            (0, _) => "Nothing to clean up — the text already reads well.".to_string(),
-            (n, 0) => format!("All {n} suggestions reviewed."),
-            (n, p) => format!("{p} of {n} suggestions to review. The original stays until you accept."),
-        });
+        self.done
+            .set_label(if pending > 0 || rows.is_empty() || run.active {
+                "Discard all"
+            } else {
+                "Done"
+            });
+        if run.active {
+            self.status.set_visible(false);
+            return;
+        }
+        let summary = match (rows.len(), pending, &run.ended) {
+            (0, _, Some(_)) => String::new(),
+            (0, _, None) => "Nothing to clean up — the text already reads well.".to_string(),
+            (n, 0, _) => format!("All {n} suggestions reviewed."),
+            (n, p, _) => format!("{p} of {n} suggestions to review. The original stays until you accept."),
+        };
+        self.status.set_visible(pending == 0 || run.ended.is_some());
+        self.status.set_text(
+            match &run.ended {
+                Some(e) => format!("{e} {summary}"),
+                None => summary,
+            }
+            .trim(),
+        );
+    }
+}
+
+/// A paragraph without a suggestion (yet): its text and a note beside it.
+fn plain_card(text: &str, place: &str, note: &str, class: &str) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 20);
+    card.add_css_class("fx-diff-card");
+    card.add_css_class(class);
+    let ts = label(place, &["fx-cleanup-ts"]);
+    ts.set_size_request(72, -1);
+    ts.set_valign(gtk::Align::Start);
+    card.append(&ts);
+    let t = label(text, &["fx-diff"]);
+    t.set_wrap(true);
+    t.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    t.set_xalign(0.0);
+    t.set_valign(gtk::Align::Start);
+    t.set_hexpand(true);
+    card.append(&t);
+    let side = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    side.set_size_request(200, -1);
+    side.append(&label(note, &["fx-cleanup-outcome"]));
+    card.append(&side);
+    card
+}
+
+/// Changes a waiting card's note ("Not proofread").
+fn set_side_note(slot: &Slot, note: &str) {
+    if let Some(l) = slot
+        .holder
+        .first_child()
+        .and_then(|card| card.last_child())
+        .and_then(|side| side.first_child())
+        .and_downcast::<gtk::Label>()
+    {
+        l.set_text(note);
     }
 }
 

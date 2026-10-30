@@ -17,3 +17,7 @@
 .fx-pill.network .fx-dot { background-color: @fx_ok; }
 .fx-pill.cloud .fx-dot { background-color: @fx_ai_text; }
 .fx-pill.local .fx-dot { background-color: @fx_muted; }
+
+/* While the AI works: the bar over the list, and paragraphs still waiting. */
+.fx-cleanup-progress { padding: 4px 0 8px; }
+.fx-diff-card.waiting .fx-diff { color: @fx_muted; }

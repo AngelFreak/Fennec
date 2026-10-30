@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use fennec::ai::actions::Proofreading;
 use fennec::ai::service::Scope;
 use fennec::ai::{
     AiError, AiJob, AiService, AiSettings, Cancel, Locality, MemorySecrets, Protocol, ProviderConfig,
@@ -255,6 +256,77 @@ fn cleanup_returns_only_changed_paragraphs_with_known_ids() {
     assert_eq!(store.paragraphs(doc).unwrap()[0].text, "vi øh mødes på mandag");
     let req = &mock.requests()[0];
     assert_eq!(req.body["response_format"]["type"], "json_schema");
+}
+
+#[test]
+fn long_texts_are_proofread_in_parts_at_once_and_reported_as_they_return() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    static MOST: AtomicUsize = AtomicUsize::new(0);
+    let mock = MockLlm::start(Wire::OpenAi, |rec| {
+        let now = IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        MOST.fetch_max(now, Ordering::SeqCst);
+        let paragraphs = tagged(rec);
+        // The first part is the slowest, so parts finish out of order.
+        let first = paragraphs.iter().any(|(_, t)| t.starts_with("Afsnit 0 "));
+        std::thread::sleep(std::time::Duration::from_millis(if first { 400 } else { 100 }));
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        let fixed: Vec<_> = paragraphs
+            .into_iter()
+            .filter(|(_, t)| t.contains("øh "))
+            .map(|(id, t)| json!({"id": id, "text": t.replace("øh ", "")}))
+            .collect();
+        Reply::Text(json!({ "paragraphs": fixed }).to_string())
+    });
+    let ai = service(
+        provider("ollama", Protocol::OpenAi, &mock.url, Locality::ThisComputer),
+        None,
+    );
+    let texts: Vec<String> = (0..12)
+        .map(|i| {
+            format!(
+                "Afsnit {i} øh handler om mødet og hvad der blev aftalt. {}",
+                "Mere tekst her. ".repeat(18)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let (store, doc) = store_with_doc(&refs);
+    let ids = paragraph_ids(&store, doc);
+
+    let mut events = Vec::new();
+    let cleaned = ai
+        .cleanup_with_progress(&store, doc, &Cancel::default(), &mut |e| events.push(e))
+        .unwrap();
+
+    let parts = mock.count();
+    assert!(parts > 1, "{parts} requests");
+    assert!(MOST.load(Ordering::SeqCst) > 1, "parts run at once");
+    assert_eq!(
+        events.first(),
+        Some(&Proofreading::Working {
+            paragraphs: 12,
+            parts
+        })
+    );
+    let mut covered: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Proofreading::Part { covered, .. } => Some(covered.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(covered.len(), parts, "every part is reported");
+    assert!(
+        covered.first().is_some_and(|c| !c.contains(&ids[0])),
+        "the slow first part is not reported first"
+    );
+    covered.sort();
+    assert_eq!(covered.concat(), ids, "each paragraph is in exactly one part");
+    // The result follows the text, whatever order the parts came back in.
+    let got: Vec<_> = cleaned.iter().map(|c| c.paragraph_id).collect();
+    assert_eq!(got, ids);
+    assert!(cleaned.iter().all(|c| !c.cleaned.contains("øh")));
 }
 
 #[test]
@@ -891,5 +963,49 @@ fn real_built_in_model_writes_meeting_notes() {
         "{items:?}"
     );
     assert!(notes.text.contains("**Beslutninger**"));
+    assert!(fixes.len() > lines.len() / 2, "most paragraphs need commas");
+}
+
+/// Times proofreading on a running llama-server, to compare its settings:
+/// `FENNEC_LLAMA_SERVER_URL=http://127.0.0.1:8090 cargo test --release
+/// --test ai real_built_in_model_proofreads -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn real_built_in_model_proofreads() {
+    assert!(
+        std::env::var("FENNEC_LLAMA_SERVER_URL").is_ok(),
+        "start llama-server and set FENNEC_LLAMA_SERVER_URL"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let model = &fennec::ai::local::catalog()[0];
+    let file = fennec::ai::local::path_of(model, dir.path());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"stand-in").unwrap();
+    let ai = service(fennec::ai::local::provider_for(model, dir.path()), None);
+    let text = std::fs::read_to_string("tests/data/meeting-da.txt").unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let (store, doc) = store_with_doc(&lines);
+
+    let started = std::time::Instant::now();
+    let fixes = ai
+        .cleanup_with_progress(&store, doc, &Cancel::default(), &mut |e| {
+            if let Proofreading::Part { covered, .. } = e {
+                println!(
+                    "{:5.1} s  part of {} paragraphs back",
+                    started.elapsed().as_secs_f32(),
+                    covered.len()
+                );
+            }
+        })
+        .unwrap();
+    for c in &fixes {
+        println!("- {}\n+ {}", c.original, c.cleaned);
+    }
+    println!(
+        "{} of {} paragraphs changed in {:.0} s",
+        fixes.len(),
+        lines.len(),
+        started.elapsed().as_secs_f32()
+    );
     assert!(fixes.len() > lines.len() / 2, "most paragraphs need commas");
 }

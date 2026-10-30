@@ -10,6 +10,7 @@ pub fn capture(s: &Scene) {
     s.w.sidebar.go(Nav::Dictate);
     s.w.dictation.open_document(s.besigtigelse).unwrap();
     s.w.dictation.ai_cleanup();
+    s.shot("cleanup-working");
     let proposed = pump_until(Duration::from_secs(10), || {
         !s.w.dictation.cleanup.states().is_empty()
     });

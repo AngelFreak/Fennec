@@ -7,6 +7,8 @@
 //! returns is checked against the ids it was given.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use serde_json::{Value, json};
 
@@ -261,15 +263,36 @@ fn cleanup_schema() -> Value {
     })
 }
 
+/// How far proofreading has got, for a progress display.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Proofreading {
+    /// The model is loading (the built-in AI, when it was not running).
+    Starting,
+    /// `paragraphs` paragraphs went out in `parts` parts.
+    Working { paragraphs: usize, parts: usize },
+    /// A part is back: the paragraphs it held and the changes to them.
+    Part {
+        covered: Vec<ParagraphId>,
+        changed: Vec<Cleaned>,
+    },
+}
+
+/// Text per request: small parts come back one by one, so the review can
+/// start early, and several run at once.
+const PROOFREAD_CHARS: usize = 1_500;
+/// Parts in flight at once; the built-in server decodes four together.
+const PROOFREAD_AT_ONCE: usize = 4;
+
 /// Proofreads: proposes a corrected version of each paragraph, in the
-/// text's own language. Only paragraphs that actually changed are returned;
-/// unknown ids are dropped.
-pub fn cleanup(llm: &dyn LlmProvider, doc: &DocText, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
-    let originals: BTreeMap<ParagraphId, &str> = doc
-        .paragraphs
-        .iter()
-        .filter_map(|p| Some((p.id?, p.text.as_str())))
-        .collect();
+/// text's own language. Only paragraphs that actually changed are returned,
+/// in document order; unknown ids are dropped. Parts are reported to
+/// `on_progress` as they come back.
+pub fn cleanup(
+    llm: &dyn LlmProvider,
+    doc: &DocText,
+    cancel: &Cancel,
+    on_progress: &mut dyn FnMut(Proofreading),
+) -> Result<Vec<Cleaned>, AiError> {
     // Proofreading answers in the text's own language, whatever Settings say.
     let sys = match Lang::of(&[doc]) {
         Lang::Danish => system(
@@ -278,41 +301,139 @@ pub fn cleanup(llm: &dyn LlmProvider, doc: &DocText, cancel: &Cancel) -> Result<
             "Korrekturlæs hvert afsnit: ret stavning, grammatik, tegnsætning efter danske kommaregler, \
              store bogstaver og tydeligt fejlhørte ord, og fjern fyldord (øh, øhm) og gentagelser. \
              Ret så lidt som muligt: bevar betydning, ordvalg og rækkefølge; omskriv ikke og tilføj intet. \
-             Returnér hvert afsnit med dets id (tallet efter p).",
+             Returnér hvert rettet afsnit med dets id (tallet efter p); udelad afsnit uden fejl.",
         ),
         Lang::English => system_en(
             "Proofread each paragraph: fix spelling, grammar, punctuation, capitals and clearly \
              misheard words, and remove filler words (um, uh) and repetitions. Change as little as possible: keep \
-             the meaning, wording and order; do not rewrite or add anything. Return each paragraph \
-             with its id (the number after p).",
+             the meaning, wording and order; do not rewrite or add anything. Return each corrected paragraph \
+             with its id (the number after p); leave out paragraphs without mistakes.",
         ),
     };
-    let mut out = Vec::new();
-    for c in chunk(&tagged_lines(doc, false), llm.config().context_chars) {
-        let req = StructuredRequest {
-            system: sys.clone(),
-            prompt: c,
-            schema_name: "cleanup".into(),
-            schema: cleanup_schema(),
-            max_tokens: MAX_TOKENS,
-        };
-        let v = llm.structured(&req, cancel)?;
-        for item in v["paragraphs"].as_array().into_iter().flatten() {
-            let (Some(id), Some(text)) = (item["id"].as_i64(), item["text"].as_str()) else {
-                continue;
-            };
-            let Some(original) = originals.get(&id) else {
-                tracing::warn!(id, "clean-up returned an unknown paragraph id");
-                continue;
-            };
-            let text = text.trim();
-            if !text.is_empty() && text != original.trim() {
-                out.push(Cleaned {
-                    paragraph_id: id,
-                    original: original.to_string(),
-                    cleaned: text.to_string(),
-                });
+    let paragraphs: Vec<(ParagraphId, &str)> = doc
+        .paragraphs
+        .iter()
+        .filter(|p| !p.text.trim().is_empty())
+        .filter_map(|p| Some((p.id?, p.text.as_str())))
+        .collect();
+    let budget = PROOFREAD_CHARS.min(llm.config().context_chars);
+    let mut parts: Vec<Vec<(ParagraphId, &str)>> = Vec::new();
+    let mut size = 0;
+    for &(id, text) in &paragraphs {
+        let len = text.trim().len() + 10;
+        match parts.last_mut() {
+            Some(part) if size + len <= budget => part.push((id, text)),
+            _ => {
+                parts.push(vec![(id, text)]);
+                size = 0;
             }
+        }
+        size += len;
+    }
+    if parts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !llm.is_ready() {
+        on_progress(Proofreading::Starting);
+        llm.warm_up(cancel)?;
+    }
+    on_progress(Proofreading::Working {
+        paragraphs: paragraphs.len(),
+        parts: parts.len(),
+    });
+
+    // Workers take the next part until none are left; the results come
+    // back here, in whatever order they finish.
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let mut out = Vec::new();
+    let mut error = None;
+    std::thread::scope(|s| {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..PROOFREAD_AT_ONCE.min(parts.len()) {
+            let tx = tx.clone();
+            let (next, failed, parts, sys) = (&next, &failed, &parts, &sys);
+            s.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= parts.len() || failed.load(Ordering::Relaxed) || cancel.is_cancelled() {
+                        break;
+                    }
+                    let result = proofread_part(llm, sys, &parts[i], cancel);
+                    failed.fetch_or(result.is_err(), Ordering::Relaxed);
+                    if tx.send((i, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for (i, result) in rx {
+            match result {
+                Ok(changed) => {
+                    out.extend(changed.iter().cloned());
+                    on_progress(Proofreading::Part {
+                        covered: parts[i].iter().map(|(id, _)| *id).collect(),
+                        changed,
+                    });
+                }
+                Err(e) => {
+                    error.get_or_insert(e);
+                }
+            }
+        }
+    });
+    if let Some(e) = error {
+        return Err(e);
+    }
+    if cancel.is_cancelled() {
+        return Err(AiError::Cancelled);
+    }
+    let order: BTreeMap<ParagraphId, usize> = paragraphs
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i))
+        .collect();
+    out.sort_by_key(|c| order.get(&c.paragraph_id).copied());
+    Ok(out)
+}
+
+/// Proofreads one part; returns the paragraphs that changed.
+fn proofread_part(
+    llm: &dyn LlmProvider,
+    sys: &str,
+    part: &[(ParagraphId, &str)],
+    cancel: &Cancel,
+) -> Result<Vec<Cleaned>, AiError> {
+    let prompt: String = part
+        .iter()
+        .map(|(id, text)| format!("[p{id}] {}\n", text.trim()))
+        .collect();
+    let req = StructuredRequest {
+        system: sys.to_string(),
+        prompt,
+        schema_name: "cleanup".into(),
+        schema: cleanup_schema(),
+        max_tokens: MAX_TOKENS,
+    };
+    let v = llm.structured(&req, cancel)?;
+    let originals: BTreeMap<ParagraphId, &str> = part.iter().copied().collect();
+    let mut out = Vec::new();
+    for item in v["paragraphs"].as_array().into_iter().flatten() {
+        let (Some(id), Some(text)) = (item["id"].as_i64(), item["text"].as_str()) else {
+            continue;
+        };
+        let Some(original) = originals.get(&id) else {
+            tracing::warn!(id, "clean-up returned an unknown paragraph id");
+            continue;
+        };
+        let text = text.trim();
+        if !text.is_empty() && text != original.trim() {
+            out.push(Cleaned {
+                paragraph_id: id,
+                original: original.to_string(),
+                cleaned: text.to_string(),
+            });
         }
     }
     Ok(out)

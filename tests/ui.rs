@@ -1366,7 +1366,17 @@ fn ai_checks(root: &std::path::Path) {
     // Clean-up: review, accept, undo.
     w.dictation.ai_cleanup();
     check("clean-up opens its review screen", w.visible_page() == "cleanup");
+    check(
+        "the paragraphs show at once, with progress, while the AI works",
+        w.dictation.cleanup.is_running()
+            && w.dictation.cleanup.unchanged_count() == 0
+            && !w.dictation.cleanup.progress_text().is_empty(),
+    );
     let proposed = pump_until(Duration::from_secs(5), || w.dictation.cleanup.states().len() == 1);
+    check(
+        "the progress goes once the AI is done",
+        pump_until(Duration::from_secs(5), || !w.dictation.cleanup.is_running()),
+    );
     check("clean-up proposes the changed paragraph only", proposed);
     check(
         "the paragraph left alone is listed as unchanged",

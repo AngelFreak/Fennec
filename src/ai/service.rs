@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::actions::{self, Answer, Citation, Cleaned, DocText};
+use super::actions::{self, Answer, Citation, Cleaned, DocText, Proofreading};
 use super::{AiError, AiJob, AiSettings, Cancel, LlmProvider, Locality, SecretStore, connect, privacy};
 use crate::store::{ActionItem, DocumentFilter, DocumentId, NewSummary, ProjectFilter, Store};
 use crate::template::Template;
@@ -234,8 +234,19 @@ impl AiService {
 
     /// Proposed proofreading changes; the caller decides what to apply.
     pub fn cleanup(&self, store: &Store, doc: DocumentId, cancel: &Cancel) -> Result<Vec<Cleaned>, AiError> {
+        self.cleanup_with_progress(store, doc, cancel, &mut |_| {})
+    }
+
+    /// As `cleanup`, reporting each part as it comes back.
+    pub fn cleanup_with_progress(
+        &self,
+        store: &Store,
+        doc: DocumentId,
+        cancel: &Cancel,
+        on_progress: &mut dyn FnMut(Proofreading),
+    ) -> Result<Vec<Cleaned>, AiError> {
         let (llm, docs) = self.prepare(store, &Scope::Document(doc), AiJob::Cleanup, cancel)?;
-        actions::cleanup(llm.as_ref(), &docs[0], cancel)
+        actions::cleanup(llm.as_ref(), &docs[0], cancel, on_progress)
     }
 
     /// Finds action items and replaces the document's stored list.
