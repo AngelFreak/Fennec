@@ -1631,6 +1631,10 @@ impl DictationPage {
                 if let Err(e) = self.open_document(id) {
                     tracing::warn!("opening the meeting note: {e}");
                 }
+                // The header names the open document.
+                if let Some(f) = self.on_document_changed.borrow().clone() {
+                    f(());
+                }
             }
             NoteJob::Idle | NoteJob::Failed => self.note_bar.set_reveal_child(false),
         }

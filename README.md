@@ -50,8 +50,10 @@ disk.
 - 🗂️ **Projects and tags**: group documents, search across them and export
   them together.
 - 🤖 **Optional AI** (off by default): meeting notes (summary, decisions,
-  tasks with owners and dates, open questions), summaries, proofreading shown
-  as a diff, action items and questions answered from a project with sources.
+  tasks with owners and dates, open questions), a rewrite of a dictation as a
+  professional meeting note, summaries, proofreading shown as a diff that
+  fills in part by part, action items and questions answered from a project
+  with sources.
   Works with a built-in model that runs on this computer (Gemma 4, one-click
   download), Claude, ChatGPT, or your own server (Ollama, llama.cpp,
   LM Studio, vLLM).
@@ -61,7 +63,8 @@ disk.
   and is transcribed like any file. See [`android/`](android/README.md).
 
 The interface is in English; transcripts are in Danish or English, and AI
-answers in the transcript's language unless you pick one.
+answers in the transcript's language unless you pick one. On a small screen
+the sidebar and side panels fold away behind buttons in the header.
 
 ## Screenshots
 
@@ -89,6 +92,14 @@ answers in the transcript's language unless you pick one.
   <tr>
     <td align="center"><sub>Ask a project, with sources</sub></td>
     <td align="center"><sub>Report templates with a live preview</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/meeting-note.png" alt="A dictation rewritten as a professional meeting note, in a new document next to it"></td>
+    <td><img src="docs/screenshots/receive-from-phone.png" alt="Receive from phone: a phone sending two recordings after scanning Fennec's code"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Rewrite a dictation as a meeting note</sub></td>
+    <td align="center"><sub>Send recordings from your phone with a QR code</sub></td>
   </tr>
 </table>
 
@@ -331,7 +342,9 @@ The design, with its reasoning and measurements, is in
 - Fennec Recorder is tested in the Android emulator, whose microphone gives
   silence; recording real speech has not been tried on a real phone yet.
   Camera scanning is tested by reading a screenshot of Fennec's code with the
-  app's scanner, not through a camera.
+  app's scanner, not through a camera, and sending by QR code has been run
+  end to end with the emulator, not yet between a real phone and computer
+  over Wi-Fi.
 
 - The AI actions are tested against mock servers that speak each API, but not
   yet with a real Claude or ChatGPT key. The built-in models were tried with

@@ -171,7 +171,7 @@ jobs:
 
           The speech model runs on the GPU through Vulkan (AMD, Intel and NVIDIA) when there is one, and on the CPU otherwise. Settings → Speech model → Compute shows which, and can force the CPU.
 
-          Fennec Recorder (`fennec-recorder-*.apk`, Android 10 or newer) records on your phone and sends the audio to Fennec over your own network. Install the APK, then in Fennec choose Settings → Phone → Pair a phone and scan the code.
+          Fennec Recorder (`fennec-recorder-*.apk`, Android 10 or newer) records on your phone and sends the audio to Fennec over your own network. Install the APK; to send, choose Receive from phone in Fennec and scan the code with Send to Fennec in the app.
           EOF
           )
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
