@@ -644,7 +644,7 @@ impl MainWindow {
         match page {
             "dictate" => Some(&self.dictation.side_panel),
             "files" => Some(&self.files.side_panel),
-            "project" => Some(&self.project.side_panel),
+            "project" if self.project.has_panel() => Some(&self.project.side_panel),
             "templates" => Some(&self.templates.side_panel),
             "settings" if self.settings.has_panel() => Some(&self.settings.side_panel),
             _ => None,
@@ -681,6 +681,9 @@ impl MainWindow {
         }
         if !self.settings.has_panel() {
             self.settings.side_panel.set_show_sidebar(false);
+        }
+        if !self.project.has_panel() {
+            self.project.side_panel.set_show_sidebar(false);
         }
         self.update_header();
     }

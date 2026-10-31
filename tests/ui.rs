@@ -644,6 +644,24 @@ fn main() {
             harbour,
         )));
     check("a project opens the Project view", w.visible_page() == "project");
+    check(
+        "a project has its settings panel beside the list",
+        w.project.has_panel() && w.project.side_panel.shows_sidebar(),
+    );
+    w.sidebar
+        .go(fennec::ui::Nav::Project(fennec::store::ProjectFilter::All));
+    check(
+        "All documents has no panel, and no empty column for one",
+        !w.project.has_panel() && !w.project.side_panel.shows_sidebar(),
+    );
+    w.sidebar
+        .go(fennec::ui::Nav::Project(fennec::store::ProjectFilter::Project(
+            harbour,
+        )));
+    check(
+        "the panel comes back for a project",
+        w.project.side_panel.shows_sidebar(),
+    );
     let title = store.document(doc).unwrap().title;
     check(
         "the project lists its documents",

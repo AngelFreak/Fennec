@@ -115,7 +115,9 @@ pub struct ProjectPage {
     toast_label: gtk::Label,
     toast_undo: gtk::Button,
     editor: RefCell<Option<EditorState>>,
-    side: gtk::ScrolledWindow,
+    /// Whether the scope shown has a panel: a project's settings, or a
+    /// tag's export. All documents and Unsorted have none.
+    has_panel: Cell<bool>,
     project_fields: gtk::Box,
     name: gtk::Entry,
     swatches: Vec<(&'static str, gtk::Button)>,
@@ -508,7 +510,7 @@ impl ProjectPage {
             toast_label,
             toast_undo: undo.clone(),
             editor: RefCell::default(),
-            side,
+            has_panel: Cell::new(false),
             project_fields,
             name,
             swatches,
@@ -935,6 +937,11 @@ impl ProjectPage {
         self.new_dictation.emit_clicked();
     }
 
+    /// Whether the scope shown has a panel beside the list.
+    pub fn has_panel(&self) -> bool {
+        self.has_panel.get()
+    }
+
     fn project_id(&self) -> Option<i64> {
         match &*self.scope.borrow() {
             Scope::Project(ProjectFilter::Project(id)) => Some(*id),
@@ -967,8 +974,11 @@ impl ProjectPage {
         self.color_square.set_visible(self.color.borrow().is_some());
         self.color_square.queue_draw();
         self.mark_swatch(project.as_ref().map(|p| p.color.as_str()));
-        self.side
-            .set_visible(project.is_some() || matches!(scope, Scope::Tag(_)));
+        // Hiding the panel's content would leave its column standing empty.
+        let has_panel = project.is_some() || matches!(scope, Scope::Tag(_));
+        self.has_panel.set(has_panel);
+        self.side_panel
+            .set_show_sidebar(has_panel && !self.side_panel.is_collapsed());
         self.project_fields.set_visible(project.is_some());
         let templates: Vec<_> = load_dir(&self.templates_dir)
             .into_iter()
