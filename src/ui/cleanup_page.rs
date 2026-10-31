@@ -18,7 +18,7 @@ use crate::ai::actions::{Cleaned, Proofreading};
 use crate::ai::diff::{Change, word_diff};
 use crate::ai::{AiError, Cancel, Locality};
 use crate::config::Settings;
-use crate::store::{DocumentFilter, Paragraph, ParagraphId, Store};
+use crate::store::{Paragraph, ParagraphId, Store};
 use crate::text::clock;
 
 /// Replaces paragraph text (`from` → `to`); false if the text has changed.
@@ -526,13 +526,10 @@ impl CleanupPage {
         let Some(paragraph) = paragraph else {
             return Vec::new();
         };
-        self.store
-            .documents(&DocumentFilter::default())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|d| self.store.paragraphs(d.id).unwrap_or_default())
-            .find(|ps| ps.iter().any(|p| p.id == Some(paragraph)))
-            .unwrap_or_default()
+        match self.store.paragraph_document(paragraph) {
+            Ok(Some(doc)) => self.store.paragraphs(doc).unwrap_or_default(),
+            _ => Vec::new(),
+        }
     }
 
     fn card(self: &Rc<Self>, item: Cleaned, place: &str) -> (Rc<Row>, gtk::Box) {

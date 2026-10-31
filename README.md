@@ -246,8 +246,9 @@ model is told never to guess a speaker and is given a calendar of the coming
 weeks. **Proofread** fixes spelling, grammar, Danish commas, capitals and
 misheard words and removes filler words, changing as little as possible.
 **Rewrite as meeting note** writes the dictation again in full sentences and a
-professional tone, as its own document; the dictation's Meeting note tab shows
-it as you edit it, with Open and Rewrite again.
+professional tone. A dictation has one meeting note, kept in its Meeting note
+tab rather than listed beside it; Open edits it as a document, and Rewrite again
+replaces it.
 English transcripts get English instructions and answers.
 
 `vLLM` is in **Add provider** for a server you run yourself (port 8000); it

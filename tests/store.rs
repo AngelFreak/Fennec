@@ -406,3 +406,76 @@ fn a_dictation_finds_its_newest_meeting_note_until_it_is_deleted() {
     assert!(s.document(first).is_ok());
     assert_eq!(s.meeting_note_of(first).unwrap(), None);
 }
+
+#[test]
+fn a_meeting_note_is_listed_and_counted_only_under_its_dictation() {
+    let (_dir, s) = store();
+    let project = s.create_project("MSAB", "#2563eb").unwrap();
+    let dictation = s
+        .create_document(&NewDocument {
+            project_id: Some(project),
+            ..NewDocument::dictation("Møde")
+        })
+        .unwrap();
+    s.replace_paragraphs(dictation, &[Paragraph::new("øh vi aftalte tilbuddet")])
+        .unwrap();
+    s.set_tags(dictation, &["msab".into()]).unwrap();
+    let note = s
+        .create_document(&NewDocument {
+            project_id: Some(project),
+            ..NewDocument::dictation("Mødenotat – Møde")
+        })
+        .unwrap();
+    s.replace_paragraphs(note, &[Paragraph::new("Parterne aftalte et tilbud.")])
+        .unwrap();
+    s.set_tags(note, &["msab".into()]).unwrap();
+    s.set_rewritten_from(note, dictation).unwrap();
+
+    let ids = |f: DocumentFilter| s.documents(&f).unwrap().into_iter().map(|d| d.id).collect::<Vec<_>>();
+    assert_eq!(ids(DocumentFilter::default()), [dictation]);
+    assert_eq!(s.projects().unwrap()[0].document_count, 1);
+    let tags: BTreeMap<String, usize> = s.tags().unwrap().into_iter().collect();
+    assert_eq!(tags["msab"], 1);
+    // Searching the note's words finds the dictation it belongs to.
+    let search = |t: &str| {
+        ids(DocumentFilter {
+            text: Some(t.into()),
+            ..Default::default()
+        })
+    };
+    assert_eq!(search("Parterne"), [dictation]);
+    assert_eq!(search("Mødenotat"), Vec::<i64>::new());
+    // Without its dictation the note is a document of its own again.
+    s.delete_document(dictation).unwrap();
+    assert_eq!(ids(DocumentFilter::default()), [note]);
+}
+
+#[test]
+fn upgrading_keeps_the_newest_meeting_note_and_lists_older_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fennec.db");
+    let (dictation, older, newest) = {
+        let s = Store::open(&path).unwrap();
+        let dictation = s.create_document(&NewDocument::dictation("Møde")).unwrap();
+        let older = s.create_document(&NewDocument::dictation("Mødenotat – Møde")).unwrap();
+        let newest = s.create_document(&NewDocument::dictation("Mødenotat – Møde")).unwrap();
+        s.set_rewritten_from(older, dictation).unwrap();
+        s.set_rewritten_from(newest, dictation).unwrap();
+        (dictation, older, newest)
+    };
+    // As left by 0.5.1, before a dictation had one meeting note.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 7")
+        .unwrap();
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.meeting_note_of(dictation).unwrap(), Some(newest));
+    assert_eq!(s.rewritten_from(older).unwrap(), None);
+    let listed: Vec<_> = s
+        .documents(&DocumentFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert_eq!(listed, [older, dictation]);
+}
