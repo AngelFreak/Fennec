@@ -1,6 +1,6 @@
 //! Views of AI results, laid out as in the design: a summary (streamed,
-//! editable, saved) and a table of action items. Used by the Dictate
-//! screen's tabs and the Project view.
+//! editable, saved), a dictation's meeting note and a table of action
+//! items. Used by the Dictate screen's tabs and the Project view.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -450,6 +450,182 @@ pub(crate) fn prompt_name(id: &str) -> Option<&'static str> {
         "summary" => Some("Kort resumé"),
         "meeting-notes" => Some("Mødereferat"),
         _ => None,
+    }
+}
+
+/// The meeting note rewritten from a dictation, shown under it: empty (with
+/// a button to write one), being written, or the note as it now reads. The
+/// note is its own document; this only shows it.
+pub struct NotePanel {
+    pub root: gtk::Box,
+    empty: gtk::Box,
+    /// "Rewrite as meeting note" (empty state) and "Rewrite again".
+    pub rewrite: gtk::Button,
+    again: gtk::Button,
+    working: gtk::Box,
+    progress: gtk::Label,
+    pub stop: gtk::Button,
+    content: gtk::Box,
+    meta: gtk::Label,
+    /// Read-only; one view for the whole note, so it selects as one text.
+    pub text: gtk::TextView,
+    pub open: gtk::Button,
+    pub status: gtk::Label,
+}
+
+impl NotePanel {
+    pub fn new() -> Rc<Self> {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
+
+        let empty = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        empty.set_halign(gtk::Align::Start);
+        let empty_text = label(
+            "No meeting note yet. The AI rewrites the dictation in full sentences and a \
+             professional tone, as its own document you can edit and export.",
+            &["fx-body"],
+        );
+        empty_text.set_wrap(true);
+        let rewrite = gtk::Button::with_label("Rewrite as meeting note");
+        rewrite.add_css_class("fx-secondary");
+        rewrite.set_halign(gtk::Align::Start);
+        empty.append(&empty_text);
+        empty.append(&rewrite);
+
+        let working = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        working.add_css_class("fx-learn");
+        let progress = label("", &["fx-learn-text"]);
+        progress.set_wrap(true);
+        progress.set_hexpand(true);
+        let stop = gtk::Button::with_label("Stop");
+        stop.add_css_class("fx-secondary");
+        stop.set_valign(gtk::Align::Center);
+        working.append(&progress);
+        working.append(&stop);
+
+        let badge_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let badge = label("AI-GENERATED", &["fx-badge", "ai"]);
+        badge.set_valign(gtk::Align::Center);
+        let meta = label("", &["fx-stats"]);
+        meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        badge_row.append(&badge);
+        badge_row.append(&meta);
+        let text = gtk::TextView::builder()
+            .wrap_mode(gtk::WrapMode::WordChar)
+            .editable(false)
+            .cursor_visible(false)
+            .css_classes(["fx-summary-text"])
+            .pixels_below_lines(12)
+            // The summary's line height (1.2).
+            .pixels_inside_wrap(4)
+            .build();
+        text.update_property(&[gtk::accessible::Property::Label("Meeting note")]);
+        let boxed = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        boxed.add_css_class("fx-ai-box");
+        boxed.append(&text);
+        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let hint = label("Edit it in its own document.", &["fx-stats"]);
+        hint.set_hexpand(true);
+        let again = gtk::Button::with_label("Rewrite again");
+        again.add_css_class("fx-secondary");
+        let open = gtk::Button::with_label("Open as document");
+        open.add_css_class("fx-secondary");
+        controls.append(&hint);
+        controls.append(&again);
+        controls.append(&open);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        content.append(&badge_row);
+        content.append(&boxed);
+        content.append(&controls);
+
+        let status = label("", &["fx-field-note"]);
+        status.set_wrap(true);
+
+        root.append(&working);
+        root.append(&empty);
+        root.append(&content);
+        root.append(&status);
+        let panel = Rc::new(Self {
+            root,
+            empty,
+            rewrite,
+            again,
+            working,
+            progress,
+            stop,
+            content,
+            meta,
+            text,
+            open,
+            status,
+        });
+        let run = panel.rewrite.clone();
+        panel.again.connect_clicked(move |_| run.emit_clicked());
+        panel.show(None);
+        panel
+    }
+
+    /// Shows the note, `(title, paragraphs, updated_at)`, or the empty state.
+    pub fn show(&self, note: Option<(&str, &[String], i64)>) {
+        self.working.set_visible(false);
+        self.status.set_text("");
+        match note {
+            Some((title, paragraphs, updated)) => {
+                self.meta
+                    .set_text(&format!("“{title}” · own document · {}", when(updated)));
+                self.text.buffer().set_text(&paragraphs.join("\n"));
+                self.content.set_visible(true);
+                self.empty.set_visible(false);
+            }
+            None => {
+                self.text.buffer().set_text("");
+                self.content.set_visible(false);
+                self.empty.set_visible(true);
+            }
+        }
+    }
+
+    /// While the AI writes: what it is doing, with Stop. A note already
+    /// shown stays under it until the new one is ready.
+    pub fn working(&self, text: &str) {
+        self.progress.set_text(text);
+        self.working.set_visible(true);
+        self.empty.set_visible(false);
+        self.rewrite.set_sensitive(false);
+        self.again.set_sensitive(false);
+    }
+
+    /// The job ended: back to what `show` last set, with an error if any.
+    pub fn stopped(&self, error: Option<&str>) {
+        self.working.set_visible(false);
+        self.empty.set_visible(!self.content.is_visible());
+        self.rewrite.set_sensitive(true);
+        self.again.set_sensitive(true);
+        self.stop.set_sensitive(true);
+        self.status.set_text(error.unwrap_or(""));
+    }
+
+    pub fn is_working(&self) -> bool {
+        self.working.is_visible()
+    }
+
+    /// The empty state, with its button to write a note, shows (tests).
+    pub fn offers_rewrite(&self) -> bool {
+        self.empty.is_visible()
+    }
+
+    /// The progress line while working (tests).
+    pub fn progress_text(&self) -> String {
+        self.progress.text().to_string()
+    }
+
+    /// The note as shown, or "" (tests).
+    pub fn note_text(&self) -> String {
+        let b = self.text.buffer();
+        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
+    }
+
+    pub fn meta_text(&self) -> String {
+        self.meta.text().to_string()
     }
 }
 

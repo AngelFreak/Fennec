@@ -274,6 +274,7 @@ impl AiService {
         let paragraphs: Vec<Paragraph> = text.iter().map(|t| Paragraph::new(t)).collect();
         store.replace_paragraphs(id, &paragraphs)?;
         store.set_tags(id, &source.tags)?;
+        store.set_rewritten_from(id, doc)?;
         Ok(id)
     }
 

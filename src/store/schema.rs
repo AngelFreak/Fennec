@@ -160,6 +160,11 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX inbound_document ON inbound_recordings(document_id);
     DROP TABLE devices;
     "#,
+    // 7: the dictation a meeting note was rewritten from
+    r#"
+    ALTER TABLE documents ADD COLUMN rewritten_from INTEGER REFERENCES documents(id) ON DELETE SET NULL;
+    CREATE INDEX documents_rewritten_from ON documents(rewritten_from);
+    "#,
 ];
 
 /// Brings the schema up to date. Threads may open a new database at the

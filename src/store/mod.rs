@@ -471,6 +471,40 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Marks `note` as the meeting note rewritten from `source`.
+    pub fn set_rewritten_from(&self, note: DocumentId, source: DocumentId) -> Result<()> {
+        self.conn.execute(
+            "UPDATE documents SET rewritten_from = ?2 WHERE id = ?1",
+            params![note, source],
+        )?;
+        Ok(())
+    }
+
+    /// The dictation `note` was rewritten from, if it is a meeting note.
+    pub fn rewritten_from(&self, note: DocumentId) -> Result<Option<DocumentId>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT rewritten_from FROM documents WHERE id = ?1",
+                [note],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// The newest meeting note rewritten from `source`, if one is left.
+    pub fn meeting_note_of(&self, source: DocumentId) -> Result<Option<DocumentId>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM documents WHERE rewritten_from = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+                [source],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn delete_document(&self, id: DocumentId) -> Result<()> {
         self.conn.execute("DELETE FROM documents WHERE id = ?1", [id])?;
         Ok(())
