@@ -51,9 +51,9 @@ disk.
   them together.
 - 🤖 **Optional AI** (off by default): meeting notes (summary, decisions,
   tasks with owners and dates, open questions), a rewrite of a dictation as a
-  professional meeting note, summaries, proofreading shown as a diff that
-  fills in part by part, action items and questions answered from a project
-  with sources.
+  professional meeting note (its own document, shown under the dictation),
+  summaries, proofreading shown as a diff that fills in part by part, action
+  items and questions answered from a project with sources.
   Works with a built-in model that runs on this computer (Gemma 4, one-click
   download), Claude, ChatGPT, or your own server (Ollama, llama.cpp,
   LM Studio, vLLM).
@@ -94,7 +94,7 @@ the sidebar and side panels fold away behind buttons in the header.
     <td align="center"><sub>Report templates with a live preview</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/meeting-note.png" alt="A dictation rewritten as a professional meeting note, in a new document next to it"></td>
+    <td><img src="docs/screenshots/meeting-note.png" alt="A dictation rewritten as a professional meeting note, shown in the Meeting note tab under it"></td>
     <td><img src="docs/screenshots/receive-from-phone.png" alt="Receive from phone: a phone sending two recordings after scanning Fennec's code"></td>
   </tr>
   <tr>
@@ -245,6 +245,9 @@ who said what, filed tasks as decisions and counted weekdays wrong, so the
 model is told never to guess a speaker and is given a calendar of the coming
 weeks. **Proofread** fixes spelling, grammar, Danish commas, capitals and
 misheard words and removes filler words, changing as little as possible.
+**Rewrite as meeting note** writes the dictation again in full sentences and a
+professional tone, as its own document; the dictation's Meeting note tab shows
+it as you edit it, with Open and Rewrite again.
 English transcripts get English instructions and answers.
 
 `vLLM` is in **Add provider** for a server you run yourself (port 8000); it

@@ -392,6 +392,7 @@ fn a_meeting_note_is_rewritten_in_parts_into_a_new_document_beside_the_dictation
     assert_eq!(note.template_id.as_deref(), Some("moedereferat"));
     assert_eq!(note.fields, fields);
     assert_eq!(note.tags, vec!["msab".to_string()]);
+    assert_eq!(store.meeting_note_of(doc).unwrap(), Some(id));
     let written: Vec<String> = store
         .paragraphs(id)
         .unwrap()

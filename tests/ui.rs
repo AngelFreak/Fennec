@@ -1439,33 +1439,66 @@ fn ai_checks(root: &std::path::Path) {
     w.dictation.cleanup.done.emit_clicked();
     check("Back returns to the document", w.visible_page() == "dictate");
 
-    // Rewrite as meeting note: a new document beside the dictation.
+    // Rewrite as meeting note: a new document, shown in a tab under the
+    // dictation.
+    check(
+        "the Meeting note tab offers to write one",
+        w.dictation.note.note_text().is_empty() && w.dictation.note.offers_rewrite(),
+    );
     w.dictation.ai_rewrite_note();
     check(
-        "the rewrite shows its progress over the text",
-        w.dictation
-            .note_status()
-            .is_some_and(|s| s.contains("rewriting the dictation")),
+        "the rewrite shows its progress in the Meeting note tab",
+        w.dictation.visible_view() == "note"
+            && w.dictation.note.is_working()
+            && w.dictation
+                .note
+                .progress_text()
+                .contains("rewriting the dictation"),
     );
-    let ready = pump_until(Duration::from_secs(5), || {
-        w.dictation.note_status().is_some_and(|s| s.contains("is ready"))
-    });
-    check("the meeting note is written", ready);
+    let ready = pump_until(Duration::from_secs(5), || !w.dictation.note.is_working());
+    check(
+        "the meeting note is written and shown under the dictation",
+        ready && w.dictation.note.note_text() == "Jens sender tilbuddet på fredag.",
+    );
+    check(
+        "its line names the note's own document",
+        w.dictation.note.meta_text().starts_with("“Mødenotat – "),
+    );
     check(
         "the dictation itself is unchanged",
         w.dictation.document() == Some(doc)
             && store.paragraphs(doc).unwrap()[0].text == "Jens sender øh tilbuddet på fredag.",
     );
-    w.dictation.press_note_button();
+    screenshot(&w.window, "meeting-note");
+    w.dictation.note.open.emit_clicked();
     let note = w.dictation.document().unwrap();
     check(
-        "Open shows the meeting note, in its own document",
+        "Open as document shows the meeting note, in its own document",
         note != doc
             && w.dictation.title.text().starts_with("Mødenotat – ")
             && store.paragraphs(note).unwrap()[0].text == "Jens sender tilbuddet på fredag."
-            && w.dictation.note_status().is_none(),
+            && w.dictation.visible_view() == "transcript",
     );
+    check(
+        "a meeting note has no Meeting note tab of its own",
+        !w.dictation.tab_visible("note"),
+    );
+    // Edits in the note's document show under the dictation.
     w.dictation.open_document(doc).unwrap();
+    store
+        .replace_paragraphs(note, &[Paragraph::new("Jens sender tilbuddet fredag.")])
+        .unwrap();
+    w.dictation.open_document(doc).unwrap();
+    check(
+        "back on the dictation, the tab shows the note as edited",
+        w.dictation.tab_visible("note") && w.dictation.note.note_text() == "Jens sender tilbuddet fredag.",
+    );
+    store.delete_document(note).unwrap();
+    w.dictation.open_document(doc).unwrap();
+    check(
+        "with the note deleted, the tab offers to write one again",
+        w.dictation.note.note_text().is_empty() && w.dictation.note.offers_rewrite(),
+    );
 
     // Action items.
     w.dictation.ai_action_items();

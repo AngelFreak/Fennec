@@ -384,3 +384,25 @@ fn corrections_are_counted_and_a_dismissed_one_stays_quiet() {
         "dismissed: never offered again"
     );
 }
+
+#[test]
+fn a_dictation_finds_its_newest_meeting_note_until_it_is_deleted() {
+    let (_dir, s) = store();
+    let dictation = s.create_document(&NewDocument::dictation("Møde")).unwrap();
+    assert_eq!(s.meeting_note_of(dictation).unwrap(), None);
+    let first = s
+        .create_document(&NewDocument::dictation("Mødenotat – Møde"))
+        .unwrap();
+    s.set_rewritten_from(first, dictation).unwrap();
+    let second = s
+        .create_document(&NewDocument::dictation("Mødenotat – Møde"))
+        .unwrap();
+    s.set_rewritten_from(second, dictation).unwrap();
+    assert_eq!(s.meeting_note_of(dictation).unwrap(), Some(second));
+    s.delete_document(second).unwrap();
+    assert_eq!(s.meeting_note_of(dictation).unwrap(), Some(first));
+    // Deleting the dictation leaves the note, no longer linked.
+    s.delete_document(dictation).unwrap();
+    assert!(s.document(first).is_ok());
+    assert_eq!(s.meeting_note_of(first).unwrap(), None);
+}
