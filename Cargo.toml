@@ -1,6 +1,6 @@
 [package]
 name = "fennec"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 description = "Local Danish dictation and transcription"
 license = "MIT"
