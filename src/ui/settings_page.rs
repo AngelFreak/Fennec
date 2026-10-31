@@ -116,6 +116,8 @@ impl SettingsPage {
     pub fn new(deps: Deps, engine: Rc<EngineHolder>, link: Rc<PhoneLink>) -> Rc<Self> {
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
+        // Measured only when shown (see the Dictate screen's views).
+        stack.set_vhomogeneous(false);
         let inspector = gtk::Stack::new();
         inspector.set_vhomogeneous(false);
         let inspector_scroll = gtk::ScrolledWindow::builder()

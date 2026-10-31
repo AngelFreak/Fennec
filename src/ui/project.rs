@@ -346,6 +346,8 @@ impl ProjectPage {
         ask.append(&local_note);
 
         let tabs = gtk::Stack::new();
+        // Measured only when shown (see the Dictate screen's views).
+        tabs.set_hhomogeneous(false);
         tabs.set_vhomogeneous(false);
         tabs.add_named(&documents, Some("documents"));
         tabs.add_named(&actions_view, Some("actions"));
