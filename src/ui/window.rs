@@ -208,8 +208,10 @@ impl MainWindow {
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
-        // Each screen needs only its own width.
+        // Each screen needs only its own width, and is measured only when
+        // shown (see the Dictate screen's views).
         stack.set_hhomogeneous(false);
+        stack.set_vhomogeneous(false);
         stack.add_named(&dictation.root, Some("dictate"));
         stack.add_named(&files.root, Some("files"));
         stack.add_named(&project.root, Some("project"));
@@ -228,6 +230,7 @@ impl MainWindow {
         let outer = gtk::Stack::new();
         outer.set_vexpand(true);
         outer.set_hhomogeneous(false);
+        outer.set_vhomogeneous(false);
         outer.add_named(&body, Some("main"));
         outer.add_named(&export.root, Some("export"));
         outer.add_named(&dictation.cleanup.root, Some("cleanup"));

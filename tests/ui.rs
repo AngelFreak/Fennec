@@ -1390,6 +1390,12 @@ fn ai_checks(root: &std::path::Path) {
             && store.summaries_for_document(doc).unwrap()[0].text == w.dictation.summary.summary_text(),
     );
     screenshot(&w.window, "summary");
+    // GTK 4.14 keeps sizes measured in a hidden view, which then shows with
+    // its old height (newer GTK does not); views are measured only shown.
+    check(
+        "the document views are measured only when shown",
+        !w.dictation.views.is_hhomogeneous() && !w.dictation.views.is_vhomogeneous(),
+    );
 
     // Clean-up: review, accept, undo.
     w.dictation.ai_cleanup();

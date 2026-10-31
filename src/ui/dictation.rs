@@ -241,6 +241,12 @@ impl DictationPage {
 
         let views = gtk::Stack::new();
         views.set_vexpand(true);
+        // Measures only the shown view. GTK 4.14 keeps sizes it measured in
+        // a hidden view, and the view then shows with the height of what it
+        // held before: text ran out of the summary and the table rows were
+        // cut short.
+        views.set_hhomogeneous(false);
+        views.set_vhomogeneous(false);
         views.add_named(&scroller, Some("transcript"));
         views.add_named(&ai_view(&summary.root), Some("summary"));
         let actions_view = gtk::Box::new(gtk::Orientation::Vertical, 14);

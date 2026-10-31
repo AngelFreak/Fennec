@@ -202,6 +202,8 @@ impl ExportPage {
             .child(&text_scroll)
             .build();
         let preview_stack = gtk::Stack::new();
+        // Measured only when shown (see the Dictate screen's views).
+        preview_stack.set_vhomogeneous(false);
         preview_stack.add_named(&page_frame, Some("page"));
         preview_stack.add_named(&text_page, Some("text"));
         preview_stack.set_vexpand(true);
