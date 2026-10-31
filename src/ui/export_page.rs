@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use super::{Deps, label};
+use super::{Deps, Handler, label};
 use crate::export::{
     ExportError, ExportOptions, Format, Report, file_stem, page_count, preview_first_page, render_txt, write,
 };
@@ -28,6 +28,12 @@ pub struct ExportPage {
     store: Rc<Store>,
     deps: Deps,
     target: RefCell<Option<Target>>,
+    /// A dictation with a meeting note exports either: the dictation, then
+    /// its note.
+    document: gtk::DropDown,
+    document_group: gtk::Box,
+    choices: RefCell<Vec<DocumentId>>,
+    on_target_changed: Handler<()>,
     format: Cell<Format>,
     format_buttons: Vec<(Format, gtk::ToggleButton)>,
     template: gtk::DropDown,
@@ -77,6 +83,12 @@ impl ExportPage {
         settings.set_size_request(380, -1);
         settings.set_hexpand(false);
         settings.update_property(&[gtk::accessible::Property::Label("Export settings")]);
+
+        let document = gtk::DropDown::from_strings(&["Dictation", "Meeting note"]);
+        document.update_property(&[gtk::accessible::Property::Label("Document")]);
+        let document_group = field("Document", &document);
+        document_group.set_visible(false);
+        settings.append(&document_group);
 
         let formats = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         formats.add_css_class("fx-segmented");
@@ -227,6 +239,10 @@ impl ExportPage {
             store,
             deps,
             target: RefCell::default(),
+            document,
+            document_group,
+            choices: RefCell::default(),
+            on_target_changed: RefCell::default(),
             format: Cell::new(Format::Docx),
             format_buttons,
             template,
@@ -279,6 +295,20 @@ impl ExportPage {
                 }
             });
         }
+        let weak = Rc::downgrade(self);
+        self.document.connect_selected_notify(move |d| {
+            let Some(p) = weak.upgrade() else { return };
+            if p.building.get() {
+                return;
+            }
+            let Some(id) = p.choices.borrow().get(d.selected() as usize).copied() else {
+                return;
+            };
+            p.load(Target::Document(id));
+            if let Some(f) = p.on_target_changed.borrow().clone() {
+                f(());
+            }
+        });
         let weak = Rc::downgrade(self);
         self.template.connect_selected_notify(move |_| {
             if let Some(p) = weak.upgrade()
@@ -338,9 +368,46 @@ impl ExportPage {
         }
     }
 
-    /// Prepares the screen for `target`, defaulting to its template.
+    /// Another document was chosen to export (the header names it).
+    pub fn connect_target_changed(&self, f: impl Fn(()) + 'static) {
+        *self.on_target_changed.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Chooses "Dictation" or "Meeting note" where the document has both.
+    pub fn choose_document(&self, i: u32) {
+        self.document.set_selected(i);
+    }
+
+    /// The choices offered, if any, and the one chosen.
+    pub fn document_choice(&self) -> Option<String> {
+        if !self.document_group.is_visible() {
+            return None;
+        }
+        let item = self.document.selected_item().and_downcast::<gtk::StringObject>()?;
+        Some(item.string().to_string())
+    }
+
+    /// Prepares the screen for `target`, defaulting to its template. A
+    /// dictation or meeting note offers to export the other one instead.
     pub fn show(&self, target: Target) {
         self.building.set(true);
+        let choices = match &target {
+            Target::Document(id) => {
+                let dictation = self.store.rewritten_from(*id).ok().flatten().unwrap_or(*id);
+                match self.store.meeting_note_of(dictation).ok().flatten() {
+                    Some(note) => vec![dictation, note],
+                    None => Vec::new(),
+                }
+            }
+            Target::Documents { .. } => Vec::new(),
+        };
+        if let Target::Document(id) = &target
+            && let Some(i) = choices.iter().position(|c| c == id)
+        {
+            self.document.set_selected(i as u32);
+        }
+        self.document_group.set_visible(!choices.is_empty());
+        *self.choices.borrow_mut() = choices;
         let dir = self.deps.paths.templates();
         let _ = install_defaults(&dir);
         let mut templates: Vec<Template> = load_dir(&dir).into_iter().filter_map(Result::ok).collect();
@@ -355,6 +422,13 @@ impl ExportPage {
         self.template
             .set_selected(templates.iter().position(|t| t.id == preferred).unwrap_or(0) as u32);
         *self.templates.borrow_mut() = templates;
+        self.building.set(false);
+        self.load(target);
+    }
+
+    /// Shows `target` in the preview, keeping the format, template and
+    /// content options chosen.
+    fn load(&self, target: Target) {
         let (stem, many) = match &target {
             Target::Document(id) => {
                 let doc = self.store.document(*id).ok();
@@ -371,7 +445,6 @@ impl ExportPage {
         self.result.set_text("");
         self.open_result.set_visible(false);
         self.show_folder();
-        self.building.set(false);
         self.refresh();
     }
 

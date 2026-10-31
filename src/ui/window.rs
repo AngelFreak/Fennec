@@ -389,6 +389,12 @@ impl MainWindow {
             }
         });
         let weak = Rc::downgrade(self);
+        self.export.connect_target_changed(move |()| {
+            if let Some(w) = weak.upgrade() {
+                w.update_header();
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.project.connect_export(move |(title, ids)| {
             if let Some(w) = weak.upgrade() {
                 w.export.show(Target::Documents { title, ids });
@@ -606,10 +612,11 @@ impl MainWindow {
         }
     }
 
-    /// Opens the Export screen for the document in the editor.
+    /// Opens the Export screen for the document in the editor, or its
+    /// meeting note while that tab shows.
     pub fn export_current(&self) {
         self.dictation.save_now();
-        if let Some(doc) = self.dictation.document() {
+        if let Some(doc) = self.dictation.document_to_export() {
             self.export.show(Target::Document(doc));
             self.open_sub_page("export");
         }

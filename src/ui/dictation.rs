@@ -1397,6 +1397,18 @@ impl DictationPage {
         }
     }
 
+    /// What Export takes: the meeting note while its tab shows, else the
+    /// document open.
+    pub fn document_to_export(&self) -> Option<DocumentId> {
+        let doc = self.document()?;
+        if self.visible_view() == "note"
+            && let Some(note) = self.store.meeting_note_of(doc).ok().flatten()
+        {
+            return Some(note);
+        }
+        Some(doc)
+    }
+
     pub fn visible_view(&self) -> String {
         self.views
             .visible_child_name()

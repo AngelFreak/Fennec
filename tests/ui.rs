@@ -1504,6 +1504,28 @@ fn ai_checks(root: &std::path::Path) {
         "rewriting again replaces the meeting note, not adds one",
         ready && store.meeting_note_of(doc).unwrap() == first && listed() == 0,
     );
+    // Export takes what the tab shows, and offers the other.
+    w.dictation.show_view("note");
+    w.export_current();
+    check(
+        "Export from the Meeting note tab takes the meeting note",
+        w.export.document_choice().as_deref() == Some("Meeting note")
+            && w.export.header_subtitle().starts_with("Mødenotat – "),
+    );
+    screenshot(&w.window, "export-meeting-note");
+    w.export.choose_document(0);
+    check(
+        "choosing Dictation exports the dictation instead",
+        w.export.header_subtitle() == store.document(doc).unwrap().title,
+    );
+    w.close_sub_page();
+    w.dictation.show_view("transcript");
+    w.export_current();
+    check(
+        "Export from the transcript takes the dictation",
+        w.export.document_choice().as_deref() == Some("Dictation"),
+    );
+    w.close_sub_page();
     w.dictation.note.open.emit_clicked();
     let note = w.dictation.document().unwrap();
     check(
