@@ -1457,8 +1457,8 @@ fn ai_checks(root: &std::path::Path) {
     w.dictation.cleanup.done.emit_clicked();
     check("Back returns to the document", w.visible_page() == "dictate");
 
-    // Rewrite as meeting note: a new document, shown in a tab under the
-    // dictation.
+    // Rewrite as meeting note: a document of its own, shown in a tab under
+    // the dictation and not listed beside it.
     check(
         "the Meeting note tab offers to write one",
         w.dictation.note.note_text().is_empty() && w.dictation.note.offers_rewrite(),
@@ -1488,6 +1488,22 @@ fn ai_checks(root: &std::path::Path) {
             && store.paragraphs(doc).unwrap()[0].text == "Jens sender øh tilbuddet på fredag.",
     );
     screenshot(&w.window, "meeting-note");
+    let listed = || {
+        store
+            .documents(&Default::default())
+            .unwrap()
+            .into_iter()
+            .filter(|d| d.title.contains("Mødenotat"))
+            .count()
+    };
+    check("the meeting note is not listed beside the dictation", listed() == 0);
+    let first = store.meeting_note_of(doc).unwrap();
+    w.dictation.ai_rewrite_note();
+    let ready = pump_until(Duration::from_secs(5), || !w.dictation.note.is_working());
+    check(
+        "rewriting again replaces the meeting note, not adds one",
+        ready && store.meeting_note_of(doc).unwrap() == first && listed() == 0,
+    );
     w.dictation.note.open.emit_clicked();
     let note = w.dictation.document().unwrap();
     check(

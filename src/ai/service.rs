@@ -235,7 +235,8 @@ impl AiService {
     }
 
     /// Rewrites the dictation as a meeting note in a professional tone, in
-    /// a new document beside it with the same template, fields and tags.
+    /// a document of its own with the same template, fields and tags. A
+    /// dictation has one meeting note: rewriting again replaces its text.
     /// The dictation itself is left as it is.
     pub fn rewrite_note(
         &self,
@@ -264,17 +265,23 @@ impl AiService {
         } else {
             format!("Mødenotat – {}", source.title)
         };
-        let id = store.create_document(&NewDocument {
-            title: title.clone(),
-            project_id: source.project_id,
-            template_id: source.template_id.clone(),
-            source: Source::Dictation,
-        })?;
+        let id = match store.meeting_note_of(doc)? {
+            Some(id) => id,
+            None => {
+                let id = store.create_document(&NewDocument {
+                    title: title.clone(),
+                    project_id: source.project_id,
+                    template_id: source.template_id.clone(),
+                    source: Source::Dictation,
+                })?;
+                store.set_rewritten_from(id, doc)?;
+                id
+            }
+        };
         store.update_document(id, &title, source.template_id.as_deref(), &source.fields)?;
         let paragraphs: Vec<Paragraph> = text.iter().map(|t| Paragraph::new(t)).collect();
         store.replace_paragraphs(id, &paragraphs)?;
         store.set_tags(id, &source.tags)?;
-        store.set_rewritten_from(id, doc)?;
         Ok(id)
     }
 

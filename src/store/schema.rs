@@ -165,6 +165,14 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE documents ADD COLUMN rewritten_from INTEGER REFERENCES documents(id) ON DELETE SET NULL;
     CREATE INDEX documents_rewritten_from ON documents(rewritten_from);
     "#,
+    // 8: one meeting note per dictation, rewritten in place; earlier ones
+    // become documents of their own
+    r#"
+    UPDATE documents SET rewritten_from = NULL
+    WHERE rewritten_from IS NOT NULL
+      AND id <> (SELECT n.id FROM documents n WHERE n.rewritten_from = documents.rewritten_from
+                 ORDER BY n.created_at DESC, n.id DESC LIMIT 1);
+    "#,
 ];
 
 /// Brings the schema up to date. Threads may open a new database at the

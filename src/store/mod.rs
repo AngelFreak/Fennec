@@ -294,7 +294,7 @@ impl Store {
     pub fn projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.name, p.color, p.default_template, p.local_only,
-                    (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id)
+                    (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id AND d.rewritten_from IS NULL)
              FROM projects p ORDER BY p.name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -505,17 +505,27 @@ impl Store {
             .optional()?)
     }
 
+    /// The document holding `paragraph`, if it is still there.
+    pub fn paragraph_document(&self, paragraph: ParagraphId) -> Result<Option<DocumentId>> {
+        Ok(self
+            .conn
+            .query_row("SELECT document_id FROM paragraphs WHERE id = ?1", [paragraph], |r| r.get(0))
+            .optional()?)
+    }
+
     pub fn delete_document(&self, id: DocumentId) -> Result<()> {
         self.conn.execute("DELETE FROM documents WHERE id = ?1", [id])?;
         Ok(())
     }
 
-    /// Newest first.
+    /// Newest first. A meeting note is not listed: it shows under the
+    /// dictation it was rewritten from, and a search of its text finds that
+    /// dictation.
     pub fn documents(&self, filter: &DocumentFilter) -> Result<Vec<DocumentSummary>> {
         let mut sql = String::from(
             "SELECT d.id, d.title, d.project_id, d.template_id, d.source, d.created_at, d.updated_at,
                     (SELECT MAX(p.end_ms) FROM paragraphs p WHERE p.document_id = d.id)
-             FROM documents d WHERE 1 = 1",
+             FROM documents d WHERE d.rewritten_from IS NULL",
         );
         let mut args: Vec<Box<dyn ToSql>> = Vec::new();
         match filter.project {
@@ -538,7 +548,9 @@ impl Store {
                 return Ok(Vec::new());
             };
             sql.push_str(
-                " AND (d.id IN (SELECT p.document_id FROM paragraphs_fts f JOIN paragraphs p ON p.id = f.rowid
+                " AND (d.id IN (SELECT COALESCE(n.rewritten_from, n.id)
+                                FROM paragraphs_fts f JOIN paragraphs p ON p.id = f.rowid
+                                JOIN documents n ON n.id = p.document_id
                                 WHERE paragraphs_fts MATCH ?)
                        OR d.title LIKE ?)",
             );
@@ -596,6 +608,7 @@ impl Store {
     pub fn tags(&self) -> Result<Vec<(String, usize)>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.name, COUNT(dt.document_id) FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
+             JOIN documents d ON d.id = dt.document_id AND d.rewritten_from IS NULL
              GROUP BY t.id ORDER BY t.name",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?;

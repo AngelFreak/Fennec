@@ -1588,12 +1588,6 @@ impl DictationPage {
 
     fn note_done(self: &Rc<Self>, source: DocumentId, result: Result<DocumentId, AiError>) {
         self.note_job.borrow_mut().take();
-        if result.is_ok() {
-            // The new document shows in the sidebar's counts.
-            if let Some(f) = self.on_document_changed.borrow().clone() {
-                f(());
-            }
-        }
         if self.document() != Some(source) {
             return;
         }

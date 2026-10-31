@@ -405,6 +405,23 @@ fn a_meeting_note_is_rewritten_in_parts_into_a_new_document_beside_the_dictation
     }
     // The dictation is left as it was.
     assert!(store.paragraphs(doc).unwrap()[0].text.contains("øh vi"));
+
+    // Rewriting again replaces the note's text; the dictation keeps one.
+    store
+        .replace_paragraphs(id, &[fennec::store::Paragraph::new("Rettet i notatet.")])
+        .unwrap();
+    let again = ai
+        .rewrite_note(&store, doc, &Cancel::default(), &mut |_| {})
+        .unwrap();
+    assert_eq!(again, id);
+    assert_eq!(store.paragraphs(id).unwrap().len(), 10);
+    let listed: Vec<_> = store
+        .documents(&Default::default())
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert_eq!(listed, [doc], "only the dictation is listed");
 }
 
 #[test]
