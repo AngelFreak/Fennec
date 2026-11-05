@@ -120,6 +120,10 @@ impl SettingsPage {
         stack.set_vhomogeneous(false);
         let inspector = gtk::Stack::new();
         inspector.set_vhomogeneous(false);
+        // Without this the stack claims the width of its widest page for all
+        // of them, which pushed the 300 px inspector to 622 px and clipped the
+        // compute pane at the window edge.
+        inspector.set_hhomogeneous(false);
         let inspector_scroll = gtk::ScrolledWindow::builder()
             .child(&inspector)
             .hscrollbar_policy(gtk::PolicyType::Never)
