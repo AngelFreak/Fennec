@@ -949,6 +949,23 @@ fn main() {
         println!("     {t}");
     }
 
+    // --- the settings inspector keeps its 300 px. Its stack used to give
+    // every page the width of the widest, which made it 622 px and cut the
+    // compute pane off at the window edge.
+    w.sidebar.go(fennec::ui::Nav::Settings);
+    w.settings.show_section("model");
+    pump_until(Duration::from_millis(200), || false);
+    let sidebar_min = w
+        .settings
+        .side_panel
+        .sidebar()
+        .map(|s| s.measure(gtk::Orientation::Horizontal, -1).0)
+        .unwrap_or(0);
+    check(
+        &format!("the compute pane fits the 300 px inspector (needs {sidebar_min} px)"),
+        sidebar_min <= 300,
+    );
+
     // --- first run: one download of everything dictation needs
     let root_s = tmp.path().join("setup");
     let d = deps(&root_s, vec![], true);
