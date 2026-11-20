@@ -2,11 +2,11 @@
 Type=Application
 Name=Fennec
 GenericName=Dictation
-Comment=Danish dictation and transcription on your own computer
+Comment=Danish and English dictation and transcription on your own computer
 Exec=fennec
 Icon=io.github.fennec.Fennec
 Terminal=false
 Categories=Office;WordProcessor;
-Keywords=dictation;transcription;speech;Danish;diktat;transskription;tale;
+Keywords=dictation;transcription;speech;Danish;English;diktat;transskription;tale;
 StartupNotify=true
 StartupWMClass=io.github.fennec.Fennec

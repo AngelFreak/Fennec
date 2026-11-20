@@ -2,7 +2,7 @@
 name = "fennec"
 version = "0.5.4"
 edition = "2024"
-description = "Local Danish dictation and transcription"
+description = "Local Danish and English dictation and transcription"
 license = "MIT"
 
 [features]

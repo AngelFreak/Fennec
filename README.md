@@ -23,19 +23,21 @@ No audio leaves the machine, and no account or internet connection is needed onc
 
 ## Why Fennec
 
-Danish speech recognition has become very good, but most tools that use it send
-your voice to a server. Fennec puts the best open Danish models behind a fast
-native desktop app, so meeting notes, reports and interviews stay on your own
-disk.
+Speech recognition has become very good, but most tools that use it send your
+voice to a server. Fennec puts the best open models for Danish and English
+behind a fast native desktop app, so meeting notes, reports and interviews stay
+on your own disk.
 
 - 🎙️ **Live dictation**: text appears a moment after each pause, and a
   short preview shows while you are still talking.
-- ✍️ **Real punctuation**: a Danish punctuation model adds commas, full stops
-  and capitals. Sentence ends rose from F1 0.61 to 0.81, with no words
-  changed.
-- 🇬🇧 **English too**: Fennec hears whether you speak Danish or English and
-  uses the right model for each dictation or file, or you choose the
-  language yourself.
+- 🌍 **Danish and English**: Fennec hears which one you speak and uses the
+  right model for each dictation or file, or you choose the language
+  yourself. Edda, a Danish fine-tune of Whisper, writes Danish; OpenAI's
+  Whisper large-v3-turbo writes English.
+- ✍️ **Real punctuation**: commas, full stops and capitals in both
+  languages. English comes punctuated by Whisper; for Danish, a punctuation
+  model adds them, which raised sentence ends from F1 0.61 to 0.81 with no
+  words changed.
 - 🗣️ **Spoken commands**: *nyt afsnit*, *ny linje*, *punktum*, *komma*,
   *spørgsmålstegn*, *slet sidste sætning*, *stop optagelse* and more, and
   their English counterparts (*new paragraph*, *full stop*…). You can add
